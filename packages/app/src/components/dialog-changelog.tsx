@@ -4,6 +4,7 @@ import { Button } from "@opencode-ai/ui/button"
 import { Markdown } from "@opencode-ai/ui/markdown"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { usePlatform } from "@/context/platform"
+import "./dialog-changelog.css"
 
 const REPO = "anomalyco/opencode"
 const GITHUB_API_URL = `https://api.github.com/repos/${REPO}/releases`
@@ -88,7 +89,7 @@ export function DialogChangelog() {
   }
 
   return (
-    <Dialog size="large" class="w-[min(calc(100vw-40px),640px)] h-[min(calc(100vh-40px),500px)]">
+    <Dialog size="x-large" class="dialog-changelog">
       <div class="flex flex-col h-full">
         <div class="flex items-center justify-between px-6 py-4 border-b border-border-base">
           <h1 class="text-16-medium text-text-strong">Changelog</h1>
@@ -96,7 +97,7 @@ export function DialogChangelog() {
             Close
           </Button>
         </div>
-        <div class="flex-1 overflow-y-auto p-6">
+        <div class="dialog-changelog-content flex-1 overflow-y-auto p-6">
           <Show when={loading()}>
             <p class="text-text-weak">Loading...</p>
           </Show>
@@ -110,14 +111,17 @@ export function DialogChangelog() {
             <div class="space-y-6">
               <For each={releases()}>
                 {(release) => (
-                  <div class="space-y-2">
+                  <div class="dialog-changelog-release">
                     <div class="flex items-baseline gap-2">
-                      <span class="text-14-medium text-text-strong">{release.tag}</span>
+                      <span class="dialog-changelog-version">{release.tag}</span>
                       <Show when={release.date}>
                         <span class="text-12-regular text-text-weak">{release.date}</span>
                       </Show>
                     </div>
-                    <Markdown text={release.body} class="prose prose-sm max-w-none text-text-base" />
+                    <Markdown
+                      text={release.body}
+                      class="dialog-changelog-markdown prose prose-sm max-w-none text-text-base"
+                    />
                   </div>
                 )}
               </For>

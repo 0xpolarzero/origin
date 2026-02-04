@@ -1,0 +1,38 @@
+.dialog-changelog {
+  height: min(calc(100vh - 80px), 600px);
+  width: min(calc(100vw - 80px), 720px);
+}
+
+.dialog-changelog-content {
+  min-height: 0;
+}
+
+.dialog-changelog-version {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.dialog-changelog-release {
+  border-top: 2px solid var(--border-base);
+  padding-top: 24px;
+  margin-top: 16px;
+}
+
+.dialog-changelog-release:first-child {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 0;
+}
+
+.dialog-changelog-markdown h2 {
+  border-bottom: 1px solid var(--border-weak-base);
+  padding-bottom: 4px;
+  margin: 24px 0 8px 0;
+  font-size: 14px;
+  font-weight: 500;
+  text-transform: capitalize;
+}
+
+.dialog-changelog-markdown h2:first-child {
+  margin-top: 0;
+}
