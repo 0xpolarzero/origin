@@ -2,6 +2,7 @@ import { Component, createEffect, createSignal, onCleanup } from "solid-js"
 import { List } from "@opencode-ai/ui/list"
 import { Markdown } from "@opencode-ai/ui/markdown"
 import { Button } from "@opencode-ai/ui/button"
+import { useLanguage } from "@/context/language"
 import "./dialog-changelog.css"
 
 type Release = {
@@ -47,20 +48,22 @@ function StickyHeader(props: { tag: string; date: string }) {
 }
 
 export const ReleaseList: Component<ReleaseListProps> = (props) => {
+  const language = useLanguage()
+
   return (
     <List
       items={props.releases}
       key={(x) => x.tag}
       search={false}
       emptyMessage="No releases found"
-      loadingMessage="Loading..."
+      loadingMessage={language.t("common.loading")}
       class="dialog-changelog-list flex-1 min-h-0"
       add={{
         render: () =>
           props.hasMore ? (
             <div class="p-4 flex justify-center">
               <Button variant="secondary" size="small" onClick={props.onLoadMore} loading={props.loadingMore}>
-                Load more
+                {language.t("common.loadMore")}
               </Button>
             </div>
           ) : null,

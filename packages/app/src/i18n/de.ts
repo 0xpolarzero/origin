@@ -509,6 +509,8 @@ export const dict = {
   "common.close": "Schließen",
   "common.edit": "Bearbeiten",
   "common.loadMore": "Mehr laden",
+  "common.changelog": "Neuerungen",
+  "common.noReleasesFound": "Keine Versionen gefunden",
 
   "common.key.esc": "ESC",
   "sidebar.menu.toggle": "Menü umschalten",

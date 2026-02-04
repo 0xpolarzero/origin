@@ -508,6 +508,8 @@ export const dict = {
   "common.close": "Lukk",
   "common.edit": "Rediger",
   "common.loadMore": "Last flere",
+  "common.changelog": "Nyheter",
+  "common.noReleasesFound": "Ingen versjoner funnet",
   "common.key.esc": "ESC",
 
   "sidebar.menu.toggle": "Veksle meny",

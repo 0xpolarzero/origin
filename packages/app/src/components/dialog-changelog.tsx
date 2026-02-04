@@ -2,6 +2,7 @@ import { createSignal, onMount, Show } from "solid-js"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { Button } from "@opencode-ai/ui/button"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
+import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
 import { getRelativeTime } from "@/utils/time"
 import { ReleaseList } from "@/components/release-list"
@@ -52,6 +53,7 @@ function parseReleases(json: unknown): Release[] {
 
 export function DialogChangelog() {
   const dialog = useDialog()
+  const language = useLanguage()
   const platform = usePlatform()
   const [releases, setReleases] = createSignal<Release[]>([])
   const [loading, setLoading] = createSignal(true)
@@ -108,13 +110,13 @@ export function DialogChangelog() {
     <Dialog size="x-large" transition title="Changelog">
       <div class="flex-1 min-h-0 flex flex-col">
         <Show when={loading()}>
-          <p class="text-text-weak p-6">Loading...</p>
+          <p class="text-text-weak p-6">{language.t("common.loading")}...</p>
         </Show>
         <Show when={error()}>
           <p class="text-text-weak p-6">{error()}</p>
         </Show>
         <Show when={!loading() && !error() && releases().length === 0}>
-          <p class="text-text-weak p-6">No releases found.</p>
+          <p class="text-text-weak p-6">{language.t("common.noReleasesFound")}</p>
         </Show>
         <Show when={!loading() && !error() && releases().length > 0}>
           <ReleaseList

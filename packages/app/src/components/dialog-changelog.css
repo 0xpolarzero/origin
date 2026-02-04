@@ -50,7 +50,6 @@
 
 .dialog-changelog-header {
   padding: 8px 12px 8px 8px;
-  margin-top: 32px;
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -91,7 +90,7 @@
 }
 
 .dialog-changelog-list [data-slot="list-item"] {
-  margin: 0;
+  margin-bottom: 32px;
   padding: 0;
   border: none;
   background: transparent;
