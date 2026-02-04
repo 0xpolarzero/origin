@@ -105,10 +105,7 @@ export function DialogChangelog() {
   }
 
   return (
-    <Dialog
-      title="Changelog"
-      class="dialog-changelog"
-   >
+    <Dialog title="Changelog" class="dialog-changelog">
       <Show when={loading()}>
         <p class="text-text-weak p-6">Loading...</p>
       </Show>
@@ -119,14 +116,12 @@ export function DialogChangelog() {
         <p class="text-text-weak p-6">No releases found.</p>
       </Show>
       <Show when={!loading() && !error() && releases().length > 0}>
-        <ReleaseList releases={releases()} />
-        <Show when={hasMore()}>
-          <div class="p-4 flex justify-center">
-            <Button variant="secondary" size="small" onClick={handleLoadMore} loading={loadingMore()}>
-              Load more
-            </Button>
-          </div>
-        </Show>
+        <ReleaseList
+          releases={releases()}
+          hasMore={hasMore()}
+          loadingMore={loadingMore()}
+          onLoadMore={handleLoadMore}
+        />
       </Show>
     </Dialog>
   )

@@ -128,11 +128,6 @@
 .dialog-changelog-markdown a.external-link {
   color: var(--text-interactive-base);
   font-weight: 500;
-  text-decoration: none;
-}
-
-.dialog-changelog-markdown .external-link:hover {
-  text-decoration: none !important;
 }
 
 .dialog-changelog-markdown a.external-link[href^="https://github.com/anomalyco/opencode/pull/"],

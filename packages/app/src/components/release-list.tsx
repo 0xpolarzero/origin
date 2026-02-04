@@ -1,6 +1,7 @@
 import { Component, createEffect, createSignal, onCleanup } from "solid-js"
 import { List } from "@opencode-ai/ui/list"
 import { Markdown } from "@opencode-ai/ui/markdown"
+import { Button } from "@opencode-ai/ui/button"
 import "./dialog-changelog.css"
 
 type Release = {
@@ -11,6 +12,9 @@ type Release = {
 
 interface ReleaseListProps {
   releases: Release[]
+  hasMore: boolean
+  loadingMore: boolean
+  onLoadMore: () => void
 }
 
 function StickyHeader(props: { tag: string; date: string }) {
@@ -51,6 +55,16 @@ export const ReleaseList: Component<ReleaseListProps> = (props) => {
       emptyMessage="No releases found"
       loadingMessage="Loading..."
       class="dialog-changelog-list"
+      add={{
+        render: () =>
+          props.hasMore ? (
+            <div class="p-4 flex justify-center">
+              <Button variant="secondary" size="small" onClick={props.onLoadMore} loading={props.loadingMore}>
+                Load more
+              </Button>
+            </div>
+          ) : null,
+      }}
     >
       {(item) => (
         <>
