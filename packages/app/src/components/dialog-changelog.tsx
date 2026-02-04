@@ -16,6 +16,20 @@ type Release = {
   date: string
 }
 
+function transformGitHubReferences(body: string): string {
+  let result = body
+
+  result = result.replace(/#(\d+)/g, (_, id) => {
+    return `[#${id}](https://github.com/anomalyco/opencode/issues/${id})`
+  })
+
+  result = result.replace(/@([a-zA-Z0-9_-]+)/g, (_, username) => {
+    return `[@${username}](https://github.com/${username})`
+  })
+
+  return result
+}
+
 function parseReleases(json: unknown): Release[] {
   const releases: Release[] = []
 
@@ -25,9 +39,10 @@ function parseReleases(json: unknown): Release[] {
 
   for (const release of json) {
     if (!release || typeof release !== "object") continue
+    const body = typeof release.body === "string" ? transformGitHubReferences(release.body) : ""
     releases.push({
       tag: typeof release.tag_name === "string" ? release.tag_name : "Unknown",
-      body: typeof release.body === "string" ? release.body : "",
+      body,
       date: typeof release.published_at === "string" ? getRelativeTime(release.published_at) : "",
     })
   }
