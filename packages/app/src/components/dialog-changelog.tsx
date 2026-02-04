@@ -91,12 +91,7 @@ export function DialogChangelog() {
   return (
     <Dialog size="x-large" class="dialog-changelog">
       <div class="flex flex-col h-full">
-        <div class="flex items-center justify-between px-6 py-4 border-b border-border-base">
-          <h1 class="text-16-medium text-text-strong">Changelog</h1>
-          <Button variant="ghost" size="small" onClick={handleClose}>
-            Close
-          </Button>
-        </div>
+  
         <div class="dialog-changelog-content flex-1 overflow-y-auto p-6">
           <Show when={loading()}>
             <p class="text-text-weak">Loading...</p>
