@@ -499,6 +499,7 @@ export const dict = {
   "common.loadMore": "Загрузить ещё",
   "common.changelog": "Что нового",
   "common.noReleasesFound": "Версии не найдены",
+  "changelog.tag.latest": "Последний",
   "common.key.esc": "ESC",
 
   "sidebar.menu.toggle": "Переключить меню",

@@ -565,6 +565,7 @@ export const dict = {
   "common.loadMore": "Load more",
   "common.changelog": "Changelog",
   "common.noReleasesFound": "No releases found",
+  "changelog.tag.latest": "Latest",
   "common.key.esc": "ESC",
 
   "sidebar.menu.toggle": "Toggle menu",

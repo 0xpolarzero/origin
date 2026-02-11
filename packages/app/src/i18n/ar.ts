@@ -491,6 +491,7 @@ export const dict = {
   "common.loadMore": "تحميل المزيد",
   "common.changelog": "التغييرات",
   "common.noReleasesFound": "لم يتم العثور على إصدارات",
+  "changelog.tag.latest": "الأحدث",
   "common.key.esc": "ESC",
 
   "sidebar.menu.toggle": "تبديل القائمة",

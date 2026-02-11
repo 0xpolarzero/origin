@@ -528,6 +528,7 @@ export const dict = {
   "common.loadMore": "載入更多",
   "common.changelog": "更新日誌",
   "common.noReleasesFound": "未找到版本",
+  "changelog.tag.latest": "最新",
 
   "common.key.esc": "ESC",
   "sidebar.menu.toggle": "切換選單",

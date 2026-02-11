@@ -519,6 +519,9 @@ export const dict = {
   "common.close": "Zatvori",
   "common.edit": "Uredi",
   "common.loadMore": "Učitaj još",
+  "common.changelog": "Novosti",
+  "common.noReleasesFound": "Nema pronađenih verzija",
+  "changelog.tag.latest": "Najnovije",
   "common.key.esc": "ESC",
 
   "sidebar.menu.toggle": "Prikaži/sakrij meni",

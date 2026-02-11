@@ -498,6 +498,7 @@ export const dict = {
   "common.loadMore": "Last flere",
   "common.changelog": "Nyheter",
   "common.noReleasesFound": "Ingen versjoner funnet",
+  "changelog.tag.latest": "Siste",
   "common.key.esc": "ESC",
 
   "sidebar.menu.toggle": "Veksle meny",

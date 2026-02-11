@@ -538,6 +538,7 @@ export const dict = {
   "common.loadMore": "Mehr laden",
   "common.changelog": "Neuerungen",
   "common.noReleasesFound": "Keine Versionen gefunden",
+  "changelog.tag.latest": "Neueste",
 
   "common.key.esc": "ESC",
   "sidebar.menu.toggle": "Menü umschalten",

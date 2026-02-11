@@ -1,9 +1,9 @@
-import { Component, createEffect, createSignal, onCleanup } from "solid-js"
+import { Component } from "solid-js"
 import { List } from "@opencode-ai/ui/list"
 import { Markdown } from "@opencode-ai/ui/markdown"
 import { Button } from "@opencode-ai/ui/button"
+import { Tag } from "@opencode-ai/ui/tag"
 import { useLanguage } from "@/context/language"
-import "./dialog-changelog.css"
 
 type Release = {
   tag: string
@@ -18,35 +18,6 @@ interface ReleaseListProps {
   onLoadMore: () => void
 }
 
-function StickyHeader(props: { tag: string; date: string }) {
-  const [stuck, setStuck] = createSignal(false)
-  const [header, setHeader] = createSignal<HTMLDivElement | undefined>(undefined)
-
-  const scrollEl = document.querySelector('[data-slot="list-scroll"]') as HTMLElement | null
-
-  createEffect(() => {
-    const node = header()
-    if (!scrollEl || !node) return
-
-    const handler = () => {
-      const rect = node.getBoundingClientRect()
-      const scrollRect = scrollEl.getBoundingClientRect()
-      setStuck(rect.top <= scrollRect.top + 1 && scrollEl.scrollTop > 0)
-    }
-
-    scrollEl.addEventListener("scroll", handler, { passive: true })
-    handler()
-    onCleanup(() => scrollEl.removeEventListener("scroll", handler))
-  })
-
-  return (
-    <div class="dialog-changelog-header" data-slot="list-header" data-stuck={stuck()} ref={setHeader}>
-      <span class="dialog-changelog-version">{props.tag}</span>
-      <span class="dialog-changelog-date">{props.date}</span>
-    </div>
-  )
-}
-
 export const ReleaseList: Component<ReleaseListProps> = (props) => {
   const language = useLanguage()
 
@@ -57,7 +28,7 @@ export const ReleaseList: Component<ReleaseListProps> = (props) => {
       search={false}
       emptyMessage="No releases found"
       loadingMessage={language.t("common.loading")}
-      class="dialog-changelog-list flex-1 min-h-0"
+      class="flex-1 min-h-0 overflow-hidden flex flex-col [&_[data-slot=list-scroll]]:session-scroller [&_[data-slot=list-item]]:block [&_[data-slot=list-item]]:p-0 [&_[data-slot=list-item]]:border-0 [&_[data-slot=list-item]]:bg-transparent [&_[data-slot=list-item]]:text-left [&_[data-slot=list-item]]:cursor-default [&_[data-slot=list-item]]:hover:bg-transparent [&_[data-slot=list-item]]:focus:outline-none"
       add={{
         render: () =>
           props.hasMore ? (
@@ -70,12 +41,19 @@ export const ReleaseList: Component<ReleaseListProps> = (props) => {
       }}
     >
       {(item) => (
-        <>
-          <StickyHeader tag={item.tag} date={item.date} />
-          <div class="dialog-changelog-content">
-            <Markdown text={item.body} class="dialog-changelog-markdown prose prose-sm max-w-none text-text-base" />
+        <div class="mb-8">
+          <div class="py-2 pr-3 pl-2 flex items-baseline gap-2 sticky top-0 z-10 bg-surface-raised-stronger-non-alpha">
+            <span class="text-[20px] font-semibold">{item.tag}</span>
+            <span class="text-xs text-text-weak">{item.date}</span>
+            {item.tag === props.releases[0]?.tag && <Tag>{language.t("changelog.tag.latest")}</Tag>}
           </div>
-        </>
+          <div class="px-2 pb-2">
+            <Markdown
+              text={item.body}
+              class="prose prose-sm max-w-none text-text-base [&_h2]:border-b [&_h2]:border-border-weak-base [&_h2]:pb-1 [&_h2]:mt-8 [&_h2]:mb-3 [&_h2]:text-sm [&_h2]:font-medium [&_h2]:capitalize [&_h2:first-child]:mt-4 [&_a.external-link]:text-text-interactive-base [&_a.external-link]:font-medium"
+            />
+          </div>
+        </div>
       )}
     </List>
   )

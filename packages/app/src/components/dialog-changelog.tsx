@@ -6,7 +6,6 @@ import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
 import { getRelativeTime } from "@/utils/time"
 import { ReleaseList } from "@/components/release-list"
-import "./dialog-changelog.css"
 
 const REPO = "anomalyco/opencode"
 const GITHUB_API_URL = `https://api.github.com/repos/${REPO}/releases`

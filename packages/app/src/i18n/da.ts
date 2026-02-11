@@ -495,6 +495,7 @@ export const dict = {
   "common.loadMore": "Indlæs flere",
   "common.changelog": "Nyheder",
   "common.noReleasesFound": "Ingen versioner fundet",
+  "changelog.tag.latest": "Seneste",
 
   "common.key.esc": "ESC",
   "sidebar.menu.toggle": "Skift menu",

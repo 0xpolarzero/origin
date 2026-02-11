@@ -503,6 +503,7 @@ export const dict = {
   "common.loadMore": "Charger plus",
   "common.changelog": "Nouveautés",
   "common.noReleasesFound": "Aucune version trouvée",
+  "changelog.tag.latest": "Dernier",
 
   "common.key.esc": "ESC",
   "sidebar.menu.toggle": "Basculer le menu",

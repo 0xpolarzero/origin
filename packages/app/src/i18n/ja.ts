@@ -490,6 +490,7 @@ export const dict = {
   "common.loadMore": "さらに読み込む",
   "common.changelog": "更新履歴",
   "common.noReleasesFound": "バージョンが見つかりません",
+  "changelog.tag.latest": "最新",
 
   "common.key.esc": "ESC",
   "sidebar.menu.toggle": "メニューを切り替え",
