@@ -736,4 +736,10 @@ export const dict = {
   "workspace.reset.archived.one": "1つのセッションがアーカイブされます。",
   "workspace.reset.archived.many": "{{count}}個のセッションがアーカイブされます。",
   "workspace.reset.note": "これにより、ワークスペースはデフォルトブランチと一致するようにリセットされます。",
+
+  "settings.archive.title": "アーカイブされたセッション",
+  "settings.archive.description": "アーカイブされたセッションを復元してサイドバーに表示します。",
+  "settings.archive.none": "アーカイブされたセッションはありません。",
+  "settings.archive.scope.all": "すべてのプロジェクト",
+  "settings.archive.scope.current": "現在のプロジェクト",
 }

@@ -738,4 +738,9 @@ export const dict = {
   "workspace.reset.archived.one": "1 sesja zostanie zarchiwizowana.",
   "workspace.reset.archived.many": "{{count}} sesji zostanie zarchiwizowanych.",
   "workspace.reset.note": "To zresetuje przestrzeń roboczą, aby odpowiadała domyślnej gałęzi.",
+  "settings.archive.title": "Zarchiwizowane sesje",
+  "settings.archive.description": "Przywróć zarchiwizowane sesje, aby były widoczne na pasku bocznym.",
+  "settings.archive.none": "Brak zarchiwizowanych sesji.",
+  "settings.archive.scope.all": "Wszystkie projekty",
+  "settings.archive.scope.current": "Bieżący projekt",
 }

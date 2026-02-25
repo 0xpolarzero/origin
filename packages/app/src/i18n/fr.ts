@@ -749,4 +749,9 @@ export const dict = {
   "workspace.reset.archived.one": "1 session sera archivée.",
   "workspace.reset.archived.many": "{{count}} sessions seront archivées.",
   "workspace.reset.note": "Cela réinitialisera l'espace de travail pour correspondre à la branche par défaut.",
+  "settings.archive.title": "Sessions archivées",
+  "settings.archive.description": "Restaurez les sessions archivées pour les rendre visibles dans la barre latérale.",
+  "settings.archive.none": "Aucune session archivée.",
+  "settings.archive.scope.all": "Tous les Projets",
+  "settings.archive.scope.current": "Projet actuel",
 }
