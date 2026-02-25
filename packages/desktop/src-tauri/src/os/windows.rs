@@ -4,8 +4,8 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
+use windows_sys::Win32::Foundation::ERROR_SUCCESS;
 use windows_sys::Win32::{
-    Foundation::ERROR_SUCCESS,
     System::Registry::{
         HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, REG_EXPAND_SZ, REG_SZ, RRF_RT_REG_EXPAND_SZ,
         RRF_RT_REG_SZ, RegGetValueW,
