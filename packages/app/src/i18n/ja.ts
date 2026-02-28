@@ -512,6 +512,10 @@ export const dict = {
   "common.loadMore": "さらに読み込む",
   "common.changelog": "更新履歴",
   "common.noReleasesFound": "バージョンが見つかりません",
+  "common.time.justNow": "たった今",
+  "common.time.minutesAgo.short": "{{count}} 分前",
+  "common.time.hoursAgo.short": "{{count}} 時間前",
+  "common.time.daysAgo.short": "{{count}} 日前",
   "changelog.tag.latest": "最新",
 
   "common.key.esc": "ESC",

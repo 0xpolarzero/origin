@@ -576,6 +576,10 @@ export const dict = {
   "common.loadMore": "Load more",
   "common.changelog": "Changelog",
   "common.noReleasesFound": "No releases found",
+  "common.time.justNow": "Just now",
+  "common.time.minutesAgo.short": "{{count}}m ago",
+  "common.time.hoursAgo.short": "{{count}}h ago",
+  "common.time.daysAgo.short": "{{count}}d ago",
   "changelog.tag.latest": "Latest",
   "common.key.esc": "ESC",
 

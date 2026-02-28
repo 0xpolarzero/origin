@@ -574,6 +574,10 @@ export const dict = {
   "common.loadMore": "Učitaj još",
   "common.changelog": "Novosti",
   "common.noReleasesFound": "Nema pronađenih verzija",
+  "common.time.justNow": "Upravo sada",
+  "common.time.minutesAgo.short": "prije {{count}} min",
+  "common.time.hoursAgo.short": "prije {{count}} h",
+  "common.time.daysAgo.short": "prije {{count}} d",
   "changelog.tag.latest": "Najnovije",
   "common.key.esc": "ESC",
 

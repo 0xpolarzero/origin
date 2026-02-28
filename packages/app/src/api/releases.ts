@@ -1,5 +1,4 @@
 import type { Platform } from "@/context/platform"
-import { getRelativeTime } from "@/utils/time"
 
 const REPO = "anomalyco/opencode"
 const GITHUB_API_URL = `https://api.github.com/repos/${REPO}/releases`
@@ -40,7 +39,7 @@ export async function fetchReleases(platform: Platform): Promise<{ releases: Rel
     body: (r.body ?? "")
       .replace(/#(\d+)/g, (_: string, id: string) => `[#${id}](https://github.com/anomalyco/opencode/pull/${id})`)
       .replace(/@([a-zA-Z0-9_-]+)/g, (_: string, u: string) => `[@${u}](https://github.com/${u})`),
-    date: r.published_at ? getRelativeTime(r.published_at) : "",
+    date: r.published_at ?? "",
   }))
 
   saveCache({ releases, timestamp: now })

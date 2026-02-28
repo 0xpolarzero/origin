@@ -569,6 +569,10 @@ export const dict = {
   "common.loadMore": "โหลดเพิ่มเติม",
   "common.changelog": "อัปเดต",
   "common.noReleasesFound": "ไม่พบเวอร์ชัน",
+  "common.time.justNow": "เมื่อสักครู่นี้",
+  "common.time.minutesAgo.short": "{{count}} นาทีที่แล้ว",
+  "common.time.hoursAgo.short": "{{count}} ชม. ที่แล้ว",
+  "common.time.daysAgo.short": "{{count}} วันที่แล้ว",
   "changelog.tag.latest": "ล่าสุด",
   "common.key.esc": "ESC",
 

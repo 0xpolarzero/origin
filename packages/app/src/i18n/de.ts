@@ -522,6 +522,10 @@ export const dict = {
   "common.loadMore": "Mehr laden",
   "common.changelog": "Neuerungen",
   "common.noReleasesFound": "Keine Versionen gefunden",
+  "common.time.justNow": "Gerade eben",
+  "common.time.minutesAgo.short": "vor {{count}} Min",
+  "common.time.hoursAgo.short": "vor {{count}} Std",
+  "common.time.daysAgo.short": "vor {{count}} Tg",
   "changelog.tag.latest": "Neueste",
 
   "common.key.esc": "ESC",

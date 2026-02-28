@@ -509,6 +509,12 @@ export const dict = {
   "common.changelog": "التغييرات",
   "common.noReleasesFound": "لم يتم العثور على إصدارات",
   "changelog.tag.latest": "الأحدث",
+
+  "common.time.justNow": "الآن",
+  "common.time.minutesAgo.short": "قبل {{count}} د",
+  "common.time.hoursAgo.short": "قبل {{count}} س",
+  "common.time.daysAgo.short": "قبل {{count}} ي",
+
   "common.key.esc": "ESC",
   "sidebar.menu.toggle": "تبديل القائمة",
   "sidebar.nav.projectsAndSessions": "المشاريع والجلسات",

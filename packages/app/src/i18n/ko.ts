@@ -513,6 +513,10 @@ export const dict = {
   "common.loadMore": "더 불러오기",
   "common.changelog": "새로운 기능",
   "common.noReleasesFound": "버전을 찾을 수 없음",
+  "common.time.justNow": "방금 전",
+  "common.time.minutesAgo.short": "{{count}}분 전",
+  "common.time.hoursAgo.short": "{{count}}시간 전",
+  "common.time.daysAgo.short": "{{count}}일 전",
   "changelog.tag.latest": "최신",
 
   "common.key.esc": "ESC",

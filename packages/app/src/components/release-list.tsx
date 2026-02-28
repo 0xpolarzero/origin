@@ -4,6 +4,7 @@ import { Markdown } from "@opencode-ai/ui/markdown"
 import { Button } from "@opencode-ai/ui/button"
 import { Tag } from "@opencode-ai/ui/tag"
 import { useLanguage } from "@/context/language"
+import { getRelativeTime } from "@/utils/time"
 
 type Release = {
   tag: string
@@ -44,7 +45,7 @@ export const ReleaseList: Component<ReleaseListProps> = (props) => {
         <div class="mb-8">
           <div class="py-2 pr-3 pl-2 flex items-baseline gap-2 sticky top-0 z-10 bg-surface-raised-stronger-non-alpha">
             <span class="text-[20px] font-semibold">{item.tag}</span>
-            <span class="text-xs text-text-weak">{item.date}</span>
+            <span class="text-xs text-text-weak">{item.date ? getRelativeTime(item.date, language.t) : ""}</span>
             {item.tag === props.releases[0]?.tag && <Tag>{language.t("changelog.tag.latest")}</Tag>}
           </div>
           <div class="px-2 pb-2">

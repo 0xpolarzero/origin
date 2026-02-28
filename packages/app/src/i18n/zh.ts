@@ -568,6 +568,10 @@ export const dict = {
   "common.loadMore": "加载更多",
   "common.changelog": "更新日志",
   "common.noReleasesFound": "未找到版本",
+  "common.time.justNow": "刚刚",
+  "common.time.minutesAgo.short": "{{count}}分钟前",
+  "common.time.hoursAgo.short": "{{count}}小时前",
+  "common.time.daysAgo.short": "{{count}}天前",
   "changelog.tag.latest": "最新",
 
   "common.key.esc": "ESC",

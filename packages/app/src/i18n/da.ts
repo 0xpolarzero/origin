@@ -570,6 +570,10 @@ export const dict = {
   "common.loadMore": "Indlæs flere",
   "common.changelog": "Nyheder",
   "common.noReleasesFound": "Ingen versioner fundet",
+  "common.time.justNow": "Lige nu",
+  "common.time.minutesAgo.short": "{{count}}m siden",
+  "common.time.hoursAgo.short": "{{count}}t siden",
+  "common.time.daysAgo.short": "{{count}}d siden",
   "changelog.tag.latest": "Seneste",
 
   "common.key.esc": "ESC",
