@@ -1,1 +1,0 @@
-ALTER TABLE `control_account` RENAME TO `account`;

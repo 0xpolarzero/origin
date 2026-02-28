@@ -1,13 +1,17 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "3200a36f-5de6-4b78-9f8c-b8553fbe64f6",
+  "id": "325559b7-104f-4d2a-a02c-934cfad7cfcc",
   "prevIds": [
     "1f1dbf2d-bf66-4b25-8af4-4ba7633b7e40"
   ],
   "ddl": [
     {
       "name": "account",
+      "entityType": "tables"
+    },
+    {
+      "name": "control_account",
       "entityType": "tables"
     },
     {
@@ -41,6 +45,16 @@
     {
       "name": "session_share",
       "entityType": "tables"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "account"
     },
     {
       "type": "text",
@@ -93,12 +107,12 @@
       "table": "account"
     },
     {
-      "type": "integer",
-      "notNull": true,
+      "type": "text",
+      "notNull": false,
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "active",
+      "name": "workspace_id",
       "entityType": "columns",
       "table": "account"
     },
@@ -121,6 +135,86 @@
       "name": "time_updated",
       "entityType": "columns",
       "table": "account"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "email",
+      "entityType": "columns",
+      "table": "control_account"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "url",
+      "entityType": "columns",
+      "table": "control_account"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "access_token",
+      "entityType": "columns",
+      "table": "control_account"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "refresh_token",
+      "entityType": "columns",
+      "table": "control_account"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "token_expiry",
+      "entityType": "columns",
+      "table": "control_account"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "active",
+      "entityType": "columns",
+      "table": "control_account"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "control_account"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "control_account"
     },
     {
       "type": "text",
@@ -845,7 +939,7 @@
       "nameExplicit": false,
       "name": "control_account_pk",
       "entityType": "pks",
-      "table": "account"
+      "table": "control_account"
     },
     {
       "columns": [
@@ -856,6 +950,15 @@
       "name": "todo_pk",
       "entityType": "pks",
       "table": "todo"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "account_pk",
+      "table": "account",
+      "entityType": "pks"
     },
     {
       "columns": [
@@ -1005,7 +1108,5 @@
       "table": "todo"
     }
   ],
-  "renames": [
-    "control_account->account"
-  ]
+  "renames": []
 }
