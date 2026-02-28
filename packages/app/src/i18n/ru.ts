@@ -575,10 +575,6 @@ export const dict = {
   "common.loadMore": "Загрузить ещё",
   "common.changelog": "Что нового",
   "common.noReleasesFound": "Версии не найдены",
-  "common.time.justNow": "Только что",
-  "common.time.minutesAgo.short": "{{count}} мин назад",
-  "common.time.hoursAgo.short": "{{count}} ч назад",
-  "common.time.daysAgo.short": "{{count}} д назад",
   "changelog.tag.latest": "Последний",
   "common.key.esc": "ESC",
 

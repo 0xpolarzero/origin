@@ -577,10 +577,6 @@ export const dict = {
   "common.loadMore": "Last flere",
   "common.changelog": "Nyheter",
   "common.noReleasesFound": "Ingen versjoner funnet",
-  "common.time.justNow": "Akkurat nå",
-  "common.time.minutesAgo.short": "{{count}} m siden",
-  "common.time.hoursAgo.short": "{{count}} t siden",
-  "common.time.daysAgo.short": "{{count}} d siden",
   "changelog.tag.latest": "Siste",
   "common.key.esc": "ESC",
 

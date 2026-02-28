@@ -598,11 +598,6 @@ export const dict = {
   "changelog.tag.latest": "Latest",
   "common.key.esc": "ESC",
 
-  "common.time.justNow": "Just now",
-  "common.time.minutesAgo.short": "{{count}}m ago",
-  "common.time.hoursAgo.short": "{{count}}h ago",
-  "common.time.daysAgo.short": "{{count}}d ago",
-
   "sidebar.menu.toggle": "Toggle menu",
   "sidebar.nav.projectsAndSessions": "Projects and sessions",
   "sidebar.settings": "Settings",
