@@ -8,8 +8,6 @@ export const AccountTable = sqliteTable("account", {
   access_token: text().notNull(),
   refresh_token: text().notNull(),
   token_expiry: integer(),
-  active: integer({ mode: "boolean" })
-    .notNull()
-    .$default(() => false),
+  workspace_id: text(),
   ...Timestamps,
 })

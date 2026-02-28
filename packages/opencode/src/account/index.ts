@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm"
+import { eq, sql, isNotNull } from "drizzle-orm"
 import { Database } from "@/storage/db"
 import { AccountTable } from "./account.sql"
 import z from "zod"
@@ -8,6 +8,7 @@ export namespace Account {
     id: z.string(),
     email: z.string(),
     url: z.string(),
+    workspace_id: z.string().nullable(),
   })
   export type Account = z.infer<typeof Account>
 
@@ -16,16 +17,27 @@ export namespace Account {
       id: row.id,
       email: row.email,
       url: row.url,
+      workspace_id: row.workspace_id,
     }
   }
 
   export function active(): Account | undefined {
-    const row = Database.use((db) => db.select().from(AccountTable).where(eq(AccountTable.active, true)).get())
+    const row = Database.use((db) => db.select().from(AccountTable).where(isNotNull(AccountTable.workspace_id)).get())
     return row ? fromRow(row) : undefined
   }
 
   export function list(): Account[] {
     return Database.use((db) => db.select().from(AccountTable).all().map(fromRow))
+  }
+
+  export function remove(accountID: string) {
+    Database.use((db) => db.delete(AccountTable).where(eq(AccountTable.id, accountID)).run())
+  }
+
+  export function use(accountID: string, workspaceID: string | null) {
+    Database.use((db) =>
+      db.update(AccountTable).set({ workspace_id: workspaceID }).where(eq(AccountTable.id, accountID)).run(),
+    )
   }
 
   export async function workspaces(accountID: string): Promise<{ id: string; name: string }[]> {
@@ -43,6 +55,22 @@ export namespace Account {
 
     const json = (await res.json()) as Array<{ id?: string; name?: string }>
     return json.map((x) => ({ id: x.id ?? "", name: x.name ?? "" }))
+  }
+
+  export async function config(accountID: string, workspaceID: string): Promise<Record<string, unknown> | undefined> {
+    const row = Database.use((db) => db.select().from(AccountTable).where(eq(AccountTable.id, accountID)).get())
+    if (!row) return undefined
+
+    const access = await token(accountID)
+    if (!access) return undefined
+
+    const res = await fetch(`${row.url}/api/config`, {
+      headers: { authorization: `Bearer ${access}`, "x-org-id": workspaceID },
+    })
+
+    if (!res.ok) return undefined
+    const result = (await res.json()) as Record<string, any>
+    return result.config
   }
 
   export async function token(accountID: string): Promise<string | undefined> {
@@ -164,17 +192,24 @@ export namespace Account {
       const expiry = Date.now() + json.expires_in! * 1000
       const refresh = json.refresh_token ?? ""
 
+      // Fetch workspaces and get first one
+      const orgsRes = await fetch(`${input.server}/api/orgs`, {
+        headers: { authorization: `Bearer ${access}` },
+      })
+      const orgs = (await orgsRes.json()) as Array<{ id?: string; name?: string }>
+      const firstWorkspaceId = orgs.length > 0 ? orgs[0].id : null
+
       Database.use((db) => {
-        db.update(AccountTable).set({ active: false }).run()
+        db.update(AccountTable).set({ workspace_id: null }).run()
         db.insert(AccountTable)
           .values({
             id,
             email,
-            url: input.url,
+            url: input.server,
             access_token: access,
             refresh_token: refresh,
             token_expiry: expiry,
-            active: true,
+            workspace_id: firstWorkspaceId,
           })
           .onConflictDoUpdate({
             target: AccountTable.id,
@@ -182,7 +217,7 @@ export namespace Account {
               access_token: access,
               refresh_token: refresh,
               token_expiry: expiry,
-              active: true,
+              workspace_id: firstWorkspaceId,
             },
           })
           .run()

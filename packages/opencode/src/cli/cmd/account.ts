@@ -70,20 +70,92 @@ export const LoginCommand = cmd({
 })
 
 export const LogoutCommand = cmd({
-  command: "logout",
+  command: "logout [email]",
   describe: "log out from an account",
-  async handler() {},
+  builder: (yargs) =>
+    yargs.positional("email", {
+      describe: "account email to log out from",
+      type: "string",
+    }),
+  async handler(args) {
+    const email = args.email as string | undefined
+
+    if (email) {
+      const accounts = Account.list()
+      const match = accounts.find((a) => a.email === email)
+      if (!match) {
+        UI.println("Account not found: " + email)
+        return
+      }
+      Account.remove(match.id)
+      UI.println("Logged out from " + email)
+      return
+    }
+
+    const active = Account.active()
+    if (!active) {
+      UI.println("Not logged in")
+      return
+    }
+    Account.remove(active.id)
+    UI.println("Logged out from " + active.email)
+  },
 })
 
 export const SwitchCommand = cmd({
   command: "switch",
   describe: "switch active workspace",
-  async handler() {},
+  async handler() {
+    UI.empty()
+
+    const active = Account.active()
+    if (!active) {
+      UI.println("Not logged in")
+      return
+    }
+
+    const workspaces = await Account.workspaces(active.id)
+    if (workspaces.length === 0) {
+      UI.println("No workspaces found")
+      return
+    }
+
+    prompts.intro("Switch workspace")
+
+    const opts = workspaces.map((w) => ({
+      value: w.id,
+      label: w.id === active.workspace_id ? w.name + UI.Style.TEXT_DIM + " (active)" : w.name,
+    }))
+
+    const selected = await prompts.select({
+      message: "Select workspace",
+      options: opts,
+    })
+
+    if (prompts.isCancel(selected)) return
+
+    Account.use(active.id, selected as string)
+    prompts.outro("Switched to " + workspaces.find((w) => w.id === selected)?.name)
+  },
 })
 
 export const WorkspacesCommand = cmd({
   command: "workspaces",
   aliases: ["workspace"],
   describe: "list all workspaces",
-  async handler() {},
+  async handler() {
+    const accounts = Account.list()
+
+    if (accounts.length === 0) {
+      UI.println("No accounts found")
+      return
+    }
+
+    for (const account of accounts) {
+      const workspaces = await Account.workspaces(account.id)
+      for (const space of workspaces) {
+        UI.println([space.name, account.email, space.id].join("\t"))
+      }
+    }
+  },
 })
