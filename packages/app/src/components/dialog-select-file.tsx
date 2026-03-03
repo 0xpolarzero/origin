@@ -425,10 +425,10 @@ export function DialogSelectFile(props: { mode?: DialogSelectFileMode; onOpenFil
         return undefined
       })
 
-    if (!ensured?.ok || !ensured.path) {
+    if (!ensured?.path) {
       showToast({
         title: language.t("common.requestFailed"),
-        description: ensured?.message ?? language.t("common.requestFailed"),
+        description: language.t("common.requestFailed"),
       })
       return
     }
