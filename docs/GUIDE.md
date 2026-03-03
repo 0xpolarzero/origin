@@ -140,4 +140,4 @@ Use this checklist for a new phase:
 - Create `docs/NN.<slug>.spec.md` with required sections.
 - Implement work.
 - Create `docs/NN.<slug>.log.md` with required log facts.
-- Update `docs/README.md` phase list.
+- Update `docs/00.project-direction.md` if the project direction or scope boundaries changed.

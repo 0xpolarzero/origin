@@ -4,6 +4,12 @@
 - Local `main` ref may not exist; use `dev` or `origin/dev` for diffs.
 - Prefer automation: execute requested actions without confirmation unless blocked by missing info or safety/irreversibility.
 
+## Repo Context (Read First)
+
+- Start with [docs/00.project-direction.md](/Users/polarzero/code/projects/origin/docs/00.project-direction.md) for the fork's current direction and scope boundaries.
+- Follow [docs/GUIDE.md](/Users/polarzero/code/projects/origin/docs/GUIDE.md) for the required phase `.spec`/`.log` workflow.
+- Keep work scoped to native desktop goals unless a phase spec explicitly expands scope.
+
 ## Commits
 
 - Use Conventional Commits format: `<type>(<scope>): <description>` (scope optional).
