@@ -31,7 +31,7 @@ export async function defocus(page: Page) {
 
 export async function openPalette(page: Page) {
   await defocus(page)
-  await page.keyboard.press(`${modKey}+P`)
+  await page.keyboard.press(`${modKey}+Shift+P`)
 
   const dialog = page.getByRole("dialog")
   await expect(dialog).toBeVisible()

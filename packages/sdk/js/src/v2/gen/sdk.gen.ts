@@ -69,6 +69,8 @@ import type {
   PartDeleteResponses,
   PartUpdateErrors,
   PartUpdateResponses,
+  PathEnsureErrors,
+  PathEnsureResponses,
   PathGetResponses,
   PermissionListResponses,
   PermissionReplyErrors,
@@ -3589,6 +3591,43 @@ export class Path extends HeyApiClient {
       url: "/path",
       ...options,
       ...params,
+    })
+  }
+
+  /**
+   * Ensure path
+   *
+   * Ensure a directory exists by creating it recursively when missing.
+   */
+  public ensure<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      path?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "path" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<PathEnsureResponses, PathEnsureErrors, ThrowOnError>({
+      url: "/path/ensure",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
     })
   }
 }

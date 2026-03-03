@@ -7,6 +7,8 @@ import { cors } from "hono/cors"
 import { streamSSE } from "hono/streaming"
 import { proxy } from "hono/proxy"
 import { basicAuth } from "hono/basic-auth"
+import { mkdir, realpath } from "node:fs/promises"
+import path from "node:path"
 import z from "zod"
 import { Provider } from "../provider/provider"
 import { NamedError } from "@opencode-ai/util/error"
@@ -311,6 +313,73 @@ export namespace Server {
               worktree: Instance.worktree,
               directory: Instance.directory,
             })
+          },
+        )
+        .post(
+          "/path/ensure",
+          describeRoute({
+            summary: "Ensure path",
+            description: "Ensure a directory exists by creating it recursively when missing.",
+            operationId: "path.ensure",
+            responses: {
+              200: {
+                description: "Path ensured",
+                content: {
+                  "application/json": {
+                    schema: resolver(
+                      z.object({
+                        ok: z.literal(true),
+                        path: z.string(),
+                      }),
+                    ),
+                  },
+                },
+              },
+              400: {
+                description: "Failed to ensure path",
+                content: {
+                  "application/json": {
+                    schema: resolver(
+                      z.object({
+                        ok: z.literal(false),
+                        path: z.string(),
+                        code: z.string(),
+                        message: z.string(),
+                      }),
+                    ),
+                  },
+                },
+              },
+            },
+          }),
+          validator(
+            "json",
+            z.object({
+              path: z.string(),
+            }),
+          ),
+          async (c) => {
+            const input = c.req.valid("json")
+            const absolute = path.resolve(input.path)
+            try {
+              await mkdir(absolute, { recursive: true })
+              const resolved = await realpath(absolute).catch(() => absolute)
+              return c.json({
+                ok: true as const,
+                path: resolved,
+              })
+            } catch (error) {
+              const node = error as NodeJS.ErrnoException
+              return c.json(
+                {
+                  ok: false as const,
+                  path: absolute,
+                  code: node.code ?? "UNKNOWN",
+                  message: node.message ?? "Failed to ensure path",
+                },
+                { status: 400 },
+              )
+            }
           },
         )
         .get(

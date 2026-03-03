@@ -306,7 +306,7 @@ export const { use: useCommand, provider: CommandProvider } = createSimpleContex
     }
 
     const showPalette = () => {
-      run("file.open", "palette")
+      run("palette.open", "palette")
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {

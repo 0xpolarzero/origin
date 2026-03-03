@@ -28,6 +28,7 @@ export type ProjectSidebarContext = {
   navigateToProject: (directory: string) => void
   openSidebar: () => void
   closeProject: (directory: string) => void
+  isProjectProtected: (worktree: string) => boolean
   showEditProjectDialog: (project: LocalProject) => void
   toggleProjectWorkspaces: (project: LocalProject) => void
   workspacesEnabled: (project: LocalProject) => boolean
@@ -71,6 +72,7 @@ const ProjectTile = (props: {
   toggleProjectWorkspaces: (project: LocalProject) => void
   workspacesEnabled: (project: LocalProject) => boolean
   closeProject: (directory: string) => void
+  isProjectProtected: (worktree: string) => boolean
   setMenu: (value: boolean) => void
   setOpen: (value: boolean) => void
   setSuppressHover: (value: boolean) => void
@@ -166,6 +168,7 @@ const ProjectTile = (props: {
           <ContextMenu.Item
             data-action="project-close-menu"
             data-project={base64Encode(props.project.worktree)}
+            disabled={props.isProjectProtected(props.project.worktree)}
             onSelect={() => props.closeProject(props.project.worktree)}
           >
             <ContextMenu.ItemLabel>{props.language.t("common.close")}</ContextMenu.ItemLabel>
@@ -194,21 +197,23 @@ const ProjectPreviewPanel = (props: {
   <div class="-m-3 p-2 flex flex-col w-72">
     <div class="px-4 pt-2 pb-1 flex items-center gap-2">
       <div class="text-14-medium text-text-strong truncate grow">{displayName(props.project)}</div>
-      <Tooltip value={props.language.t("common.close")} placement="top" gutter={6}>
-        <IconButton
-          icon="circle-x"
-          variant="ghost"
-          class="shrink-0"
-          data-action="project-close-hover"
-          data-project={base64Encode(props.project.worktree)}
-          aria-label={props.language.t("common.close")}
-          onClick={(event) => {
-            event.stopPropagation()
-            props.setOpen(false)
-            props.ctx.closeProject(props.project.worktree)
-          }}
-        />
-      </Tooltip>
+      <Show when={!props.ctx.isProjectProtected(props.project.worktree)}>
+        <Tooltip value={props.language.t("common.close")} placement="top" gutter={6}>
+          <IconButton
+            icon="circle-x"
+            variant="ghost"
+            class="shrink-0"
+            data-action="project-close-hover"
+            data-project={base64Encode(props.project.worktree)}
+            aria-label={props.language.t("common.close")}
+            onClick={(event) => {
+              event.stopPropagation()
+              props.setOpen(false)
+              props.ctx.closeProject(props.project.worktree)
+            }}
+          />
+        </Tooltip>
+      </Show>
     </div>
     <div class="px-4 pb-2 text-12-medium text-text-weak">{props.language.t("sidebar.project.recentSessions")}</div>
     <div class="px-2 pb-2 flex flex-col gap-2">
@@ -362,6 +367,7 @@ export const SortableProject = (props: {
       toggleProjectWorkspaces={props.ctx.toggleProjectWorkspaces}
       workspacesEnabled={props.ctx.workspacesEnabled}
       closeProject={props.ctx.closeProject}
+      isProjectProtected={props.ctx.isProjectProtected}
       setMenu={(value) => setState("menu", value)}
       setOpen={(value) => setState("open", value)}
       setSuppressHover={(value) => setState("suppressHover", value)}

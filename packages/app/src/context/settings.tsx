@@ -25,6 +25,7 @@ export interface Settings {
     showReasoningSummaries: boolean
     shellToolPartsExpanded: boolean
     editToolPartsExpanded: boolean
+    globalWorkspaceDirectory?: string
   }
   updates: {
     startup: boolean
@@ -146,6 +147,18 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         ),
         setEditToolPartsExpanded(value: boolean) {
           setStore("general", "editToolPartsExpanded", value)
+        },
+        globalWorkspaceDirectory: withFallback(() => store.general?.globalWorkspaceDirectory, ""),
+        setGlobalWorkspaceDirectory(value: string) {
+          const next = value.trim()
+          if (!next) {
+            setStore("general", "globalWorkspaceDirectory", undefined)
+            return
+          }
+          setStore("general", "globalWorkspaceDirectory", next)
+        },
+        resetGlobalWorkspaceDirectory() {
+          setStore("general", "globalWorkspaceDirectory", undefined)
         },
       },
       updates: {

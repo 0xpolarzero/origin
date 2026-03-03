@@ -7,10 +7,14 @@ import { Switch } from "@opencode-ai/ui/switch"
 import { Tooltip } from "@opencode-ai/ui/tooltip"
 import { useTheme, type ColorScheme } from "@opencode-ai/ui/theme"
 import { showToast } from "@opencode-ai/ui/toast"
+import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useLanguage } from "@/context/language"
 import { usePlatform } from "@/context/platform"
 import { useSettings, monoFontFamily } from "@/context/settings"
+import { useGlobalSync } from "@/context/global-sync"
 import { playSound, SOUND_OPTIONS } from "@/utils/sound"
+import { resolveGlobalWorkspaceDirectory } from "@/utils/global-workspace"
+import { DialogSelectDirectory } from "./dialog-select-directory"
 import { Link } from "./link"
 
 let demoSoundState = {
@@ -42,12 +46,53 @@ export const SettingsGeneral: Component = () => {
   const language = useLanguage()
   const platform = usePlatform()
   const settings = useSettings()
+  const sync = useGlobalSync()
+  const dialog = useDialog()
 
   const [store, setStore] = createStore({
     checking: false,
   })
 
   const linux = createMemo(() => platform.platform === "desktop" && platform.os === "linux")
+  const hasGlobalWorkspaceOverride = createMemo(() => settings.general.globalWorkspaceDirectory().trim().length > 0)
+  const globalWorkspace = createMemo(() =>
+    resolveGlobalWorkspaceDirectory({
+      configured: settings.general.globalWorkspaceDirectory(),
+      home: sync.data.path.home,
+    }),
+  )
+
+  const chooseGlobalWorkspace = async () => {
+    if (platform.openDirectoryPickerDialog && platform.platform === "desktop") {
+      const result = await platform.openDirectoryPickerDialog({
+        title: "Choose global workspace",
+        multiple: false,
+      })
+      if (!result || Array.isArray(result)) return
+      settings.general.setGlobalWorkspaceDirectory(result)
+      return
+    }
+
+    const selected = await new Promise<string | null>((resolve) => {
+      dialog.show(
+        () => (
+          <DialogSelectDirectory
+            title="Choose global workspace"
+            onSelect={(result) => {
+              if (!result || Array.isArray(result)) {
+                resolve(null)
+                return
+              }
+              resolve(result)
+            }}
+          />
+        ),
+        () => resolve(null),
+      )
+    })
+    if (!selected) return
+    settings.general.setGlobalWorkspaceDirectory(selected)
+  }
 
   const check = () => {
     if (!platform.checkUpdate) return
@@ -315,6 +360,30 @@ export const SettingsGeneral: Component = () => {
     </div>
   )
 
+  const WorkspaceSection = () => (
+    <div class="flex flex-col gap-1">
+      <h3 class="text-14-medium text-text-strong pb-2">Workspace</h3>
+      <div class="bg-surface-raised-base px-4 rounded-lg">
+        <SettingsRow
+          title="Global workspace"
+          description="Default workspace for startup and global entry sessions"
+        >
+          <div class="flex items-center gap-2 max-w-[420px]" data-action="settings-global-workspace">
+            <code class="text-12-regular text-text-weak truncate">{globalWorkspace()}</code>
+            <Button size="small" variant="secondary" onClick={chooseGlobalWorkspace}>
+              Choose folder
+            </Button>
+            <Show when={hasGlobalWorkspaceOverride()}>
+              <Button size="small" variant="ghost" onClick={settings.general.resetGlobalWorkspaceDirectory}>
+                {language.t("common.reset")}
+              </Button>
+            </Show>
+          </div>
+        </SettingsRow>
+      </div>
+    </div>
+  )
+
   const NotificationsSection = () => (
     <div class="flex flex-col gap-1">
       <h3 class="text-14-medium text-text-strong pb-2">{language.t("settings.general.section.notifications")}</h3>
@@ -466,6 +535,8 @@ export const SettingsGeneral: Component = () => {
 
       <div class="flex flex-col gap-8 w-full">
         <AppearanceSection />
+
+        <WorkspaceSection />
 
         <FeedSection />
 

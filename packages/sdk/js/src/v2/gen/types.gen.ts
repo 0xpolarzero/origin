@@ -4805,6 +4805,44 @@ export type PathGetResponses = {
 
 export type PathGetResponse = PathGetResponses[keyof PathGetResponses]
 
+export type PathEnsureData = {
+  body?: {
+    path: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/path/ensure"
+}
+
+export type PathEnsureErrors = {
+  /**
+   * Failed to ensure path
+   */
+  400: {
+    ok: false
+    path: string
+    code: string
+    message: string
+  }
+}
+
+export type PathEnsureError = PathEnsureErrors[keyof PathEnsureErrors]
+
+export type PathEnsureResponses = {
+  /**
+   * Path ensured
+   */
+  200: {
+    ok: true
+    path: string
+  }
+}
+
+export type PathEnsureResponse = PathEnsureResponses[keyof PathEnsureResponses]
+
 export type VcsGetData = {
   body?: never
   path?: never

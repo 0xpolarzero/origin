@@ -52,10 +52,16 @@ import { DialogSettings } from "@/components/dialog-settings"
 import { useCommand, type CommandOption } from "@/context/command"
 import { ConstrainDragXAxis } from "@/utils/solid-dnd"
 import { DialogSelectDirectory } from "@/components/dialog-select-directory"
+import { DialogSelectFile } from "@/components/dialog-select-file"
 import { DialogEditProject } from "@/components/dialog-edit-project"
 import { Titlebar } from "@/components/titlebar"
 import { useServer } from "@/context/server"
 import { useLanguage, type Locale } from "@/context/language"
+import {
+  isProtectedWorkspace,
+  resolveGlobalWorkspaceDirectory,
+  shouldBootstrapToGlobalWorkspace,
+} from "@/utils/global-workspace"
 import {
   childMapByParent,
   displayName,
@@ -122,9 +128,18 @@ export default function Layout(props: ParentProps) {
   }
   const colorSchemeLabel = (scheme: ColorScheme) => language.t(colorSchemeKey[scheme])
   const currentDir = createMemo(() => decode64(params.dir) ?? "")
+  const protectedWorkspace = createMemo(() =>
+    resolveGlobalWorkspaceDirectory({
+      configured: settings.general.globalWorkspaceDirectory(),
+      home: globalSync.data.path.home,
+    }),
+  )
+  const isProtectedProject = (directory: string) =>
+    isProtectedWorkspace({ directory, protectedDirectory: protectedWorkspace() })
 
   const [state, setState] = createStore({
     autoselect: !initialDirectory,
+    bootstrapping: false,
     busyWorkspaces: {} as Record<string, boolean>,
     hoverSession: undefined as string | undefined,
     hoverProject: undefined as string | undefined,
@@ -202,19 +217,26 @@ export default function Layout(props: ParentProps) {
     if (!state.autoselect) return false
     if (!pageReady()) return true
     if (!layoutReady()) return true
-    const list = layout.projects.list()
-    if (list.length > 0) return true
-    return !!server.projects.last()
+    return true
   })
 
-  createEffect(() => {
-    if (!state.autoselect) return
-    const dir = params.dir
-    if (!dir) return
-    const directory = decode64(dir)
-    if (!directory) return
-    setState("autoselect", false)
-  })
+  createEffect(
+    on(
+      () => params.dir,
+      (dir, prev) => {
+        if (dir) {
+          const directory = decode64(dir)
+          if (!directory) return
+          setState("autoselect", false)
+          return
+        }
+        if (prev) {
+          setState("autoselect", true)
+        }
+      },
+      { defer: true },
+    ),
+  )
 
   const editorOpen = editor.editorOpen
   const openEditor = editor.openEditor
@@ -498,28 +520,17 @@ export default function Layout(props: ParentProps) {
 
   createEffect(
     on(
-      () => ({ ready: pageReady(), layoutReady: layoutReady(), dir: params.dir, list: layout.projects.list() }),
+      () => ({
+        autoselect: state.autoselect,
+        pageReady: pageReady(),
+        layoutReady: layoutReady(),
+        hasDirectoryParam: !!params.dir,
+        bootstrapping: state.bootstrapping,
+        workspaceDirectory: protectedWorkspace(),
+      }),
       (value) => {
-        if (!value.ready) return
-        if (!value.layoutReady) return
-        if (!state.autoselect) return
-        if (value.dir) return
-
-        const last = server.projects.last()
-
-        if (value.list.length === 0) {
-          if (!last) return
-          setState("autoselect", false)
-          openProject(last, false)
-          navigateToProject(last)
-          return
-        }
-
-        const next = value.list.find((project) => project.worktree === last) ?? value.list[0]
-        if (!next) return
-        setState("autoselect", false)
-        openProject(next.worktree, false)
-        navigateToProject(next.worktree)
+        if (!shouldBootstrapToGlobalWorkspace(value)) return
+        void bootstrapGlobalWorkspace()
       },
     ),
   )
@@ -902,6 +913,12 @@ export default function Layout(props: ParentProps) {
         onSelect: () => layout.sidebar.toggle(),
       },
       {
+        id: "palette.open",
+        title: language.t("command.palette"),
+        category: language.t("command.category.view"),
+        onSelect: () => dialog.show(() => <DialogSelectFile />),
+      },
+      {
         id: "project.open",
         title: language.t("command.project.open"),
         category: language.t("command.category.project"),
@@ -1155,6 +1172,52 @@ export default function Layout(props: ParentProps) {
     if (navigate) navigateToProject(directory)
   }
 
+  async function bootstrapGlobalWorkspace() {
+    if (state.bootstrapping) return
+
+    const target = protectedWorkspace()
+    if (!target) {
+      showToast({
+        variant: "error",
+        title: language.t("common.requestFailed"),
+        description: "Default workspace path is unavailable. Configure a global workspace in Settings.",
+      })
+      return
+    }
+
+    setState("bootstrapping", true)
+    const ensured = await globalSDK.client.path
+      .ensure({ path: target })
+      .then((x) => x.data)
+      .catch((error) => {
+        showToast({
+          variant: "error",
+          title: language.t("common.requestFailed"),
+          description: errorMessage(error, language.t("common.requestFailed")),
+        })
+        return undefined
+      })
+      .finally(() => {
+        setState("bootstrapping", false)
+      })
+
+    if (!ensured?.ok || !ensured.path) {
+      if (ensured?.message) {
+        showToast({
+          variant: "error",
+          title: language.t("common.requestFailed"),
+          description: ensured.message,
+        })
+      }
+      setState("autoselect", false)
+      return
+    }
+
+    setState("autoselect", false)
+    openProject(ensured.path, false)
+    void navigateToProject(ensured.path)
+  }
+
   const handleDeepLinks = (urls: string[]) => {
     if (!server.isLocal()) return
     for (const directory of collectOpenProjectDeepLinks(urls)) {
@@ -1195,11 +1258,20 @@ export default function Layout(props: ParentProps) {
   }
 
   function closeProject(directory: string) {
+    if (isProtectedProject(directory)) return
     const index = layout.projects.list().findIndex((x) => x.worktree === directory)
     const next = layout.projects.list()[index + 1]
     layout.projects.close(directory)
     if (next) navigateToProject(next.worktree)
-    else navigate("/")
+    if (!next) {
+      const target = protectedWorkspace()
+      if (!target) {
+        navigate("/")
+        return
+      }
+      openProject(target, false)
+      void navigateToProject(target)
+    }
   }
 
   function toggleProjectWorkspaces(project: LocalProject) {
@@ -1242,6 +1314,7 @@ export default function Layout(props: ParentProps) {
 
   const deleteWorkspace = async (root: string, directory: string) => {
     if (directory === root) return
+    if (isProtectedProject(root) || isProtectedProject(directory)) return
 
     setBusy(directory, true)
 
@@ -1280,6 +1353,7 @@ export default function Layout(props: ParentProps) {
 
   const resetWorkspace = async (root: string, directory: string) => {
     if (directory === root) return
+    if (isProtectedProject(root) || isProtectedProject(directory)) return
     setBusy(directory, true)
 
     const progress = showToast({
@@ -1712,6 +1786,7 @@ export default function Layout(props: ParentProps) {
     navigateToProject,
     openSidebar: () => layout.sidebar.open(),
     closeProject,
+    isProjectProtected: isProtectedProject,
     showEditProjectDialog,
     toggleProjectWorkspaces,
     workspacesEnabled: (project) => project.vcs === "git" && layout.sidebar.workspaces(project.worktree)(),
@@ -1836,6 +1911,7 @@ export default function Layout(props: ParentProps) {
                         <DropdownMenu.Item
                           data-action="project-close-menu"
                           data-project={base64Encode(p().worktree)}
+                          disabled={isProtectedProject(p().worktree)}
                           onSelect={() => closeProject(p().worktree)}
                         >
                           <DropdownMenu.ItemLabel>{language.t("common.close")}</DropdownMenu.ItemLabel>

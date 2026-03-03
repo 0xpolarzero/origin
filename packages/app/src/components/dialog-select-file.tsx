@@ -4,6 +4,8 @@ import { FileIcon } from "@opencode-ai/ui/file-icon"
 import { Icon } from "@opencode-ai/ui/icon"
 import { Keybind } from "@opencode-ai/ui/keybind"
 import { List } from "@opencode-ai/ui/list"
+import { Tag } from "@opencode-ai/ui/tag"
+import { showToast } from "@opencode-ai/ui/toast"
 import { base64Encode } from "@opencode-ai/util/encode"
 import { getDirectory, getFilename } from "@opencode-ai/util/path"
 import { useNavigate, useParams } from "@solidjs/router"
@@ -14,16 +16,26 @@ import { useGlobalSync } from "@/context/global-sync"
 import { useLayout } from "@/context/layout"
 import { useFile } from "@/context/file"
 import { useLanguage } from "@/context/language"
+import { useLocal } from "@/context/local"
+import { useModels } from "@/context/models"
+import { useSettings } from "@/context/settings"
+import { useProviders } from "@/hooks/use-providers"
 import { decode64 } from "@/utils/base64"
+import {
+  resolveGlobalWorkspaceDirectory,
+  shouldShowEntryCommand,
+  sortPaletteGroupsWithGlobal,
+} from "@/utils/global-workspace"
 import { getRelativeTime } from "@/utils/time"
 
-type EntryType = "command" | "file" | "session"
+type EntryType = "entry" | "command" | "file" | "session"
 
 type Entry = {
   id: string
   type: EntryType
   title: string
   description?: string
+  search?: string
   keybind?: string
   category: string
   option?: CommandOption
@@ -32,11 +44,13 @@ type Entry = {
   sessionID?: string
   archived?: number
   updated?: number
+  query?: string
 }
 
 type DialogSelectFileMode = "all" | "files"
 
 const ENTRY_LIMIT = 5
+const GLOBAL_ENTRY_CATEGORY = "Global"
 const COMMON_COMMAND_IDS = [
   "session.new",
   "workspace.new",
@@ -62,15 +76,27 @@ const createCommandEntry = (option: CommandOption, category: string): Entry => (
   type: "command",
   title: option.title,
   description: option.description,
+  search: `${option.title}\n${option.description ?? ""}`,
   keybind: option.keybind,
   category,
   option,
+})
+
+const createEntrySessionStart = (query: string): Entry => ({
+  id: "entry:start-session",
+  type: "entry",
+  title: "Start agent session from entry",
+  description: "Create and send in global workspace",
+  search: query,
+  category: GLOBAL_ENTRY_CATEGORY,
+  query,
 })
 
 const createFileEntry = (path: string, category: string): Entry => ({
   id: "file:" + path,
   type: "file",
   title: path,
+  search: path,
   category,
   path,
 })
@@ -90,6 +116,7 @@ const createSessionEntry = (
   type: "session",
   title: input.title,
   description: input.description,
+  search: `${input.title}\n${input.description}`,
   category,
   directory: input.directory,
   sessionID: input.id,
@@ -105,7 +132,11 @@ function createCommandEntries(props: {
   const allowed = createMemo(() => {
     if (props.filesOnly()) return []
     return props.command.options.filter(
-      (option) => !option.disabled && !option.id.startsWith("suggested.") && option.id !== "file.open",
+      (option) =>
+        !option.disabled &&
+        !option.id.startsWith("suggested.") &&
+        option.id !== "file.open" &&
+        option.id !== "palette.open",
     )
   })
 
@@ -128,11 +159,12 @@ function createCommandEntries(props: {
 }
 
 function createFileEntries(props: {
-  file: ReturnType<typeof useFile>
+  file: ReturnType<typeof useFile> | undefined
   tabs: () => ReturnType<ReturnType<typeof useLayout>["tabs"]>
   language: ReturnType<typeof useLanguage>
 }) {
   const recent = createMemo(() => {
+    if (!props.file) return []
     const all = props.tabs().all()
     const active = props.tabs().active()
     const order = active ? [active, ...all.filter((item) => item !== active)] : all
@@ -152,6 +184,7 @@ function createFileEntries(props: {
   })
 
   const root = createMemo(() => {
+    if (!props.file) return []
     const category = props.language.t("palette.group.files")
     const nodes = props.file.tree.children("")
     const paths = nodes
@@ -162,6 +195,14 @@ function createFileEntries(props: {
   })
 
   return { recent, root }
+}
+
+function optionalContext<T>(read: () => T) {
+  try {
+    return read()
+  } catch {
+    return undefined
+  }
 }
 
 function createSessionEntries(props: {
@@ -257,12 +298,16 @@ export function DialogSelectFile(props: { mode?: DialogSelectFileMode; onOpenFil
   const command = useCommand()
   const language = useLanguage()
   const layout = useLayout()
-  const file = useFile()
+  const file = optionalContext(() => useFile())
+  const local = optionalContext(() => useLocal())
+  const models = useModels()
+  const providers = useProviders()
   const dialog = useDialog()
   const params = useParams()
   const navigate = useNavigate()
   const globalSDK = useGlobalSDK()
   const globalSync = useGlobalSync()
+  const settings = useSettings()
   const filesOnly = () => props.mode === "files"
   const sessionKey = createMemo(() => `${params.dir}${params.id ? "/" + params.id : ""}`)
   const tabs = createMemo(() => layout.tabs(sessionKey))
@@ -271,6 +316,12 @@ export function DialogSelectFile(props: { mode?: DialogSelectFileMode; onOpenFil
   const [grouped, setGrouped] = createSignal(false)
   const commandEntries = createCommandEntries({ filesOnly, command, language })
   const fileEntries = createFileEntries({ file, tabs, language })
+  const globalWorkspace = createMemo(() =>
+    resolveGlobalWorkspaceDirectory({
+      configured: settings.general.globalWorkspaceDirectory(),
+      home: globalSync.data.path.home,
+    }),
+  )
 
   const projectDirectory = createMemo(() => decode64(params.dir) ?? "")
   const project = createMemo(() => {
@@ -303,11 +354,133 @@ export function DialogSelectFile(props: { mode?: DialogSelectFileMode; onOpenFil
 
   const { sessions } = createSessionEntries({ workspaces, label, globalSDK, language })
 
+  const formatError = (error: unknown) => {
+    if (error && typeof error === "object" && "data" in error) {
+      const data = (error as { data?: { message?: string } }).data
+      if (data?.message) return data.message
+    }
+    if (error instanceof Error) return error.message
+    return language.t("common.requestFailed")
+  }
+
+  const startSessionFromEntry = async (query: string) => {
+    const text = query.trim()
+    if (!text) return
+
+    const connected = new Set(providers.connected().map((provider) => provider.id))
+    const defaults = providers.default()
+    const model =
+      local?.model.current() ??
+      models.recent
+        .list()
+        .map(models.find)
+        .find((entry) => !!entry && connected.has(entry.provider.id)) ??
+      providers
+        .connected()
+        .map((provider) => {
+          const configured = defaults[provider.id]
+          if (configured) {
+            const hit = models.find({ providerID: provider.id, modelID: configured })
+            if (hit) return hit
+          }
+          const first = Object.values(provider.models)[0]
+          if (!first) return undefined
+          return models.find({ providerID: provider.id, modelID: first.id })
+        })
+        .find((entry) => !!entry)
+
+    const activeDirectory = decode64(params.dir)
+    const directories = [activeDirectory, globalWorkspace()].filter((directory): directory is string => !!directory)
+    const agent =
+      local?.agent.current() ??
+      directories
+        .flatMap((directory) => globalSync.child(directory, { bootstrap: false })[0].agent)
+        .find((entry) => entry.mode !== "subagent" && !entry.hidden)
+
+    if (!model || !agent) {
+      showToast({
+        title: language.t("prompt.toast.modelAgentRequired.title"),
+        description: language.t("prompt.toast.modelAgentRequired.description"),
+      })
+      return
+    }
+
+    const directory = globalWorkspace()
+    if (!directory) {
+      showToast({
+        title: language.t("common.requestFailed"),
+        description: language.t("common.requestFailed"),
+      })
+      return
+    }
+
+    const ensured = await globalSDK.client.path
+      .ensure({ path: directory })
+      .then((x) => x.data)
+      .catch((error) => {
+        showToast({
+          title: language.t("common.requestFailed"),
+          description: formatError(error),
+        })
+        return undefined
+      })
+
+    if (!ensured?.ok || !ensured.path) {
+      showToast({
+        title: language.t("common.requestFailed"),
+        description: ensured?.message ?? language.t("common.requestFailed"),
+      })
+      return
+    }
+
+    const target = ensured.path
+    const client = globalSDK.createClient({
+      directory: target,
+      throwOnError: true,
+    })
+    globalSync.child(target)
+
+    const session = await client.session
+      .create()
+      .then((x) => x.data ?? undefined)
+      .catch((error) => {
+        showToast({
+          title: language.t("prompt.toast.sessionCreateFailed.title"),
+          description: formatError(error),
+        })
+        return undefined
+      })
+
+    if (!session?.id) return
+
+    navigate(`/${base64Encode(target)}/session/${session.id}`)
+
+    await client.session
+      .promptAsync({
+        sessionID: session.id,
+        agent: agent.name,
+        model: {
+          providerID: model.provider.id,
+          modelID: model.id,
+        },
+        variant: local?.model.variant.current(),
+        parts: [{ type: "text", text }],
+      })
+      .catch((error) => {
+        showToast({
+          title: language.t("prompt.toast.promptSendFailed.title"),
+          description: formatError(error),
+        })
+      })
+  }
+
   const items = async (text: string) => {
     const query = text.trim()
     setGrouped(query.length > 0)
+    const showEntry = shouldShowEntryCommand({ query: text, mode: filesOnly() ? "files" : "all" })
+    const entry = showEntry ? createEntrySessionStart(query) : undefined
 
-    if (!query && filesOnly()) {
+    if (!query && filesOnly() && file) {
       const loaded = file.tree.state("")?.loaded
       const pending = loaded ? Promise.resolve() : file.tree.list("")
       const next = uniqueEntries([...fileEntries.recent(), ...fileEntries.root()])
@@ -324,15 +497,21 @@ export function DialogSelectFile(props: { mode?: DialogSelectFileMode; onOpenFil
     if (!query) return [...commandEntries.picks(), ...fileEntries.recent()]
 
     if (filesOnly()) {
+      if (!file) return []
       const files = await file.searchFiles(query)
       const category = language.t("palette.group.files")
       return files.map((path) => createFileEntry(path, category))
     }
 
-    const [files, nextSessions] = await Promise.all([file.searchFiles(query), Promise.resolve(sessions(query))])
+    const [files, nextSessions] = await Promise.all([
+      file ? file.searchFiles(query) : Promise.resolve([] as string[]),
+      Promise.resolve(sessions(query)),
+    ])
     const category = language.t("palette.group.files")
     const entries = files.map((path) => createFileEntry(path, category))
-    return [...commandEntries.list(), ...nextSessions, ...entries]
+    const result = [...commandEntries.list(), ...nextSessions, ...entries]
+    if (!entry) return result
+    return [entry, ...result]
   }
 
   const handleMove = (item: Entry | undefined) => {
@@ -343,6 +522,7 @@ export function DialogSelectFile(props: { mode?: DialogSelectFileMode; onOpenFil
   }
 
   const open = (path: string) => {
+    if (!file) return
     const value = file.tab(path)
     tabs().open(value)
     file.load(path)
@@ -360,6 +540,11 @@ export function DialogSelectFile(props: { mode?: DialogSelectFileMode; onOpenFil
 
     if (item.type === "command") {
       item.option?.onSelect?.("palette")
+      return
+    }
+
+    if (item.type === "entry") {
+      void startSessionFromEntry(item.query ?? "")
       return
     }
 
@@ -392,8 +577,9 @@ export function DialogSelectFile(props: { mode?: DialogSelectFileMode; onOpenFil
         loadingMessage={language.t("common.loading")}
         items={items}
         key={(item) => item.id}
-        filterKeys={["title", "description", "category"]}
+        filterKeys={["title", "description", "category", "search"]}
         groupBy={grouped() ? (item) => item.category : () => ""}
+        sortGroupsBy={sortPaletteGroupsWithGlobal}
         onMove={handleMove}
         onSelect={handleSelect}
       >
@@ -413,6 +599,15 @@ export function DialogSelectFile(props: { mode?: DialogSelectFileMode; onOpenFil
               </div>
             }
           >
+            <Match when={item.type === "entry"}>
+              <div class="w-full flex items-center justify-between gap-4">
+                <div class="flex items-center gap-2 min-w-0">
+                  <Icon name="models" size="small" class="shrink-0 text-icon-info-base" />
+                  <span class="text-14-regular text-text-strong whitespace-nowrap">{item.title}</span>
+                </div>
+                <Tag class="shrink-0">origin</Tag>
+              </div>
+            </Match>
             <Match when={item.type === "command"}>
               <div class="w-full flex items-center justify-between gap-4">
                 <div class="flex items-center gap-2 min-w-0">
