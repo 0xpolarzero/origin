@@ -4,6 +4,12 @@
 - Local `main` ref may not exist; use `dev` or `origin/dev` for diffs.
 - Prefer automation: execute requested actions without confirmation unless blocked by missing info or safety/irreversibility.
 
+## Commits
+
+- Use Conventional Commits format: `<type>(<scope>): <description>` (scope optional).
+- Keep commit messages concise and technical.
+- Do not use emojis in commit title or body.
+
 ## Style Guide
 
 ### General Principles
