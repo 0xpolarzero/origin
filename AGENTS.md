@@ -8,10 +8,14 @@
 
 ## Repo Context (Read First)
 
-- Start with [docs/00.project-direction.md](/Users/polarzero/code/projects/origin/docs/00.project-direction.md) for the fork's current direction and scope boundaries.
-- Follow [docs/GUIDE.md](/Users/polarzero/code/projects/origin/docs/GUIDE.md) for the required phase `.spec`/`.log` workflow.
-- For upstream sync work, follow [docs/sync-fork/GUIDE.md](/Users/polarzero/code/projects/origin/docs/sync-fork/GUIDE.md).
+- Start with [docs/specs/00.project-direction.md](/Users/polarzero/code/projects/origin/docs/specs/00.project-direction.md) for the fork's current direction and scope boundaries.
+- Follow [docs/specs/GUIDE.md](/Users/polarzero/code/projects/origin/docs/specs/GUIDE.md) for the required phase `.spec`/`.log` workflow.
 - Keep work scoped to native desktop goals unless a phase spec explicitly expands scope.
+
+## Fork Sync (On Demand)
+
+- Only load [docs/sync-fork/GUIDE.md](/Users/polarzero/code/projects/origin/docs/sync-fork/GUIDE.md) when the task explicitly asks to sync this fork with upstream.
+- Do not load `docs/sync-fork/GUIDE.md` for unrelated implementation tasks.
 
 ## Commits
 

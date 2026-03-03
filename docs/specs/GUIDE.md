@@ -1,6 +1,6 @@
 # Agent Guide: Phase Specs and Logs
 
-This guide defines how agents should document work in `docs/` so every phase is consistent and easy to audit.
+This guide defines how agents should document work in `docs/specs/` so every phase is consistent and easy to audit.
 
 ## Purpose
 
@@ -141,7 +141,7 @@ Use this checklist for a new phase:
 - Pick next phase number `NN`.
 - Define slug `<slug>`.
 - Interrogate unclear requirements first; finalize nothing until scope and success criteria are explicit.
-- Create `docs/NN.<slug>.spec.md` with required sections.
+- Create `docs/specs/NN.<slug>.spec.md` with required sections.
 - Implement work.
-- Create `docs/NN.<slug>.log.md` with required log facts.
-- Update `docs/00.project-direction.md` if the project direction or scope boundaries changed.
+- Create `docs/specs/NN.<slug>.log.md` with required log facts.
+- Update `docs/specs/00.project-direction.md` if the project direction or scope boundaries changed.

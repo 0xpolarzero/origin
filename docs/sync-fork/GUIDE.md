@@ -120,7 +120,7 @@ git branch -d sync/upstream-<YYYY-MM-DD>
 
 ## Conflict Handling Policy
 
-- Preserve fork scope boundaries from [docs/00.project-direction.md](/Users/polarzero/code/projects/origin/docs/00.project-direction.md).
+- Preserve fork scope boundaries from [docs/specs/00.project-direction.md](/Users/polarzero/code/projects/origin/docs/specs/00.project-direction.md).
 - If upstream reintroduces removed non-desktop surface, keep it removed unless an approved phase spec says otherwise.
 - If an upstream change is useful but conflicts with deleted areas, prefer targeted cherry-picks over restoring large removed subsystems.
 
