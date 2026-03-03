@@ -1,6 +1,8 @@
 - To regenerate the JavaScript SDK, run `./packages/sdk/js/script/build.ts`.
 - ALWAYS USE PARALLEL TOOLS WHEN APPLICABLE.
-- The default branch in this repo is `dev`.
+- The default branch in this repo is `dev` and it is the integration base for fork work.
+- Track upstream changes from `upstream/dev` as read-only input only.
+- Never commit directly on `upstream/dev` and never target it as the base branch for fork feature work.
 - Local `main` ref may not exist; use `dev` or `origin/dev` for diffs.
 - Prefer automation: execute requested actions without confirmation unless blocked by missing info or safety/irreversibility.
 
@@ -8,6 +10,7 @@
 
 - Start with [docs/00.project-direction.md](/Users/polarzero/code/projects/origin/docs/00.project-direction.md) for the fork's current direction and scope boundaries.
 - Follow [docs/GUIDE.md](/Users/polarzero/code/projects/origin/docs/GUIDE.md) for the required phase `.spec`/`.log` workflow.
+- For upstream sync work, follow [docs/sync-fork/GUIDE.md](/Users/polarzero/code/projects/origin/docs/sync-fork/GUIDE.md).
 - Keep work scoped to native desktop goals unless a phase spec explicitly expands scope.
 
 ## Commits
