@@ -93,6 +93,10 @@ Validation and acceptance criteria must be bullet-proof. This is the primary mec
 - Cover functional correctness, regressions, and critical risks from the spec.
 - If a criterion is not measurable, rewrite it until it is measurable.
 - The implementation agent should be able to determine "done" from this section alone.
+- Baseline expectation for implementation phases: all relevant automated tests in touched packages pass.
+- New or changed features must include thorough automated coverage for happy path, regression path, and negative/error path behavior.
+- For app e2e coverage, prefer the local harness command (`bun --cwd packages/app run test:e2e:local ...`) in acceptance criteria.
+- Do not require raw `test:e2e` in acceptance criteria unless the spec also defines explicit backend bootstrap steps for that run mode.
 
 ## Required Log Structure
 
