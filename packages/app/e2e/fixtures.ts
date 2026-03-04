@@ -45,7 +45,7 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 
     const gotoSession = async (sessionID?: string) => {
       await page.goto(sessionPath(directory, sessionID))
-      await expect(page.locator(promptSelector)).toBeVisible()
+      await expect(page.locator(promptSelector)).toBeVisible({ timeout: 30_000 })
     }
     await use(gotoSession)
   },
@@ -57,7 +57,7 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
 
       const gotoSession = async (sessionID?: string) => {
         await page.goto(sessionPath(directory, sessionID))
-        await expect(page.locator(promptSelector)).toBeVisible()
+        await expect(page.locator(promptSelector)).toBeVisible({ timeout: 30_000 })
       }
 
       try {
@@ -74,7 +74,7 @@ async function seedStorage(page: Page, input: { directory: string; extra?: strin
   await seedProjects(page, input)
   await page.addInitScript(() => {
     localStorage.setItem(
-      "opencode.global.dat:model",
+      "origin.global.dat:model",
       JSON.stringify({
         recent: [{ providerID: "opencode", modelID: "big-pickle" }],
         user: [],

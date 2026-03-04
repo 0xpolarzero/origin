@@ -243,10 +243,10 @@ pub enum LinuxDisplayBackend {
 
 #[tauri::command]
 #[specta::specta]
-fn get_display_backend() -> Option<LinuxDisplayBackend> {
+fn get_display_backend(_app: AppHandle) -> Option<LinuxDisplayBackend> {
     #[cfg(target_os = "linux")]
     {
-        let prefer = linux_display::read_wayland().unwrap_or(false);
+        let prefer = linux_display::read_wayland(&_app).unwrap_or(false);
         return Some(if prefer {
             LinuxDisplayBackend::Wayland
         } else {
@@ -512,7 +512,7 @@ async fn initialize(app: AppHandle) {
                                 let _ = child.kill();
 
                                 return Err(format!(
-                                    "Failed to spawn OpenCode Server ({err}). Logs:\n{}",
+                                    "Failed to spawn origin Server ({err}). Logs:\n{}",
                                     get_logs()
                                 ));
                             }
@@ -697,7 +697,7 @@ fn opencode_db_path() -> Result<PathBuf, &'static str> {
         }
     };
 
-    Ok(data_home.join("opencode").join("opencode.db"))
+    Ok(data_home.join("origin").join("origin.db"))
 }
 
 // Creates a `once` listener for the specified event and returns a future that resolves

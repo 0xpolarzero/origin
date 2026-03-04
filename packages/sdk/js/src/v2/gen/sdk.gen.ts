@@ -46,6 +46,7 @@ import type {
   GlobalDisposeResponses,
   GlobalEventResponses,
   GlobalHealthResponses,
+  GlobalImportOpencodeProvidersResponses,
   InstanceDisposeResponses,
   LspStatusResponses,
   McpAddErrors,
@@ -267,6 +268,27 @@ export class Config extends HeyApiClient {
   }
 }
 
+export class Opencode extends HeyApiClient {
+  /**
+   * Import OpenCode providers and auth
+   *
+   * Load provider config and auth from OpenCode namespace into Origin without overwriting existing auth.
+   */
+  public providers<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).post<GlobalImportOpencodeProvidersResponses, unknown, ThrowOnError>({
+      url: "/global/import/opencode/providers",
+      ...options,
+    })
+  }
+}
+
+export class Import extends HeyApiClient {
+  private _opencode?: Opencode
+  get opencode(): Opencode {
+    return (this._opencode ??= new Opencode({ client: this.client }))
+  }
+}
+
 export class Global extends HeyApiClient {
   /**
    * Get health
@@ -307,6 +329,11 @@ export class Global extends HeyApiClient {
   private _config?: Config
   get config(): Config {
     return (this._config ??= new Config({ client: this.client }))
+  }
+
+  private _import?: Import
+  get import(): Import {
+    return (this._import ??= new Import({ client: this.client }))
   }
 }
 

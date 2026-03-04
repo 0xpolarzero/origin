@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::path::PathBuf;
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
@@ -13,24 +12,9 @@ struct DisplayConfig {
     wayland: Option<bool>,
 }
 
-fn dir() -> Option<PathBuf> {
-    Some(dirs::data_dir()?.join(if cfg!(debug_assertions) {
-        "ai.opencode.desktop.dev"
-    } else {
-        "ai.opencode.desktop"
-    }))
-}
-
-fn path() -> Option<PathBuf> {
-    dir().map(|dir| dir.join(SETTINGS_STORE))
-}
-
-pub fn read_wayland() -> Option<bool> {
-    let raw = std::fs::read_to_string(path()?).ok()?;
-    let root = serde_json::from_str::<serde_json::Value>(&raw)
-        .ok()?
-        .get(LINUX_DISPLAY_CONFIG_KEY)
-        .cloned()?;
+pub fn read_wayland(app: &AppHandle) -> Option<bool> {
+    let store = app.store(SETTINGS_STORE).ok()?;
+    let root = store.get(LINUX_DISPLAY_CONFIG_KEY)?;
     serde_json::from_value::<DisplayConfig>(root).ok()?.wayland
 }
 

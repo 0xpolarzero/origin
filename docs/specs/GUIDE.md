@@ -95,7 +95,8 @@ Validation and acceptance criteria must be bullet-proof. This is the primary mec
 - The implementation agent should be able to determine "done" from this section alone.
 - Baseline expectation for implementation phases: all relevant automated tests in touched packages pass.
 - New or changed features must include thorough automated coverage for happy path, regression path, and negative/error path behavior.
-- For app e2e coverage, prefer the local harness command (`bun --cwd packages/app run test:e2e:local ...`) in acceptance criteria.
+- For app e2e coverage, prefer the local harness command (`bun run --cwd packages/app test:e2e:local ...`) in acceptance criteria.
+- Bun invocation note: for package scripts, put `--cwd` after `run` (for example `bun run --cwd packages/app test:unit`). In some Bun versions, `bun --cwd ... run ...` prints usage and does not execute the script.
 - Do not require raw `test:e2e` in acceptance criteria unless the spec also defines explicit backend bootstrap steps for that run mode.
 
 ## Required Log Structure

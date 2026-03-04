@@ -42,7 +42,7 @@ void initI18n()
 
 let update: Update | null = null
 
-const deepLinkEvent = "opencode:deep-link"
+const deepLinkEvent = "origin:deep-link"
 
 const emitDeepLinks = (urls: string[]) => {
   if (urls.length === 0) return
@@ -269,7 +269,7 @@ const createPlatform = (): Platform => {
         return api
       }
 
-      return (name = "default.dat") => {
+      return (name = "origin.settings.dat") => {
         const cached = apiCache.get(name)
         if (cached) return cached
 

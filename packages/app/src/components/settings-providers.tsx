@@ -4,7 +4,9 @@ import { ProviderIcon } from "@opencode-ai/ui/provider-icon"
 import { Tag } from "@opencode-ai/ui/tag"
 import { showToast } from "@opencode-ai/ui/toast"
 import { popularProviders, useProviders } from "@/hooks/use-providers"
-import { createMemo, type Component, For, Show } from "solid-js"
+import { usePlatform } from "@/context/platform"
+import { useServer } from "@/context/server"
+import { createMemo, createSignal, type Component, For, Show } from "solid-js"
 import { useLanguage } from "@/context/language"
 import { useGlobalSDK } from "@/context/global-sdk"
 import { useGlobalSync } from "@/context/global-sync"
@@ -14,6 +16,22 @@ import { DialogCustomProvider } from "./dialog-custom-provider"
 
 type ProviderSource = "env" | "api" | "config" | "custom"
 type ProviderItem = ReturnType<ReturnType<typeof useProviders>["connected"]>[number]
+type OpenCodeImportSummary = {
+  status: "ok" | "noop"
+  message: string
+  config: {
+    source: string | null
+    imported: number
+    skipped: number
+    invalid: number
+  }
+  auth: {
+    source: string | null
+    imported: number
+    skipped: number
+    invalid: number
+  }
+}
 
 const PROVIDER_NOTES = [
   { match: (id: string) => id === "opencode", key: "dialog.provider.opencode.note" },
@@ -31,6 +49,61 @@ export const SettingsProviders: Component = () => {
   const globalSDK = useGlobalSDK()
   const globalSync = useGlobalSync()
   const providers = useProviders()
+  const platform = usePlatform()
+  const server = useServer()
+  const [loading, setLoading] = createSignal(false)
+
+  const loadOpenCodeProviders = async () => {
+    const current = server.current
+    if (!current) {
+      showToast({
+        title: "Load OpenCode providers",
+        description: "No active server connection.",
+      })
+      return
+    }
+
+    const headers: Record<string, string> = {}
+    if (current.http.password) {
+      headers.Authorization = `Basic ${btoa(`${current.http.username ?? "opencode"}:${current.http.password}`)}`
+    }
+
+    setLoading(true)
+    await (platform.fetch ?? fetch)(`${current.http.url.replace(/\/+$/, "")}/global/import/opencode/providers`, {
+      method: "POST",
+      headers,
+    })
+      .then(async (response) => {
+        const body = (await response.json().catch(() => undefined)) as OpenCodeImportSummary | undefined
+        if (!response.ok || !body) {
+          throw new Error("Provider import request failed.")
+        }
+
+        if (body.status === "noop") {
+          showToast({
+            title: "Load OpenCode providers",
+            description: body.message,
+          })
+          return
+        }
+
+        await globalSync.bootstrap()
+        showToast({
+          variant: "success",
+          icon: "circle-check",
+          title: "Load OpenCode providers",
+          description: `Imported ${body.config.imported} providers and ${body.auth.imported} auth entries from OpenCode.`,
+        })
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error)
+        showToast({
+          title: "Load OpenCode providers",
+          description: message,
+        })
+      })
+      .finally(() => setLoading(false))
+  }
 
   const connected = createMemo(() => {
     return providers
@@ -128,7 +201,12 @@ export const SettingsProviders: Component = () => {
     <div class="flex flex-col h-full overflow-y-auto no-scrollbar px-4 pb-10 sm:px-10 sm:pb-10">
       <div class="sticky top-0 z-10 bg-[linear-gradient(to_bottom,var(--surface-stronger-non-alpha)_calc(100%_-_24px),transparent)]">
         <div class="flex flex-col gap-1 pt-6 pb-8 max-w-[720px]">
-          <h2 class="text-16-medium text-text-strong">{language.t("settings.providers.title")}</h2>
+          <div class="flex items-center justify-between gap-4">
+            <h2 class="text-16-medium text-text-strong">{language.t("settings.providers.title")}</h2>
+            <Button size="small" variant="secondary" disabled={loading()} onClick={() => void loadOpenCodeProviders()}>
+              Load OpenCode providers
+            </Button>
+          </div>
         </div>
       </div>
 

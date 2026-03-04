@@ -27,9 +27,25 @@ test("smoke settings dialog opens, switches tabs, closes", async ({ page, gotoSe
   await closeDialog(page, dialog)
 })
 
+test("settings does not expose any OpenCode MCP import action", async ({ page, gotoSession }) => {
+  await gotoSession()
+
+  const dialog = await openSettings(page)
+  await expect(dialog.getByRole("button", { name: /(?:load|import)\s+opencode\s+mcp/i })).toHaveCount(0)
+  await closeDialog(page, dialog)
+})
+
+test("settings does not expose any OpenCode agent import action", async ({ page, gotoSession }) => {
+  await gotoSession()
+
+  const dialog = await openSettings(page)
+  await expect(dialog.getByRole("button", { name: /(?:load|import)\s+opencode\s+agents?/i })).toHaveCount(0)
+  await closeDialog(page, dialog)
+})
+
 test("changing language updates settings labels", async ({ page, gotoSession }) => {
   await page.addInitScript(() => {
-    localStorage.setItem("opencode.global.dat:language", JSON.stringify({ locale: "en" }))
+    localStorage.setItem("origin.global.dat:language", JSON.stringify({ locale: "en" }))
   })
 
   await gotoSession()
@@ -97,7 +113,7 @@ test("changing theme persists in localStorage", async ({ page, gotoSession }) =>
   await page.keyboard.press("Escape")
 
   const storedThemeId = await page.evaluate(() => {
-    return localStorage.getItem("opencode-theme-id")
+    return localStorage.getItem("origin-theme-id")
   })
 
   expect(storedThemeId).not.toBeNull()
@@ -107,6 +123,26 @@ test("changing theme persists in localStorage", async ({ page, gotoSession }) =>
     return document.documentElement.getAttribute("data-theme")
   })
   expect(dataTheme).toBe(storedThemeId)
+})
+
+test("does not hydrate theme from OpenCode legacy keys", async ({ page, gotoSession }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("opencode-theme-id", "oc-2")
+    localStorage.setItem("opencode-color-scheme", "dark")
+    localStorage.removeItem("origin-theme-id")
+    localStorage.removeItem("origin-color-scheme")
+  })
+
+  await gotoSession()
+
+  await expect
+    .poll(async () => {
+      return await page.evaluate(() => document.documentElement.getAttribute("data-theme"))
+    })
+    .toBe("oc-1")
+
+  const themeId = await page.evaluate(() => localStorage.getItem("origin-theme-id"))
+  expect(themeId).toBeNull()
 })
 
 test("changing font persists in localStorage and updates CSS variable", async ({ page, gotoSession }) => {

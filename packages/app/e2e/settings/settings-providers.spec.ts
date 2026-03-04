@@ -37,6 +37,59 @@ test("custom provider form can be filled and validates input", async ({ page, go
   await closeDialog(page, settings)
 })
 
+test("providers tab exposes explicit OpenCode import action", async ({ page, gotoSession }) => {
+  await gotoSession()
+
+  const settings = await openSettings(page)
+  await settings.getByRole("tab", { name: "Providers" }).click()
+  await expect(settings.getByRole("button", { name: "Load OpenCode providers" })).toBeVisible()
+  await closeDialog(page, settings)
+})
+
+test("provider import does not run implicitly and only runs after explicit action", async ({ page, gotoSession }) => {
+  let calls = 0
+  await page.route("**/global/import/opencode/providers", async (route) => {
+    calls += 1
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        status: "noop",
+        message: "OpenCode import source was not found.",
+        config: {
+          source: null,
+          imported: 0,
+          skipped: 0,
+          invalid: 0,
+        },
+        auth: {
+          source: null,
+          imported: 0,
+          skipped: 0,
+          invalid: 0,
+        },
+      }),
+    })
+  })
+
+  await gotoSession()
+
+  const settings = await openSettings(page)
+  await settings.getByRole("tab", { name: "Providers" }).click()
+  const action = settings.getByRole("button", { name: "Load OpenCode providers" })
+  await expect(action).toBeVisible()
+  expect(calls).toBe(0)
+
+  await action.click()
+  await expect.poll(() => calls).toBe(1)
+
+  const toast = page.locator('[data-component="toast"]').last()
+  await expect(toast).toBeVisible()
+  await expect(toast).toContainText("OpenCode import source was not found.")
+
+  await closeDialog(page, settings)
+})
+
 test("custom provider form shows validation errors", async ({ page, gotoSession }) => {
   await gotoSession()
 

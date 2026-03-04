@@ -4,25 +4,38 @@ import path from "path"
 import os from "os"
 import { Filesystem } from "../util/filesystem"
 
-const app = "opencode"
+const app = "origin"
 
-const data = path.join(xdgData!, app)
-const cache = path.join(xdgCache!, app)
-const config = path.join(xdgConfig!, app)
-const state = path.join(xdgState!, app)
-
-export namespace Global {
-  export const Path = {
-    // Allow override via OPENCODE_TEST_HOME for test isolation
-    get home() {
-      return process.env.OPENCODE_TEST_HOME || os.homedir()
-    },
+const namespace = (name: string) => {
+  const data = path.join(xdgData!, name)
+  const cache = path.join(xdgCache!, name)
+  const config = path.join(xdgConfig!, name)
+  const state = path.join(xdgState!, name)
+  return {
     data,
     bin: path.join(data, "bin"),
     log: path.join(data, "log"),
     cache,
     config,
     state,
+  }
+}
+
+const current = namespace(app)
+
+export namespace Global {
+  export const Namespace = app
+
+  export function namespacePath(name: string) {
+    return namespace(name)
+  }
+
+  export const Path = {
+    // Allow override via OPENCODE_TEST_HOME for test isolation
+    get home() {
+      return process.env.OPENCODE_TEST_HOME || os.homedir()
+    },
+    ...current,
   }
 }
 

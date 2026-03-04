@@ -140,7 +140,7 @@ export async function openSettings(page: Page) {
 export async function seedProjects(page: Page, input: { directory: string; extra?: string[] }) {
   await page.addInitScript(
     (args: { directory: string; serverUrl: string; extra: string[] }) => {
-      const key = "opencode.global.dat:server"
+      const key = "origin.global.dat:server"
       const raw = localStorage.getItem(key)
       const parsed = (() => {
         if (!raw) return undefined

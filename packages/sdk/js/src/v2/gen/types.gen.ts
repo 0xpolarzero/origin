@@ -1979,6 +1979,38 @@ export type GlobalConfigUpdateResponses = {
 
 export type GlobalConfigUpdateResponse = GlobalConfigUpdateResponses[keyof GlobalConfigUpdateResponses]
 
+export type GlobalImportOpencodeProvidersData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/global/import/opencode/providers"
+}
+
+export type GlobalImportOpencodeProvidersResponses = {
+  /**
+   * Import summary
+   */
+  200: {
+    status: "ok" | "noop"
+    message: string
+    config: {
+      source: string | null
+      imported: number
+      skipped: number
+      invalid: number
+    }
+    auth: {
+      source: string | null
+      imported: number
+      skipped: number
+      invalid: number
+    }
+  }
+}
+
+export type GlobalImportOpencodeProvidersResponse =
+  GlobalImportOpencodeProvidersResponses[keyof GlobalImportOpencodeProvidersResponses]
+
 export type GlobalDisposeData = {
   body?: never
   path?: never
