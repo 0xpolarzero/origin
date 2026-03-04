@@ -19,6 +19,7 @@ export const commands = {
 	wslPath: (path: string, mode: "windows" | "linux" | null) => __TAURI_INVOKE<string>("wsl_path", { path, mode }),
 	resolveAppPath: (appName: string) => __TAURI_INVOKE<string | null>("resolve_app_path", { appName }),
 	openPath: (path: string, appName: string | null) => __TAURI_INVOKE<null>("open_path", { path, appName }),
+	readNamespaceStoreItem: (namespace: NamespaceName, store: string, key: string) => __TAURI_INVOKE<string | null>("read_namespace_store_item", { namespace, store, key }),
 };
 
 /** Events */
@@ -33,6 +34,8 @@ export type InitStep = { phase: "server_waiting" } | { phase: "sqlite_waiting" }
 export type LinuxDisplayBackend = "wayland" | "auto";
 
 export type LoadingWindowComplete = null;
+
+export type NamespaceName = "origin" | "opencode";
 
 export type ServerReadyData = {
 		url: string,

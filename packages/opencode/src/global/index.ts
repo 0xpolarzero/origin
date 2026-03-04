@@ -5,6 +5,7 @@ import os from "os"
 import { Filesystem } from "../util/filesystem"
 
 const app = "origin"
+const opencode = "opencode"
 
 const namespace = (name: string) => {
   const data = path.join(xdgData!, name)
@@ -25,6 +26,7 @@ const current = namespace(app)
 
 export namespace Global {
   export const Namespace = app
+  export const OpenCodeNamespace = opencode
 
   export function namespacePath(name: string) {
     return namespace(name)

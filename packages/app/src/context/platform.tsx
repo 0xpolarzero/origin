@@ -86,6 +86,9 @@ export type Platform = {
 
   /** Read image from clipboard (desktop only) */
   readClipboardImage?(): Promise<File | null>
+
+  /** Read a value from a desktop app-namespace store file (desktop only) */
+  readNamespaceStoreItem?(namespace: "origin" | "opencode", store: string, key: string): Promise<string | null>
 }
 
 export type DisplayBackend = "auto" | "wayland"

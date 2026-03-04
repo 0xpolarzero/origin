@@ -46,10 +46,12 @@ test("providers tab exposes explicit OpenCode import action", async ({ page, got
   await closeDialog(page, settings)
 })
 
-test("provider import does not run implicitly and only runs after explicit action", async ({ page, gotoSession }) => {
+test("provider import does not run implicitly and only runs after explicit action", async ({ page, gotoSession, directory }) => {
   let calls = 0
-  await page.route("**/global/import/opencode/providers", async (route) => {
+  let importedDirectory = ""
+  await page.route("**/global/import/opencode/providers*", async (route) => {
     calls += 1
+    importedDirectory = new URL(route.request().url()).searchParams.get("directory") ?? ""
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -82,10 +84,69 @@ test("provider import does not run implicitly and only runs after explicit actio
 
   await action.click()
   await expect.poll(() => calls).toBe(1)
+  await expect.poll(() => importedDirectory).toBe(directory)
 
   const toast = page.locator('[data-component="toast"]').last()
   await expect(toast).toBeVisible()
   await expect(toast).toContainText("OpenCode import source was not found.")
+
+  await closeDialog(page, settings)
+})
+
+test("provider import triggers a global refresh after successful import", async ({ page, gotoSession, directory }) => {
+  let importCalls = 0
+  let disposeCalls = 0
+  let importedDirectory = ""
+
+  await page.route("**/global/import/opencode/providers*", async (route) => {
+    importCalls += 1
+    importedDirectory = new URL(route.request().url()).searchParams.get("directory") ?? ""
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        status: "ok",
+        message: "OpenCode provider settings imported.",
+        config: {
+          source: "/Users/test/.config/opencode/opencode.json",
+          imported: 0,
+          skipped: 0,
+          invalid: 0,
+        },
+        auth: {
+          source: "/Users/test/.local/share/opencode/auth.json",
+          imported: 1,
+          skipped: 0,
+          invalid: 0,
+        },
+      }),
+    })
+  })
+
+  await page.route("**/global/dispose*", async (route) => {
+    disposeCalls += 1
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: "true",
+    })
+  })
+
+  await gotoSession()
+
+  const settings = await openSettings(page)
+  await settings.getByRole("tab", { name: "Providers" }).click()
+  const action = settings.getByRole("button", { name: "Load OpenCode providers" })
+  await expect(action).toBeVisible()
+
+  await action.click()
+  await expect.poll(() => importCalls).toBe(1)
+  await expect.poll(() => disposeCalls).toBe(1)
+  await expect.poll(() => importedDirectory).toBe(directory)
+
+  const toast = page.locator('[data-component="toast"]').last()
+  await expect(toast).toBeVisible()
+  await expect(toast).toContainText("Imported 0 providers and 1 auth entries from OpenCode.")
 
   await closeDialog(page, settings)
 })

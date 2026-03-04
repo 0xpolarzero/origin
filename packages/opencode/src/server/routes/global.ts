@@ -13,7 +13,8 @@ import { lazy } from "../../util/lazy"
 import { Config } from "../../config/config"
 import { ConfigPaths } from "../../config/paths"
 import { Global } from "../../global"
-import { mergeDeep } from "remeda"
+import { Flag } from "@/flag/flag"
+import { mergeDeep, unique } from "remeda"
 import path from "path"
 import { errors } from "../error"
 
@@ -46,9 +47,44 @@ const toList = (value: unknown) =>
 
 const normalizeProviderID = (value: string) => value.replace(/\/+$/, "")
 
-async function readOpenCodeConfig() {
-  const root = Global.namespacePath("opencode")
-  const files = ConfigPaths.fileInDirectory(root.config, "opencode")
+async function openCodeConfigFiles(start: string | undefined) {
+  const root = Global.namespacePath(Global.OpenCodeNamespace)
+  if (!start) {
+    const custom = Flag.OPENCODE_CONFIG ? [Flag.OPENCODE_CONFIG] : []
+    return unique([...ConfigPaths.fileInDirectory(root.config, "opencode"), ...custom])
+  }
+
+  const matches = Filesystem.up({ targets: [".git"], start })
+  const dotgit = await matches.next().then((value) => value.value)
+  await matches.return()
+  const stop = dotgit ? path.dirname(dotgit) : start
+  const directories = await ConfigPaths.directories(start, stop)
+  const mapped = directories.map((dir, index) => {
+    if (index === 0) return root.config
+    return dir
+  })
+
+  const overlays = mapped.flatMap((dir) => {
+    if (dir.endsWith(".opencode")) return ConfigPaths.fileInDirectory(dir, "opencode")
+    if (Flag.OPENCODE_CONFIG_DIR && dir === Flag.OPENCODE_CONFIG_DIR) return ConfigPaths.fileInDirectory(dir, "opencode")
+    return []
+  })
+
+  const project = Flag.OPENCODE_DISABLE_PROJECT_CONFIG
+    ? []
+    : await ConfigPaths.projectFiles("opencode", start, stop)
+  const custom = Flag.OPENCODE_CONFIG ? [Flag.OPENCODE_CONFIG] : []
+
+  return unique([
+    ...ConfigPaths.fileInDirectory(root.config, "opencode"),
+    ...project,
+    ...overlays,
+    ...custom,
+  ])
+}
+
+async function readOpenCodeConfig(start: string | undefined) {
+  const files = await openCodeConfigFiles(start)
   let source: string | null = null
   let invalid = 0
   let merged: Record<string, unknown> = {}
@@ -83,7 +119,7 @@ async function readOpenCodeConfig() {
 }
 
 async function readOpenCodeAuth() {
-  const root = Global.namespacePath("opencode")
+  const root = Global.namespacePath(Global.OpenCodeNamespace)
   const source = path.join(root.data, "auth.json")
   const text = await Filesystem.readText(source).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return
@@ -289,7 +325,17 @@ export const GlobalRoutes = lazy(() =>
         },
       }),
       async (c) => {
-        const [configSource, authSource] = await Promise.all([readOpenCodeConfig(), readOpenCodeAuth()])
+        const raw = c.req.query("directory") || c.req.header("x-opencode-directory")
+        const directory = raw
+          ? (() => {
+              try {
+                return decodeURIComponent(raw)
+              } catch {
+                return raw
+              }
+            })()
+          : undefined
+        const [configSource, authSource] = await Promise.all([readOpenCodeConfig(directory), readOpenCodeAuth()])
         const currentConfig = await Config.getGlobal()
         const currentAuth = await Auth.all()
 

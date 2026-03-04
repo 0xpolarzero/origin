@@ -118,6 +118,10 @@ const createPlatform = (): Platform => {
       await commands.openPath(path, app ?? null)
     },
 
+    readNamespaceStoreItem(namespace, store, key) {
+      return commands.readNamespaceStoreItem(namespace, store, key)
+    },
+
     back() {
       window.history.back()
     },

@@ -1,8 +1,10 @@
 import { Button } from "@opencode-ai/ui/button"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
+import { Icon } from "@opencode-ai/ui/icon"
 import { ProviderIcon } from "@opencode-ai/ui/provider-icon"
 import { Tag } from "@opencode-ai/ui/tag"
 import { showToast } from "@opencode-ai/ui/toast"
+import { Tooltip } from "@opencode-ai/ui/tooltip"
 import { popularProviders, useProviders } from "@/hooks/use-providers"
 import { usePlatform } from "@/context/platform"
 import { useServer } from "@/context/server"
@@ -10,6 +12,8 @@ import { createMemo, createSignal, type Component, For, Show } from "solid-js"
 import { useLanguage } from "@/context/language"
 import { useGlobalSDK } from "@/context/global-sdk"
 import { useGlobalSync } from "@/context/global-sync"
+import { useParams } from "@solidjs/router"
+import { decode64 } from "@/utils/base64"
 import { DialogConnectProvider } from "./dialog-connect-provider"
 import { DialogSelectProvider } from "./dialog-select-provider"
 import { DialogCustomProvider } from "./dialog-custom-provider"
@@ -43,6 +47,8 @@ const PROVIDER_NOTES = [
   { match: (id: string) => id === "vercel", key: "dialog.provider.vercel.note" },
 ] as const
 
+const help = "OpenCode is the coding app Origin was forked from. You can import settings if you've used OpenCode on this machine."
+
 export const SettingsProviders: Component = () => {
   const dialog = useDialog()
   const language = useLanguage()
@@ -51,6 +57,7 @@ export const SettingsProviders: Component = () => {
   const providers = useProviders()
   const platform = usePlatform()
   const server = useServer()
+  const params = useParams()
   const [loading, setLoading] = createSignal(false)
 
   const loadOpenCodeProviders = async () => {
@@ -67,9 +74,14 @@ export const SettingsProviders: Component = () => {
     if (current.http.password) {
       headers.Authorization = `Basic ${btoa(`${current.http.username ?? "opencode"}:${current.http.password}`)}`
     }
+    const url = new URL(`${current.http.url.replace(/\/+$/, "")}/global/import/opencode/providers`)
+    const target = decode64(params.dir) ?? server.projects.last()
+    if (target) {
+      url.searchParams.set("directory", target)
+    }
 
     setLoading(true)
-    await (platform.fetch ?? fetch)(`${current.http.url.replace(/\/+$/, "")}/global/import/opencode/providers`, {
+    await (platform.fetch ?? fetch)(url.toString(), {
       method: "POST",
       headers,
     })
@@ -87,7 +99,7 @@ export const SettingsProviders: Component = () => {
           return
         }
 
-        await globalSync.bootstrap()
+        await globalSDK.client.global.dispose()
         showToast({
           variant: "success",
           icon: "circle-check",
@@ -203,9 +215,21 @@ export const SettingsProviders: Component = () => {
         <div class="flex flex-col gap-1 pt-6 pb-8 max-w-[720px]">
           <div class="flex items-center justify-between gap-4">
             <h2 class="text-16-medium text-text-strong">{language.t("settings.providers.title")}</h2>
-            <Button size="small" variant="secondary" disabled={loading()} onClick={() => void loadOpenCodeProviders()}>
-              Load OpenCode providers
-            </Button>
+            <div class="flex items-center gap-1.5 shrink-0">
+              <Button
+                size="small"
+                variant="secondary"
+                disabled={loading()}
+                onClick={() => void loadOpenCodeProviders()}
+              >
+                Load OpenCode providers
+              </Button>
+              <Tooltip placement="top" value={help}>
+                <span class="flex items-center text-text-weak">
+                  <Icon name="help" size="small" />
+                </span>
+              </Tooltip>
+            </div>
           </div>
         </div>
       </div>

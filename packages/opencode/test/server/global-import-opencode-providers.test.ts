@@ -35,15 +35,16 @@ type OriginSnapshot = {
   auth: string | null
 }
 
-const opencodeRoot = Global.namespacePath("opencode")
+const opencodeRoot = Global.namespacePath(Global.OpenCodeNamespace)
 const opencodeConfigFiles = ConfigPaths.fileInDirectory(opencodeRoot.config, "opencode")
 const opencodeAuthFile = path.join(opencodeRoot.data, "auth.json")
 const originConfigFiles = ConfigPaths.fileInDirectory(Global.Path.config, "opencode")
 const originAuthFile = path.join(Global.Path.data, "auth.json")
 
-const requestImport = async () => {
+const requestImport = async (directory?: string) => {
+  const query = directory ? `?directory=${encodeURIComponent(directory)}` : ""
   const app = Server.App()
-  const response = await app.request("/global/import/opencode/providers", {
+  const response = await app.request(`/global/import/opencode/providers${query}`, {
     method: "POST",
   })
   expect(response.status).toBe(200)
@@ -113,6 +114,12 @@ const writeOpenCodeAuth = async (text: string) => {
   await Bun.write(opencodeAuthFile, text)
 }
 
+const writeProjectOpenCodeConfig = async (directory: string, value: unknown) => {
+  const file = path.join(directory, "opencode.json")
+  await Bun.write(file, JSON.stringify(value))
+  return file
+}
+
 describe("global.import.opencode.providers", () => {
   let snapshot: OriginSnapshot
 
@@ -156,7 +163,7 @@ describe("global.import.opencode.providers", () => {
           }),
         )
 
-        const result = await requestImport()
+        const result = await requestImport(tmp.path)
         expect(result.status).toBe("ok")
         expect(result.message).toBe("OpenCode provider settings imported.")
         expect(result.config.source).toBe(configPath)
@@ -187,7 +194,7 @@ describe("global.import.opencode.providers", () => {
     await Instance.provide({
       directory: tmp.path,
       fn: async () => {
-        const result = await requestImport()
+        const result = await requestImport(tmp.path)
         expect(result.status).toBe("noop")
         expect(result.message).toBe("OpenCode import source was not found.")
         expect(result.config.source).toBeNull()
@@ -219,7 +226,7 @@ describe("global.import.opencode.providers", () => {
         await Bun.write(configPath, "{")
         await writeOpenCodeAuth("{bad")
 
-        const result = await requestImport()
+        const result = await requestImport(tmp.path)
         expect(result.status).toBe("noop")
         expect(result.message).toBe("OpenCode import source is invalid.")
         expect(result.config.source).toBe(configPath)
@@ -256,7 +263,7 @@ describe("global.import.opencode.providers", () => {
           }),
         )
 
-        const result = await requestImport()
+        const result = await requestImport(tmp.path)
         expect(result.status).toBe("noop")
         expect(result.message).toBe("No OpenCode provider settings were imported.")
         expect(result.auth.imported).toBe(0)
@@ -284,7 +291,7 @@ describe("global.import.opencode.providers", () => {
           },
         })
 
-        const result = await requestImport()
+        const result = await requestImport(tmp.path)
         expect(result.status).toBe("ok")
         expect(result.message).toBe("OpenCode provider settings imported with invalid entries skipped.")
         expect(result.config.imported).toBe(1)
@@ -293,6 +300,37 @@ describe("global.import.opencode.providers", () => {
         const global = await Config.getGlobal()
         expect(global.provider?.[valid]).toBeDefined()
         expect(global.provider?.[invalid]).toBeUndefined()
+      },
+    })
+  }, 30000)
+
+  test("imports providers from OpenCode project config sources", async () => {
+    await using tmp = await tmpdir({ git: true })
+    const stamp = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`
+    const projectProvider = `w2-project-${stamp}`
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const configPath = opencodeConfigFiles[1]
+        if (!configPath) throw new Error("OpenCode config path not found")
+        await mkdir(path.dirname(configPath), { recursive: true })
+        await Bun.write(configPath, "{")
+
+        await writeProjectOpenCodeConfig(tmp.path, {
+          provider: {
+            [projectProvider]: { name: "project-provider" },
+          },
+        })
+
+        const result = await requestImport(tmp.path)
+        expect(result.status).toBe("ok")
+        expect(result.message).toBe("OpenCode provider settings imported with invalid entries skipped.")
+        expect(result.config.imported).toBe(1)
+        expect(result.config.invalid).toBe(1)
+
+        const global = await Config.getGlobal()
+        expect(global.provider?.[projectProvider]).toBeDefined()
       },
     })
   }, 30000)

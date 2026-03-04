@@ -17,9 +17,10 @@ use futures::{
     future::{self, Shared},
 };
 use std::{
-    env,
+    collections::HashSet,
+    env, fs,
     net::TcpListener,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Command,
     sync::{Arc, Mutex},
     time::Duration,
@@ -59,6 +60,13 @@ enum InitStep {
 enum WslPathMode {
     Windows,
     Linux,
+}
+
+#[derive(Clone, Copy, serde::Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+enum NamespaceName {
+    Origin,
+    Opencode,
 }
 
 struct InitState {
@@ -206,6 +214,132 @@ fn open_path(_app: AppHandle, path: String, app_name: Option<String>) -> Result<
     #[cfg(not(target_os = "windows"))]
     tauri_plugin_opener::open_path(path, app_name.as_deref())
         .map_err(|e| format!("Failed to open path: {e}"))
+}
+
+#[tauri::command]
+#[specta::specta]
+fn read_namespace_store_item(
+    app: AppHandle,
+    namespace: NamespaceName,
+    store: String,
+    key: String,
+) -> Option<String> {
+    let app_data = app.path().app_local_data_dir().ok()?;
+    let parent = app_data.parent()?;
+    let current = app_data.file_name().and_then(|name| name.to_str());
+    read_namespace_store_item_from_parent(parent, current, namespace, &store, &key)
+}
+
+fn namespace_ids(namespace: NamespaceName) -> &'static [&'static str] {
+    match namespace {
+        NamespaceName::Origin => ORIGIN_APP_IDS.as_slice(),
+        NamespaceName::Opencode => OPENCODE_APP_IDS.as_slice(),
+    }
+}
+
+fn namespace_preferred(current: Option<&str>, namespace: NamespaceName) -> Option<String> {
+    current.map(|name| match namespace {
+        NamespaceName::Origin => name.replacen("ai.opencode.desktop", "ai.origin.desktop", 1),
+        NamespaceName::Opencode => name.replacen("ai.origin.desktop", "ai.opencode.desktop", 1),
+    })
+}
+
+fn namespace_order(current: Option<&str>, namespace: NamespaceName) -> Vec<String> {
+    let mut order = vec![];
+    if let Some(preferred) = namespace_preferred(current, namespace) {
+        order.push(preferred);
+    }
+    for id in namespace_ids(namespace) {
+        if order.iter().any(|item| item == id) {
+            continue;
+        }
+        order.push((*id).to_string());
+    }
+    order
+}
+
+fn read_store_key(file: &Path, key: &str) -> Option<String> {
+    let text = fs::read_to_string(file).ok()?;
+    let parsed = serde_json::from_str::<serde_json::Value>(&text).ok()?;
+    let value = parsed.get(key)?;
+    if let Some(string) = value.as_str() {
+        return Some(string.to_string());
+    }
+    serde_json::to_string(value).ok()
+}
+
+fn merge_model_store_values(values: &[String]) -> Option<String> {
+    let mut seen = HashSet::new();
+    let mut user = vec![];
+
+    for value in values {
+        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(value) else {
+            continue;
+        };
+        let Some(root) = parsed.as_object() else {
+            continue;
+        };
+        let Some(items) = root.get("user").and_then(|x| x.as_array()) else {
+            continue;
+        };
+        for item in items {
+            let Some(entry) = item.as_object() else {
+                continue;
+            };
+            let Some(provider_id) = entry.get("providerID").and_then(|x| x.as_str()) else {
+                continue;
+            };
+            let Some(model_id) = entry.get("modelID").and_then(|x| x.as_str()) else {
+                continue;
+            };
+            let Some(visibility) = entry.get("visibility").and_then(|x| x.as_str()) else {
+                continue;
+            };
+            if !matches!(visibility, "show" | "hide") {
+                continue;
+            }
+            let key = format!("{provider_id}:{model_id}");
+            if !seen.insert(key) {
+                continue;
+            }
+            user.push(serde_json::json!({
+                "providerID": provider_id,
+                "modelID": model_id,
+                "visibility": visibility
+            }));
+        }
+    }
+
+    if user.is_empty() {
+        return None;
+    }
+
+    serde_json::to_string(&serde_json::json!({ "user": user })).ok()
+}
+
+fn read_namespace_store_item_from_parent(
+    parent: &Path,
+    current: Option<&str>,
+    namespace: NamespaceName,
+    store: &str,
+    key: &str,
+) -> Option<String> {
+    let mut model_values = vec![];
+    for id in namespace_order(current, namespace) {
+        let file = parent.join(&id).join(store);
+        let Some(value) = read_store_key(&file, key) else {
+            continue;
+        };
+        if key == "model" {
+            model_values.push(value);
+            continue;
+        }
+        return Some(value);
+    }
+    if key != "model" {
+        return None;
+    }
+    merge_model_store_values(&model_values).or_else(|| model_values.into_iter().next())
 }
 
 #[cfg(target_os = "macos")]
@@ -403,7 +537,8 @@ fn make_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
             check_app_exists,
             wsl_path,
             resolve_app_path,
-            open_path
+            open_path,
+            read_namespace_store_item
         ])
         .events(tauri_specta::collect_events![
             LoadingWindowComplete,
@@ -426,6 +561,111 @@ fn export_types(builder: &tauri_specta::Builder<tauri::Wry>) {
 fn test_export_types() {
     let builder = make_specta_builder();
     export_types(&builder);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration as StdDuration;
+
+    fn temp() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "origin-namespace-store-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&dir).expect("failed to create temp dir");
+        dir
+    }
+
+    fn write_store(parent: &Path, app_id: &str, store: &str, value: &str) {
+        let dir = parent.join(app_id);
+        fs::create_dir_all(&dir).expect("failed to create app dir");
+        let data = serde_json::json!({ "model": value });
+        fs::write(
+            dir.join(store),
+            serde_json::to_string(&data).expect("failed to serialize store"),
+        )
+        .expect("failed to write store");
+    }
+
+    #[test]
+    fn namespace_read_merges_model_entries_from_multiple_containers() {
+        let parent = temp();
+        let store = "opencode.global.dat";
+        write_store(
+            &parent,
+            "ai.opencode.desktop.dev",
+            store,
+            r#"{"user":[{"providerID":"opencode","modelID":"big-pickle","visibility":"show"}]}"#,
+        );
+        std::thread::sleep(StdDuration::from_millis(50));
+        write_store(
+            &parent,
+            "ai.opencode.desktop",
+            store,
+            r#"{"user":[{"providerID":"openai","modelID":"gpt-5","visibility":"hide"}]}"#,
+        );
+
+        let value = read_namespace_store_item_from_parent(
+            &parent,
+            Some("ai.origin.desktop.dev"),
+            NamespaceName::Opencode,
+            store,
+            "model",
+        );
+        assert!(value.is_some());
+        let value = value.expect("missing merged model value");
+        let parsed =
+            serde_json::from_str::<serde_json::Value>(&value).expect("invalid merged model value");
+        let user = parsed
+            .get("user")
+            .and_then(|x| x.as_array())
+            .expect("missing user array");
+        assert_eq!(user.len(), 2);
+
+        fs::remove_dir_all(parent).expect("failed to cleanup temp dir");
+    }
+
+    #[test]
+    fn namespace_read_keeps_preferred_container_on_model_conflict() {
+        let parent = temp();
+        let store = "opencode.global.dat";
+        write_store(
+            &parent,
+            "ai.opencode.desktop.dev",
+            store,
+            r#"{"user":[{"providerID":"openai","modelID":"gpt-5","visibility":"show"}]}"#,
+        );
+        write_store(
+            &parent,
+            "ai.opencode.desktop",
+            store,
+            r#"{"user":[{"providerID":"openai","modelID":"gpt-5","visibility":"hide"}]}"#,
+        );
+
+        let value = read_namespace_store_item_from_parent(
+            &parent,
+            Some("ai.origin.desktop.dev"),
+            NamespaceName::Opencode,
+            store,
+            "model",
+        );
+        assert!(value.is_some());
+        let value = value.expect("missing merged model value");
+        let parsed =
+            serde_json::from_str::<serde_json::Value>(&value).expect("invalid merged model value");
+        let user = parsed
+            .get("user")
+            .and_then(|x| x.as_array())
+            .expect("missing user array");
+        assert_eq!(user.len(), 1);
+        assert_eq!(
+            user[0].get("visibility").and_then(|x| x.as_str()),
+            Some("show")
+        );
+
+        fs::remove_dir_all(parent).expect("failed to cleanup temp dir");
+    }
 }
 
 #[derive(tauri_specta::Event, serde::Deserialize, specta::Type)]

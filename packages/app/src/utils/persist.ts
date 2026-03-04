@@ -14,9 +14,14 @@ type PersistTarget = {
   migrate?: (value: unknown) => unknown
 }
 
+export const ORIGIN_NAMESPACE = "origin"
+export const OPENCODE_NAMESPACE = "opencode"
+export const ORIGIN_GLOBAL_STORAGE = `${ORIGIN_NAMESPACE}.global.dat`
+export const OPENCODE_GLOBAL_STORAGE = `${OPENCODE_NAMESPACE}.global.dat`
+
 const LEGACY_STORAGE = "default.dat"
-const GLOBAL_STORAGE = "origin.global.dat"
-const LOCAL_PREFIX = "origin."
+const GLOBAL_STORAGE = ORIGIN_GLOBAL_STORAGE
+const LOCAL_PREFIX = `${ORIGIN_NAMESPACE}.`
 const fallback = new Map<string, boolean>()
 
 const CACHE_MAX_ENTRIES = 500

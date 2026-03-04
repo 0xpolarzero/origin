@@ -6,12 +6,14 @@ import { Icon } from "@opencode-ai/ui/icon"
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import { TextField } from "@opencode-ai/ui/text-field"
 import { showToast } from "@opencode-ai/ui/toast"
+import { Tooltip } from "@opencode-ai/ui/tooltip"
 import { createSignal, type Component, For, Show } from "solid-js"
 import { useLanguage } from "@/context/language"
 import { useModels } from "@/context/models"
 import { usePlatform } from "@/context/platform"
 import { popularProviders } from "@/hooks/use-providers"
 import { parseOpenCodeModelToggles } from "@/utils/opencode-import"
+import { OPENCODE_GLOBAL_STORAGE, OPENCODE_NAMESPACE } from "@/utils/persist"
 
 type ModelItem = ReturnType<ReturnType<typeof useModels>["list"]>[number]
 
@@ -34,6 +36,8 @@ const ListEmptyState: Component<{ message: string; filter: string }> = (props) =
   )
 }
 
+const help = "OpenCode is the coding app Origin was forked from. You can import settings if you've used OpenCode on this machine."
+
 export const SettingsModels: Component = () => {
   const language = useLanguage()
   const models = useModels()
@@ -41,12 +45,18 @@ export const SettingsModels: Component = () => {
   const [loading, setLoading] = createSignal(false)
 
   const readOpenCodeModelSource = async () => {
-    if (platform.platform === "desktop" && platform.storage) {
-      const storage = platform.storage("opencode.global.dat")
+    if (platform.platform === "desktop") {
+      const fromNamespace = await platform
+        .readNamespaceStoreItem?.(OPENCODE_NAMESPACE, OPENCODE_GLOBAL_STORAGE, "model")
+        .catch(() => null)
+      if (fromNamespace !== null && fromNamespace !== undefined) return fromNamespace
+
+      if (!platform.storage) return null
+      const storage = platform.storage(OPENCODE_GLOBAL_STORAGE)
       return Promise.resolve(storage.getItem("model")).then((value) => value ?? null)
     }
     if (typeof localStorage === "undefined") return null
-    return localStorage.getItem("opencode.global.dat:model")
+    return localStorage.getItem(`${OPENCODE_GLOBAL_STORAGE}:model`)
   }
 
   const importOpenCodeModelToggles = async () => {
@@ -115,9 +125,21 @@ export const SettingsModels: Component = () => {
         <div class="flex flex-col gap-4 pt-6 pb-6 max-w-[720px]">
           <div class="flex items-center justify-between gap-4">
             <h2 class="text-16-medium text-text-strong">{language.t("settings.models.title")}</h2>
-            <Button size="small" variant="secondary" disabled={loading()} onClick={() => void importOpenCodeModelToggles()}>
-              Load OpenCode model toggles
-            </Button>
+            <div class="flex items-center gap-1.5 shrink-0">
+              <Button
+                size="small"
+                variant="secondary"
+                disabled={loading()}
+                onClick={() => void importOpenCodeModelToggles()}
+              >
+                Load OpenCode model toggles
+              </Button>
+              <Tooltip placement="top" value={help}>
+                <span class="flex items-center text-text-weak">
+                  <Icon name="help" size="small" />
+                </span>
+              </Tooltip>
+            </div>
           </div>
           <div class="flex items-center gap-2 px-3 h-9 rounded-lg bg-surface-base">
             <Icon name="magnifying-glass" class="text-icon-weak-base flex-shrink-0" />
