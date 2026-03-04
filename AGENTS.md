@@ -11,6 +11,9 @@
 - Start with [docs/specs/00.project-direction.md](/Users/polarzero/code/projects/origin/docs/specs/00.project-direction.md) for the fork's current direction and scope boundaries.
 - Follow [docs/specs/GUIDE.md](/Users/polarzero/code/projects/origin/docs/specs/GUIDE.md) for the required phase `.spec`/`.log` workflow.
 - Keep work scoped to native desktop goals unless a phase spec explicitly expands scope.
+- Treat `docs/specs/00.project-direction.md` as a living baseline: when a phase changes direction or scope boundaries, update it in the same phase/PR.
+- Direction-change triggers include new defaults, guardrails, namespace boundaries, startup behavior, import policy boundaries, or product naming rules.
+- Keep `docs/specs/00.project-direction.md` concise and direction-only: summarize stable outcomes and link phases; keep implementation detail in phase `.spec`/`.log`.
 
 ## Fork Sync (On Demand)
 
