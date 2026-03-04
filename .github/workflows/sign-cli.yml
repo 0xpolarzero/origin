@@ -29,7 +29,7 @@ jobs:
         id: upload_unsigned_windows_cli
         uses: actions/upload-artifact@v4
         with:
-          name: unsigned-opencode-windows-cli
+          name: unsigned-origin-windows-cli
           path: packages/opencode/dist/opencode-windows-x64/bin/opencode.exe
           if-no-files-found: error
 
@@ -44,11 +44,11 @@ jobs:
           artifact-configuration-slug: ${{ secrets.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
           github-artifact-id: ${{ steps.upload_unsigned_windows_cli.outputs.artifact-id }}
           wait-for-completion: true
-          output-artifact-directory: signed-opencode-cli
+          output-artifact-directory: signed-origin-cli
 
       - name: Upload signed Windows CLI
         uses: actions/upload-artifact@v4
         with:
-          name: signed-opencode-windows-cli
-          path: signed-opencode-cli/*.exe
+          name: signed-origin-windows-cli
+          path: signed-origin-cli/*.exe
           if-no-files-found: error

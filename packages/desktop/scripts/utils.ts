@@ -29,6 +29,7 @@ export const SIDECAR_BINARIES: Array<{ rustTarget: string; ocBinary: string; ass
 ]
 
 export const RUST_TARGET = Bun.env.RUST_TARGET
+export const SIDECAR_EXECUTABLE = "origin-cli"
 
 export function getCurrentSidecar(target = RUST_TARGET) {
   if (!target && !RUST_TARGET) throw new Error("RUST_TARGET not set")
@@ -41,7 +42,7 @@ export function getCurrentSidecar(target = RUST_TARGET) {
 
 export async function copyBinaryToSidecarFolder(source: string, target = RUST_TARGET) {
   await $`mkdir -p src-tauri/sidecars`
-  const dest = windowsify(`src-tauri/sidecars/opencode-cli-${target}`)
+  const dest = windowsify(`src-tauri/sidecars/${SIDECAR_EXECUTABLE}-${target}`)
   await $`cp ${source} ${dest}`
 
   console.log(`Copied ${source} to ${dest}`)
