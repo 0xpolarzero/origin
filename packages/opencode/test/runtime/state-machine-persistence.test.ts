@@ -113,6 +113,65 @@ describe("runtime persistence transitions", () => {
     expect(events.length).toBe(2)
   })
 
+  test("run create and transition persist workflow linkage and run workspace metadata", () => {
+    const row = RuntimeRun.create({
+      workspace_id,
+      session_id,
+      trigger_type: "manual",
+      workflow_id: "workflow/manual",
+    })
+    expect(row.workflow_id).toBe("workflow/manual")
+    expect(row.run_workspace_directory).toBeNull()
+
+    const next = RuntimeRun.transition({
+      id: row.id,
+      to: "running",
+      run_workspace_root: "/tmp/runtime/.origin/runs",
+      run_workspace_directory: "/tmp/runtime/.origin/runs/run_runtime",
+    })
+    expect(next.workflow_id).toBe("workflow/manual")
+    expect(next.run_workspace_root).toBe("/tmp/runtime/.origin/runs")
+    expect(next.run_workspace_directory).toBe("/tmp/runtime/.origin/runs/run_runtime")
+
+    const run = RuntimeRun.get({
+      id: row.id,
+    })
+    expect(run.workflow_id).toBe("workflow/manual")
+    expect(run.run_workspace_root).toBe("/tmp/runtime/.origin/runs")
+    expect(run.run_workspace_directory).toBe("/tmp/runtime/.origin/runs/run_runtime")
+  })
+
+  test("run candidate and cleanup helpers update markers deterministically", () => {
+    const run = RuntimeRun.create({
+      workspace_id,
+      session_id,
+      trigger_type: "manual",
+      workflow_id: "workflow/manual",
+    })
+
+    const candidate = RuntimeRun.candidate({
+      id: run.id,
+      integration_candidate_base_change_id: "base@abc123",
+      integration_candidate_change_ids: ["change@1", "change@2"],
+      integration_candidate_changed_paths: ["src/file.ts", "README.md"],
+    })
+    expect(candidate.integration_candidate_base_change_id).toBe("base@abc123")
+    expect(candidate.integration_candidate_change_ids).toEqual(["change@1", "change@2"])
+    expect(candidate.integration_candidate_changed_paths).toEqual(["src/file.ts", "README.md"])
+    expect(candidate.cleanup_failed).toBe(false)
+
+    const cleanup = RuntimeRun.cleanup({
+      id: run.id,
+      cleanup_failed: true,
+    })
+    expect(cleanup.cleanup_failed).toBe(true)
+
+    const row = RuntimeRun.get({
+      id: run.id,
+    })
+    expect(row.cleanup_failed).toBe(true)
+  })
+
   test("illegal run transition rejects with machine-readable error and no mutation", () => {
     const row = RuntimeRun.create({
       workspace_id,

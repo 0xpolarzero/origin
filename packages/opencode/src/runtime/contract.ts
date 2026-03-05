@@ -24,6 +24,8 @@ export const integration_attempt_state_values = ["attempt_created", "jj_applied"
 export const run_trigger_type_values = ["manual", "cron", "signal", "debug", "system"] as const
 
 export const failure_code_values = [
+  "manual_start_failed",
+  "repair_exhausted",
   "reconciliation_failed",
   "reconciliation_timeout",
   "stale_base_replay_exhausted",

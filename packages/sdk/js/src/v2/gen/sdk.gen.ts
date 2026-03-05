@@ -179,6 +179,12 @@ import type {
   TuiSubmitPromptResponses,
   VcsGetResponses,
   WorkflowGetResponses,
+  WorkflowRunCancelErrors,
+  WorkflowRunCancelResponses,
+  WorkflowRunGetErrors,
+  WorkflowRunGetResponses,
+  WorkflowRunStartErrors,
+  WorkflowRunStartResponses,
   WorkflowRunValidateErrors,
   WorkflowRunValidateResponses,
   WorkflowValidateResponses,
@@ -2681,6 +2687,109 @@ export class Run extends HeyApiClient {
         },
       },
     )
+  }
+
+  /**
+   * Start manual workflow run
+   *
+   * Create and start a manual workflow run with linked session and run workspace.
+   */
+  public start<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      workflow_id?: string
+      trigger_id?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "workflow_id" },
+            { in: "body", key: "trigger_id" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<WorkflowRunStartResponses, WorkflowRunStartErrors, ThrowOnError>({
+      url: "/workflow/run/start",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Get workflow run
+   *
+   * Return the current state of a manual workflow run.
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      run_id: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "run_id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<WorkflowRunGetResponses, WorkflowRunGetErrors, ThrowOnError>({
+      url: "/workflow/run/{run_id}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Cancel workflow run
+   *
+   * Request cancellation for an active manual workflow run.
+   */
+  public cancel<ThrowOnError extends boolean = false>(
+    parameters: {
+      run_id: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "run_id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<WorkflowRunCancelResponses, WorkflowRunCancelErrors, ThrowOnError>({
+      url: "/workflow/run/{run_id}/cancel",
+      ...options,
+      ...params,
+    })
   }
 }
 

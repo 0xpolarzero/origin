@@ -30,13 +30,22 @@ export const RunTable = sqliteTable(
     id: text().primaryKey(),
     status: text({ enum: run_status_values }).notNull(),
     trigger_type: text({ enum: run_trigger_type_values }).notNull(),
+    workflow_id: text(),
     workspace_id: text()
       .notNull()
       .references(() => WorkspaceTable.id, { onDelete: "cascade" }),
     session_id: text().references(() => SessionTable.id, { onDelete: "set null" }),
+    run_workspace_root: text(),
+    run_workspace_directory: text(),
     ready_for_integration_at: integer(),
     failure_code: text({ enum: failure_code_values }),
     reason_code: text({ enum: reason_code_values }),
+    integration_candidate_base_change_id: text(),
+    integration_candidate_change_ids: text({ mode: "json" }).$type<string[]>(),
+    integration_candidate_changed_paths: text({ mode: "json" }).$type<string[]>(),
+    cleanup_failed: integer({ mode: "boolean" })
+      .notNull()
+      .$default(() => false),
     ...Timestamps,
     started_at: integer(),
     finished_at: integer(),
@@ -44,6 +53,8 @@ export const RunTable = sqliteTable(
   (table) => [
     index("run_status_idx").on(table.status),
     index("run_session_idx").on(table.session_id),
+    index("run_workflow_idx").on(table.workflow_id),
+    index("run_cleanup_failed_idx").on(table.cleanup_failed),
     index("run_workspace_status_idx").on(table.workspace_id, table.status),
     index("run_queue_idx").on(table.workspace_id, table.status, table.ready_for_integration_at, table.id),
   ],

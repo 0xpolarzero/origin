@@ -1789,6 +1789,14 @@ export type ProviderAuthAuthorization = {
   instructions: string
 }
 
+export type ConflictError = {
+  data: unknown
+  errors: Array<{
+    [key: string]: unknown
+  }>
+  success: false
+}
+
 export type Symbol = {
   name: string
   kind: number
@@ -4344,6 +4352,175 @@ export type WorkflowRunValidateResponses = {
 }
 
 export type WorkflowRunValidateResponse = WorkflowRunValidateResponses[keyof WorkflowRunValidateResponses]
+
+export type WorkflowRunStartData = {
+  body?: {
+    workflow_id: string
+    trigger_id?: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/run/start"
+}
+
+export type WorkflowRunStartErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Conflict
+   */
+  409: ConflictError
+}
+
+export type WorkflowRunStartError = WorkflowRunStartErrors[keyof WorkflowRunStartErrors]
+
+export type WorkflowRunStartResponses = {
+  /**
+   * Manual run started
+   */
+  200: {
+    id: string
+    status: string
+    trigger_type: string
+    workflow_id: string | null
+    workspace_id: string
+    session_id: string | null
+    run_workspace_root: string | null
+    run_workspace_directory: string | null
+    ready_for_integration_at: number | null
+    reason_code: string | null
+    failure_code: string | null
+    cleanup_failed: boolean
+    created_at: number
+    updated_at: number
+    started_at: number | null
+    finished_at: number | null
+    integration_candidate: {
+      base_change_id: string | null
+      change_ids: Array<string>
+      changed_paths: Array<string>
+    } | null
+  }
+}
+
+export type WorkflowRunStartResponse = WorkflowRunStartResponses[keyof WorkflowRunStartResponses]
+
+export type WorkflowRunGetData = {
+  body?: never
+  path: {
+    run_id: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/run/{run_id}"
+}
+
+export type WorkflowRunGetErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type WorkflowRunGetError = WorkflowRunGetErrors[keyof WorkflowRunGetErrors]
+
+export type WorkflowRunGetResponses = {
+  /**
+   * Workflow run state
+   */
+  200: {
+    id: string
+    status: string
+    trigger_type: string
+    workflow_id: string | null
+    workspace_id: string
+    session_id: string | null
+    run_workspace_root: string | null
+    run_workspace_directory: string | null
+    ready_for_integration_at: number | null
+    reason_code: string | null
+    failure_code: string | null
+    cleanup_failed: boolean
+    created_at: number
+    updated_at: number
+    started_at: number | null
+    finished_at: number | null
+    integration_candidate: {
+      base_change_id: string | null
+      change_ids: Array<string>
+      changed_paths: Array<string>
+    } | null
+  }
+}
+
+export type WorkflowRunGetResponse = WorkflowRunGetResponses[keyof WorkflowRunGetResponses]
+
+export type WorkflowRunCancelData = {
+  body?: never
+  path: {
+    run_id: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/run/{run_id}/cancel"
+}
+
+export type WorkflowRunCancelErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type WorkflowRunCancelError = WorkflowRunCancelErrors[keyof WorkflowRunCancelErrors]
+
+export type WorkflowRunCancelResponses = {
+  /**
+   * Workflow run canceled
+   */
+  200: {
+    id: string
+    status: string
+    trigger_type: string
+    workflow_id: string | null
+    workspace_id: string
+    session_id: string | null
+    run_workspace_root: string | null
+    run_workspace_directory: string | null
+    ready_for_integration_at: number | null
+    reason_code: string | null
+    failure_code: string | null
+    cleanup_failed: boolean
+    created_at: number
+    updated_at: number
+    started_at: number | null
+    finished_at: number | null
+    integration_candidate: {
+      base_change_id: string | null
+      change_ids: Array<string>
+      changed_paths: Array<string>
+    } | null
+  }
+}
+
+export type WorkflowRunCancelResponse = WorkflowRunCancelResponses[keyof WorkflowRunCancelResponses]
 
 export type LibraryListData = {
   body?: never

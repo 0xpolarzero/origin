@@ -56,10 +56,19 @@ describe("runtime contract migration shape", () => {
         "updated_at",
         "started_at",
         "finished_at",
+        "workflow_id",
+        "run_workspace_root",
+        "run_workspace_directory",
+        "integration_candidate_base_change_id",
+        "integration_candidate_change_ids",
+        "integration_candidate_changed_paths",
+        "cleanup_failed",
       ])
 
       const idx = indexes(state.sqlite, "run")
       expect(idx).toContain("run_status_idx")
+      expect(idx).toContain("run_workflow_idx")
+      expect(idx).toContain("run_cleanup_failed_idx")
       expect(idx).toContain("run_workspace_status_idx")
       expect(idx).toContain("run_queue_idx")
     })

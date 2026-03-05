@@ -21,6 +21,24 @@ export const ERRORS = {
       },
     },
   },
+  409: {
+    description: "Conflict",
+    content: {
+      "application/json": {
+        schema: resolver(
+          z
+            .object({
+              data: z.any(),
+              errors: z.array(z.record(z.string(), z.any())),
+              success: z.literal(false),
+            })
+            .meta({
+              ref: "ConflictError",
+            }),
+        ),
+      },
+    },
+  },
   404: {
     description: "Not found",
     content: {

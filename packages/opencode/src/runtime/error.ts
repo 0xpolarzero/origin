@@ -83,3 +83,22 @@ export const RuntimeWorkflowValidationError = NamedError.create(
       .default([]),
   }),
 )
+
+export const RuntimeManualRunDuplicateError = NamedError.create(
+  "RuntimeManualRunDuplicateError",
+  z.object({
+    code: z.literal("manual_run_duplicate"),
+    workspace_id: z.string(),
+    workflow_id: z.string(),
+    trigger_id: z.string().nullable(),
+    run_id: z.string().nullable(),
+  }),
+)
+
+export const RuntimeManualRunWorkspaceRequiredError = NamedError.create(
+  "RuntimeManualRunWorkspaceRequiredError",
+  z.object({
+    code: z.literal("manual_run_workspace_required"),
+    message: z.string(),
+  }),
+)
