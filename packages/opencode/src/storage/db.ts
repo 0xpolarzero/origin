@@ -69,6 +69,28 @@ export namespace Database {
     return sql.sort((a, b) => a.timestamp - b.timestamp)
   }
 
+  function compatibility(sqlite: BunDatabase) {
+    const required = [
+      { type: "table", name: "run" },
+      { type: "table", name: "operation" },
+      { type: "table", name: "draft" },
+      { type: "table", name: "integration_attempt" },
+      { type: "table", name: "audit_event" },
+      { type: "index", name: "integration_attempt_run_id_id_uq" },
+      { type: "index", name: "run_queue_idx" },
+      { type: "index", name: "audit_event_policy_lineage_idx" },
+      { type: "trigger", name: "run_ready_for_integration_at_immutable" },
+    ] as const
+
+    for (const item of required) {
+      const row = sqlite
+        .query("SELECT name FROM sqlite_master WHERE type = ? AND name = ? LIMIT 1")
+        .get(item.type, item.name)
+      if (row) continue
+      throw new Error(`schema compatibility check failed: missing ${item.type} "${item.name}"`)
+    }
+  }
+
   export const Client = lazy(() => {
     log.info("opening database", { path: path.join(Global.Path.data, "origin.db") })
 
@@ -96,6 +118,8 @@ export namespace Database {
       })
       migrate(db, entries)
     }
+
+    compatibility(sqlite)
 
     return db
   })
