@@ -1,5 +1,6 @@
 import { NamedError } from "@opencode-ai/util/error"
 import z from "zod"
+import { validation_code } from "./contract"
 
 export const RuntimeIllegalTransitionError = NamedError.create(
   "RuntimeIllegalTransitionError",
@@ -61,5 +62,24 @@ export const RuntimeWorkspaceMismatchError = NamedError.create(
     run_workspace_id: z.string(),
     workspace_id: z.string(),
     code: z.literal("workspace_mismatch"),
+  }),
+)
+
+export const RuntimeWorkflowValidationError = NamedError.create(
+  "RuntimeWorkflowValidationError",
+  z.object({
+    workflow_id: z.string(),
+    code: validation_code,
+    path: z.string(),
+    message: z.string(),
+    errors: z
+      .array(
+        z.object({
+          code: validation_code,
+          path: z.string(),
+          message: z.string(),
+        }),
+      )
+      .default([]),
   }),
 )

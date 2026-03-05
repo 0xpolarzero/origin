@@ -48,6 +48,9 @@ import type {
   GlobalHealthResponses,
   GlobalImportOpencodeProvidersResponses,
   InstanceDisposeResponses,
+  LibraryKnowledgeImportErrors,
+  LibraryKnowledgeImportResponses,
+  LibraryListResponses,
   LspStatusResponses,
   McpAddErrors,
   McpAddResponses,
@@ -175,6 +178,10 @@ import type {
   TuiShowToastResponses,
   TuiSubmitPromptResponses,
   VcsGetResponses,
+  WorkflowGetResponses,
+  WorkflowRunValidateErrors,
+  WorkflowRunValidateResponses,
+  WorkflowValidateResponses,
   WorktreeCreateErrors,
   WorktreeCreateInput,
   WorktreeCreateResponses,
@@ -2636,6 +2643,202 @@ export class Provider extends HeyApiClient {
   }
 }
 
+export class Run extends HeyApiClient {
+  /**
+   * Validate workflow run entrypoint
+   *
+   * Reject non-runnable workflows deterministically before run creation starts.
+   */
+  public validate<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      workflow_id?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "workflow_id" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<WorkflowRunValidateResponses, WorkflowRunValidateErrors, ThrowOnError>(
+      {
+        url: "/workflow/run/validate",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
+  }
+}
+
+export class Workflow extends HeyApiClient {
+  /**
+   * Validate workflows and library
+   *
+   * Load workflow and library YAML definitions and return deterministic validation state.
+   */
+  public validate<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<WorkflowValidateResponses, unknown, ThrowOnError>({
+      url: "/workflow",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get workflow validation
+   *
+   * Return a single workflow validation item by id.
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<WorkflowGetResponses, unknown, ThrowOnError>({
+      url: "/workflow/{id}",
+      ...options,
+      ...params,
+    })
+  }
+
+  private _run?: Run
+  get run(): Run {
+    return (this._run ??= new Run({ client: this.client }))
+  }
+}
+
+export class Knowledge extends HeyApiClient {
+  /**
+   * Import knowledge-base file
+   *
+   * Apply deterministic collision policy for knowledge-base imports.
+   */
+  public import<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      path?: string
+      content?: string
+      mode?: "interactive" | "cron" | "signal"
+      action?: "replace" | "create_copy" | "cancel"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "path" },
+            { in: "body", key: "content" },
+            { in: "body", key: "mode" },
+            { in: "body", key: "action" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      LibraryKnowledgeImportResponses,
+      LibraryKnowledgeImportErrors,
+      ThrowOnError
+    >({
+      url: "/library/knowledge/import",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Library extends HeyApiClient {
+  /**
+   * Get library validation
+   *
+   * Load library resources and include workflow usage links.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<LibraryListResponses, unknown, ThrowOnError>({
+      url: "/library",
+      ...options,
+      ...params,
+    })
+  }
+
+  private _knowledge?: Knowledge
+  get knowledge(): Knowledge {
+    return (this._knowledge ??= new Knowledge({ client: this.client }))
+  }
+}
+
 export class Find extends HeyApiClient {
   /**
    * Find text
@@ -3997,6 +4200,16 @@ export class OpencodeClient extends HeyApiClient {
   private _provider?: Provider
   get provider(): Provider {
     return (this._provider ??= new Provider({ client: this.client }))
+  }
+
+  private _workflow?: Workflow
+  get workflow(): Workflow {
+    return (this._workflow ??= new Workflow({ client: this.client }))
+  }
+
+  private _library?: Library
+  get library(): Library {
+    return (this._library ??= new Library({ client: this.client }))
   }
 
   private _find?: Find

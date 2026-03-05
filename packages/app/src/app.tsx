@@ -31,6 +31,8 @@ import { ErrorPage } from "./pages/error"
 
 const Home = lazy(() => import("@/pages/home"))
 const Session = lazy(() => import("@/pages/session"))
+const Workflows = lazy(() => import("@/pages/workflows"))
+const Library = lazy(() => import("@/pages/library"))
 const Loading = () => <div class="size-full" />
 
 const HomeRoute = () => (
@@ -45,6 +47,18 @@ const SessionRoute = () => (
       <Session />
     </Suspense>
   </SessionProviders>
+)
+
+const WorkflowsRoute = () => (
+  <Suspense fallback={<Loading />}>
+    <Workflows />
+  </Suspense>
+)
+
+const LibraryRoute = () => (
+  <Suspense fallback={<Loading />}>
+    <Library />
+  </Suspense>
 )
 
 const SessionIndexRoute = () => <Navigate href="session" />
@@ -157,6 +171,8 @@ export function AppInterface(props: {
               <Route path="/:dir" component={DirectoryLayout}>
                 <Route path="/" component={SessionIndexRoute} />
                 <Route path="/session/:id?" component={SessionRoute} />
+                <Route path="/workflows" component={WorkflowsRoute} />
+                <Route path="/library" component={LibraryRoute} />
               </Route>
             </Router>
           </GlobalSyncProvider>

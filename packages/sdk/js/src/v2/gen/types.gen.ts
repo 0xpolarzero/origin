@@ -957,6 +957,24 @@ export type EventPtyDeleted = {
   }
 }
 
+export type EventLibraryKnowledgeImported = {
+  type: "library.knowledge.imported"
+  properties: {
+    status: "created" | "replaced" | "created_copy" | "canceled"
+    requested_path: string
+    resolved_path: string | null
+    collision: boolean
+    notification?: {
+      code: "knowledge_base_collision"
+      mode: "interactive" | "cron" | "signal"
+      action: "replace" | "create_copy" | "cancel"
+      forced: boolean
+      requested_path: string
+      resolved_path: string | null
+    }
+  }
+}
+
 export type Event =
   | EventInstallationUpdated
   | EventInstallationUpdateAvailable
@@ -1003,6 +1021,7 @@ export type Event =
   | EventPtyUpdated
   | EventPtyExited
   | EventPtyDeleted
+  | EventLibraryKnowledgeImported
 
 export type GlobalEvent = {
   directory: string
@@ -4114,6 +4133,329 @@ export type ProviderOauthCallbackResponses = {
 }
 
 export type ProviderOauthCallbackResponse = ProviderOauthCallbackResponses[keyof ProviderOauthCallbackResponses]
+
+export type WorkflowValidateData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow"
+}
+
+export type WorkflowValidateResponses = {
+  /**
+   * Validation report
+   */
+  200: {
+    workspace_type: "origin" | "standard"
+    workflows: Array<{
+      file: string
+      id: string
+      workflow?: {
+        schema_version: 1
+        id: string
+        name: string
+        trigger:
+          | {
+              type: "manual"
+            }
+          | {
+              type: "cron"
+              cron: string
+            }
+          | {
+              type: "signal"
+              signal: string
+            }
+        instructions: string
+        resources?: Array<{
+          id: string
+          kind: "query" | "script" | "prompt_template"
+        }>
+        links?: Array<string>
+      }
+      errors: Array<{
+        code:
+          | "yaml_parse_error"
+          | "schema_invalid"
+          | "schema_version_unsupported"
+          | "workspace_capability_blocked"
+          | "resource_missing"
+          | "resource_kind_mismatch"
+          | "reference_broken_link"
+          | "resource_not_runnable"
+          | "resource_id_duplicate"
+          | "workflow_id_duplicate"
+          | "workflow_missing"
+          | "workflow_not_runnable"
+        path: string
+        message: string
+      }>
+      runnable: boolean
+    }>
+    library: Array<{
+      file: string
+      id: string
+      resource?:
+        | {
+            schema_version: 1
+            id: string
+            name?: string
+            kind: "query"
+            query: string
+            links?: Array<string>
+          }
+        | {
+            schema_version: 1
+            id: string
+            name?: string
+            kind: "script"
+            script: string
+            links?: Array<string>
+          }
+        | {
+            schema_version: 1
+            id: string
+            name?: string
+            kind: "prompt_template"
+            template: string
+            links?: Array<string>
+          }
+      errors: Array<{
+        code:
+          | "yaml_parse_error"
+          | "schema_invalid"
+          | "schema_version_unsupported"
+          | "workspace_capability_blocked"
+          | "resource_missing"
+          | "resource_kind_mismatch"
+          | "reference_broken_link"
+          | "resource_not_runnable"
+          | "resource_id_duplicate"
+          | "workflow_id_duplicate"
+          | "workflow_missing"
+          | "workflow_not_runnable"
+        path: string
+        message: string
+      }>
+      runnable: boolean
+    }>
+  }
+}
+
+export type WorkflowValidateResponse = WorkflowValidateResponses[keyof WorkflowValidateResponses]
+
+export type WorkflowGetData = {
+  body?: never
+  path: {
+    id: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/{id}"
+}
+
+export type WorkflowGetResponses = {
+  /**
+   * Workflow validation
+   */
+  200: {
+    file: string
+    id: string
+    workflow?: {
+      schema_version: 1
+      id: string
+      name: string
+      trigger:
+        | {
+            type: "manual"
+          }
+        | {
+            type: "cron"
+            cron: string
+          }
+        | {
+            type: "signal"
+            signal: string
+          }
+      instructions: string
+      resources?: Array<{
+        id: string
+        kind: "query" | "script" | "prompt_template"
+      }>
+      links?: Array<string>
+    }
+    errors: Array<{
+      code:
+        | "yaml_parse_error"
+        | "schema_invalid"
+        | "schema_version_unsupported"
+        | "workspace_capability_blocked"
+        | "resource_missing"
+        | "resource_kind_mismatch"
+        | "reference_broken_link"
+        | "resource_not_runnable"
+        | "resource_id_duplicate"
+        | "workflow_id_duplicate"
+        | "workflow_missing"
+        | "workflow_not_runnable"
+      path: string
+      message: string
+    }>
+    runnable: boolean
+  } | null
+}
+
+export type WorkflowGetResponse = WorkflowGetResponses[keyof WorkflowGetResponses]
+
+export type WorkflowRunValidateData = {
+  body?: {
+    workflow_id: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/run/validate"
+}
+
+export type WorkflowRunValidateErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type WorkflowRunValidateError = WorkflowRunValidateErrors[keyof WorkflowRunValidateErrors]
+
+export type WorkflowRunValidateResponses = {
+  /**
+   * Workflow is runnable
+   */
+  200: {
+    ok: true
+    workflow_id: string
+  }
+}
+
+export type WorkflowRunValidateResponse = WorkflowRunValidateResponses[keyof WorkflowRunValidateResponses]
+
+export type LibraryListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/library"
+}
+
+export type LibraryListResponses = {
+  /**
+   * Library validation
+   */
+  200: Array<{
+    file: string
+    id: string
+    resource?:
+      | {
+          schema_version: 1
+          id: string
+          name?: string
+          kind: "query"
+          query: string
+          links?: Array<string>
+        }
+      | {
+          schema_version: 1
+          id: string
+          name?: string
+          kind: "script"
+          script: string
+          links?: Array<string>
+        }
+      | {
+          schema_version: 1
+          id: string
+          name?: string
+          kind: "prompt_template"
+          template: string
+          links?: Array<string>
+        }
+    errors: Array<{
+      code:
+        | "yaml_parse_error"
+        | "schema_invalid"
+        | "schema_version_unsupported"
+        | "workspace_capability_blocked"
+        | "resource_missing"
+        | "resource_kind_mismatch"
+        | "reference_broken_link"
+        | "resource_not_runnable"
+        | "resource_id_duplicate"
+        | "workflow_id_duplicate"
+        | "workflow_missing"
+        | "workflow_not_runnable"
+      path: string
+      message: string
+    }>
+    runnable: boolean
+    used_by: Array<string>
+  }>
+}
+
+export type LibraryListResponse = LibraryListResponses[keyof LibraryListResponses]
+
+export type LibraryKnowledgeImportData = {
+  body?: {
+    path: string
+    content: string
+    mode?: "interactive" | "cron" | "signal"
+    action?: "replace" | "create_copy" | "cancel"
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/library/knowledge/import"
+}
+
+export type LibraryKnowledgeImportErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type LibraryKnowledgeImportError = LibraryKnowledgeImportErrors[keyof LibraryKnowledgeImportErrors]
+
+export type LibraryKnowledgeImportResponses = {
+  /**
+   * Knowledge-base import outcome
+   */
+  200: {
+    status: "created" | "replaced" | "created_copy" | "canceled"
+    requested_path: string
+    resolved_path: string | null
+    collision: boolean
+    notification?: {
+      code: "knowledge_base_collision"
+      mode: "interactive" | "cron" | "signal"
+      action: "replace" | "create_copy" | "cancel"
+      forced: boolean
+      requested_path: string
+      resolved_path: string | null
+    }
+  }
+}
+
+export type LibraryKnowledgeImportResponse = LibraryKnowledgeImportResponses[keyof LibraryKnowledgeImportResponses]
 
 export type FindTextData = {
   body?: never

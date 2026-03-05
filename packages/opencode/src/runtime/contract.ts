@@ -62,6 +62,21 @@ export const event_type_values = [
   "security.setting_changed",
 ] as const
 
+export const validation_code_values = [
+  "yaml_parse_error",
+  "schema_invalid",
+  "schema_version_unsupported",
+  "workspace_capability_blocked",
+  "resource_missing",
+  "resource_kind_mismatch",
+  "reference_broken_link",
+  "resource_not_runnable",
+  "resource_id_duplicate",
+  "workflow_id_duplicate",
+  "workflow_missing",
+  "workflow_not_runnable",
+] as const
+
 export const run_status = z.enum(run_status_values)
 export const operation_status = z.enum(operation_status_values)
 export const draft_status = z.enum(draft_status_values)
@@ -71,6 +86,7 @@ export const failure_code = z.enum(failure_code_values)
 export const reason_code = z.enum(reason_code_values)
 export const actor_type = z.enum(actor_type_values)
 export const event_type = z.enum(event_type_values)
+export const validation_code = z.enum(validation_code_values)
 
 export const policy_event_types = ["policy.decision", "dispatch.attempt", "dispatch.result"] as const
 
@@ -87,3 +103,4 @@ export type FailureCode = z.infer<typeof failure_code>
 export type ReasonCode = z.infer<typeof reason_code>
 export type ActorType = z.infer<typeof actor_type>
 export type EventType = z.infer<typeof event_type>
+export type ValidationCode = z.infer<typeof validation_code>
