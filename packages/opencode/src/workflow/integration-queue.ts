@@ -6,6 +6,7 @@ import { terminal_run_statuses } from "@/runtime/contract"
 import { RuntimeIllegalTransitionError } from "@/runtime/error"
 import { RuntimeIntegrationAttempt } from "@/runtime/integration-attempt"
 import { RuntimeOperation } from "@/runtime/operation"
+import { RuntimeReconciliation } from "@/runtime/reconciliation"
 import { RuntimeRun } from "@/runtime/run"
 import { IntegrationAttemptTable, OperationTable, RunTable } from "@/runtime/runtime.sql"
 import { Database, and, asc, eq, inArray, ne } from "@/storage/db"
@@ -14,7 +15,7 @@ import { Lock } from "@/util/lock"
 const recovery_statuses = ["integrating", "reconciling", "cancel_requested"] as const
 const lock_prefix = "integration:"
 const poll_ms_default = 1_000
-const timeout_ms_default = 60_000
+const timeout_ms_default = RuntimeReconciliation.hard_stop_ms
 
 type RunRow = ReturnType<typeof RuntimeRun.get>
 type AttemptRow = typeof IntegrationAttemptTable.$inferSelect
@@ -144,22 +145,6 @@ function settle(input: {
     if (input.race) no_op(current, actor_type)
     return current
   }
-}
-
-function timeout_watchdog(row: RunRow, elapsed: number, hard_stop_ms: number) {
-  RuntimeAudit.write({
-    event_type: "reconciliation.watchdog",
-    actor_type: "system",
-    workspace_id: row.workspace_id,
-    session_id: row.session_id,
-    run_id: row.id,
-    event_payload: {
-      event: "hard_stop",
-      elapsed_ms: elapsed,
-      threshold_ms: hard_stop_ms,
-      hard_stop_ms,
-    },
-  })
 }
 
 function queue_heads() {
@@ -460,7 +445,6 @@ async function process_run(run_id: string, workspace_id: string) {
     return
   }
 
-  const started = now()
   const directory = workspace.config.directory
   const adapter = JJ.create({ cwd: directory })
 
@@ -476,8 +460,14 @@ async function process_run(run_id: string, workspace_id: string) {
       })
     }
 
-    const elapsed = now() - started
     const hard_stop_ms = timeout_ms()
+    const state = RuntimeReconciliation.progress(run.id, undefined, {
+      at: now(),
+      settings: {
+        hard_stop_ms,
+      },
+    })
+    const elapsed = state?.elapsed_ms ?? 0
     const timeout = seams().timeout
     const timed_out = timeout
       ? await timeout({
@@ -492,7 +482,12 @@ async function process_run(run_id: string, workspace_id: string) {
       : elapsed >= hard_stop_ms
 
     if (timed_out) {
-      timeout_watchdog(run, elapsed, hard_stop_ms)
+      RuntimeReconciliation.hardStop(run.id, undefined, {
+        at: now(),
+        settings: {
+          hard_stop_ms,
+        },
+      })
       settle({
         id: run.id,
         to: "failed",

@@ -3,7 +3,7 @@ import type { DraftScope } from "./history-state"
 
 export type DraftEditor = {
   run_id: string
-  source_kind: "user" | "system"
+  source_kind: "user" | "system" | "system_report"
   adapter_id: string
   integration_id: string
   action_id: string
@@ -87,7 +87,8 @@ const validate = (input: DraftEditor) => {
     } satisfies Result<never>
   }
 
-  const source_kind = input.source_kind === "system" ? "system" : "user"
+  const source_kind =
+    input.source_kind === "system" ? "system" : input.source_kind === "system_report" ? "system_report" : "user"
   const adapter_id = text(input.adapter_id)
   const integration_id = text(input.integration_id)
   const action_id = text(input.action_id)
@@ -166,7 +167,8 @@ export const scopeFromDraftStatus = (status: string): DraftScope => {
   return "pending"
 }
 
-export const draftCanEdit = (status: string) => status !== "sent" && status !== "rejected" && status !== "failed"
+export const draftCanEdit = (draft: Pick<HistoryDraft, "status" | "source_kind">) =>
+  draft.source_kind !== "system_report" && draft.status !== "sent" && draft.status !== "rejected" && draft.status !== "failed"
 
 export const draftNeedsApproval = (status: string) => status !== "approved" && status !== "auto_approved"
 

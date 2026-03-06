@@ -178,6 +178,13 @@ import type {
   TuiShowToastResponses,
   TuiSubmitPromptResponses,
   VcsGetResponses,
+  WorkflowDebugKeepRunningErrors,
+  WorkflowDebugKeepRunningResponses,
+  WorkflowDebugRemindersResponses,
+  WorkflowDebugReportCreateErrors,
+  WorkflowDebugReportCreateResponses,
+  WorkflowDebugReportPreviewErrors,
+  WorkflowDebugReportPreviewResponses,
   WorkflowDraftsApproveErrors,
   WorkflowDraftsApproveResponses,
   WorkflowDraftsCreateErrors,
@@ -2721,6 +2728,159 @@ export class Signal extends HeyApiClient {
   }
 }
 
+export class Debug extends HeyApiClient {
+  /**
+   * Poll reconciliation reminders
+   *
+   * Return active reconciliation reminders and mark any due reminders as delivered.
+   */
+  public reminders<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<WorkflowDebugRemindersResponses, unknown, ThrowOnError>({
+      url: "/workflow/debug/reminders",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Acknowledge a reconciliation reminder
+   *
+   * Keep a long-running reconciliation active without changing its hard-stop deadline.
+   */
+  public keepRunning<ThrowOnError extends boolean = false>(
+    parameters: {
+      run_id: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "run_id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      WorkflowDebugKeepRunningResponses,
+      WorkflowDebugKeepRunningErrors,
+      ThrowOnError
+    >({
+      url: "/workflow/debug/run/{run_id}/keep-running",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Preview a debug report payload
+   *
+   * Return the allowlisted field previews for the stop/report flow before user consent.
+   */
+  public reportPreview<ThrowOnError extends boolean = false>(
+    parameters: {
+      run_id: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "run_id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      WorkflowDebugReportPreviewResponses,
+      WorkflowDebugReportPreviewErrors,
+      ThrowOnError
+    >({
+      url: "/workflow/debug/run/{run_id}/report-preview",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Create a system report draft for a reconciliation run
+   *
+   * Cancel the active reconciliation run and create a first-class system report draft.
+   */
+  public reportCreate<ThrowOnError extends boolean = false>(
+    parameters: {
+      run_id: string
+      directory?: string
+      workspace?: string
+      target?: string
+      include_prompt?: boolean
+      include_files?: boolean
+      consent?: true
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "run_id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "target" },
+            { in: "body", key: "include_prompt" },
+            { in: "body", key: "include_files" },
+            { in: "body", key: "consent" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      WorkflowDebugReportCreateResponses,
+      WorkflowDebugReportCreateErrors,
+      ThrowOnError
+    >({
+      url: "/workflow/debug/run/{run_id}/report",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class History extends HeyApiClient {
   /**
    * List workflow runs history
@@ -2847,7 +3007,7 @@ export class Drafts extends HeyApiClient {
       workspace?: string
       id?: string
       run_id?: string | null
-      source_kind?: "user" | "system"
+      source_kind?: "user" | "system" | "system_report"
       integration_id?: string
       adapter_id?: string
       action_id?: string
@@ -2941,7 +3101,7 @@ export class Drafts extends HeyApiClient {
       draft_id: string
       directory?: string
       workspace?: string
-      source_kind?: "user" | "system"
+      source_kind?: "user" | "system" | "system_report"
       integration_id?: string
       adapter_id?: string
       action_id?: string
@@ -3326,6 +3486,11 @@ export class Workflow extends HeyApiClient {
   private _signal?: Signal
   get signal(): Signal {
     return (this._signal ??= new Signal({ client: this.client }))
+  }
+
+  private _debug?: Debug
+  get debug(): Debug {
+    return (this._debug ??= new Debug({ client: this.client }))
   }
 
   private _history?: History

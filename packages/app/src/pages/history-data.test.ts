@@ -1,14 +1,20 @@
 import { describe, expect, test } from "bun:test"
 import {
   approveHistoryDraft,
+  createDebugReport,
   createHistoryDraft,
+  loadDebugReminders,
+  loadDebugReportPreview,
   loadHistoryOperations,
   loadHistoryDraft,
   loadHistoryDrafts,
   loadHistoryRuns,
+  normalizeDebugReportCreate,
+  normalizeDebugReportPreview,
   normalizeDraftDetail,
   normalizeDraftPage,
   normalizeOperationPage,
+  normalizeReminderPage,
   normalizeRunPage,
   rejectHistoryDraft,
   sendHistoryDraft,
@@ -42,6 +48,7 @@ const run = (id: string): HistoryRun => ({
     reason: false,
     failure: false,
   },
+  debug: false,
 })
 
 const operation = (id: string, provenance: "app" | "user"): HistoryOperation => ({
@@ -90,19 +97,85 @@ const draft = (id: string, status = "pending"): HistoryDraft => ({
   },
 })
 
+const systemReportDraft = (id: string, status = "approved"): HistoryDraft => ({
+  ...draft(id, status),
+  source_kind: "system_report",
+  adapter_id: "system",
+  integration_id: "system/default",
+  action_id: "report.dispatch",
+  target: "system://developers",
+  payload_json: {
+    metadata: {
+      run_id: "run_1",
+    },
+  },
+  preview_text: "System report system://developers",
+})
+
+const reminder = (run_id: string) => ({
+  run_id,
+  session_id: "session_1",
+  workspace_id: "wrk_1",
+  workflow_id: "workflow.daily",
+  status: "integrating",
+  trigger_type: "debug",
+  started_at: 10,
+  threshold_ms: 900_000,
+  cadence_ms: 600_000,
+  hard_stop_ms: 2_700_000,
+  threshold_at: 900_010,
+  hard_stop_at: 2_700_010,
+  next_notification_at: 900_010,
+  last_notification_at: null,
+  last_keep_running_at: null,
+  elapsed_ms: 3_000,
+  remaining_ms: 2_697_010,
+  notify: true,
+})
+
+const reportPreview = (run_id: string) => ({
+  run_id,
+  session_id: "session_1",
+  workspace_id: "wrk_1",
+  workflow_id: "workflow.daily",
+  status: "integrating",
+  trigger_type: "debug",
+  target: "system://developers",
+  targets: ["system://developers"],
+  fields: [
+    {
+      id: "metadata",
+      title: "Metadata",
+      required: true,
+      selected: true,
+      preview: "metadata preview",
+    },
+    {
+      id: "prompt",
+      title: "Prompt",
+      required: false,
+      selected: false,
+      preview: "prompt preview",
+    },
+  ],
+})
+
 describe("history-data", () => {
-  test("normalizeRunPage keeps valid rows and removes malformed rows", () => {
+  test("normalizeRunPage keeps debug flags and hidden counts while removing malformed rows", () => {
     const value = normalizeRunPage({
-      items: [run("run_1"), { id: "broken" }],
+      items: [{ ...run("run_1"), debug: true }, { id: "broken" }],
       next_cursor: "10:run_1",
+      hidden_debug_count: 2,
     })
 
     expect(value.items.map((item) => item.id)).toEqual(["run_1"])
+    expect(value.items[0]?.debug).toBe(true)
     expect(value.items[0]?.trigger_metadata).toEqual({
       source: "cron",
       slot_local: "2026-03-08T02:30[America/New_York]",
     })
     expect(value.next_cursor).toBe("10:run_1")
+    expect(value.hidden_debug_count).toBe(2)
   })
 
   test("normalizeOperationPage keeps valid rows and parses next cursor", () => {
@@ -144,6 +217,59 @@ describe("history-data", () => {
 
     expect(value?.id).toBe("draft_1")
     expect(value?.preview_text).toBe("")
+  })
+
+  test("normalizeDraftPage accepts system report drafts", () => {
+    const value = normalizeDraftPage({
+      items: [systemReportDraft("draft_1"), { ...draft("draft_2"), source_kind: "invalid" }],
+      next_cursor: null,
+    })
+
+    expect(value.items).toHaveLength(1)
+    expect(value.items[0]?.source_kind).toBe("system_report")
+    expect(value.items[0]?.action_id).toBe("report.dispatch")
+  })
+
+  test("normalizeReminderPage keeps valid reminders and filters malformed rows", () => {
+    const value = normalizeReminderPage({
+      generated_at: 20,
+      items: [reminder("run_1"), { run_id: "broken" }],
+    })
+
+    expect(value.generated_at).toBe(20)
+    expect(value.items.map((item) => item.run_id)).toEqual(["run_1"])
+    expect(value.items[0]?.notify).toBe(true)
+  })
+
+  test("normalizeDebugReportPreview filters malformed fields", () => {
+    const value = normalizeDebugReportPreview({
+      ...reportPreview("run_1"),
+      fields: [
+        ...reportPreview("run_1").fields,
+        {
+          id: "invalid",
+          title: "Invalid",
+          required: false,
+          selected: false,
+          preview: "skip me",
+        },
+      ],
+    })
+
+    expect(value?.run_id).toBe("run_1")
+    expect(value?.fields.map((item) => item.id)).toEqual(["metadata", "prompt"])
+    expect(value?.fields.find((item) => item.id === "metadata")?.required).toBe(true)
+  })
+
+  test("normalizeDebugReportCreate accepts system report drafts", () => {
+    const value = normalizeDebugReportCreate({
+      run_status: "cancel_requested",
+      draft: systemReportDraft("draft_1"),
+    })
+
+    expect(value?.run_status).toBe("cancel_requested")
+    expect(value?.draft.source_kind).toBe("system_report")
+    expect(value?.draft.adapter_id).toBe("system")
   })
 
   test("loadHistoryRuns sends directory/auth headers and run query params", async () => {
@@ -248,6 +374,39 @@ describe("history-data", () => {
     expect(page.items.map((item) => item.id)).toEqual(["draft_1"])
   })
 
+  test("loadDebugReminders sends directory/auth headers and parses items", async () => {
+    let seen = ""
+    let headers = new Headers()
+
+    const page = await loadDebugReminders({
+      baseUrl: "http://localhost:4096",
+      directory: "/tmp/proj-é",
+      auth: "Basic token",
+      fetch: async (url, init) => {
+        seen = `${url}`
+        headers = new Headers(init?.headers)
+        return new Response(
+          JSON.stringify({
+            generated_at: 20,
+            items: [reminder("run_1")],
+          }),
+          {
+            status: 200,
+            headers: {
+              "Content-Type": "application/json",
+            },
+          },
+        )
+      },
+    })
+
+    expect(seen).toBe("http://localhost:4096/workflow/debug/reminders")
+    expect(headers.get("x-opencode-directory")).toBe(encodeURIComponent("/tmp/proj-é"))
+    expect(headers.get("authorization")).toBe("Basic token")
+    expect(page.generated_at).toBe(20)
+    expect(page.items.map((item) => item.run_id)).toEqual(["run_1"])
+  })
+
   test("loadHistoryDraft reads a draft detail", async () => {
     let seen = ""
 
@@ -269,6 +428,30 @@ describe("history-data", () => {
 
     expect(seen).toBe("http://localhost:4096/workflow/drafts/draft_1?workspace=wrk_1")
     expect(value.id).toBe("draft_1")
+  })
+
+  test("loadDebugReportPreview reads the report preview endpoint", async () => {
+    let seen = ""
+
+    const value = await loadDebugReportPreview({
+      baseUrl: "http://localhost:4096",
+      directory: "/tmp/project",
+      workspace: "wrk_1",
+      run_id: "run_1",
+      fetch: async (url) => {
+        seen = `${url}`
+        return new Response(JSON.stringify(reportPreview("run_1")), {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        })
+      },
+    })
+
+    expect(seen).toBe("http://localhost:4096/workflow/debug/run/run_1/report-preview?workspace=wrk_1")
+    expect(value.target).toBe("system://developers")
+    expect(value.fields.map((item) => item.id)).toEqual(["metadata", "prompt"])
   })
 
   test("createHistoryDraft sends json body and auth headers", async () => {
@@ -323,6 +506,58 @@ describe("history-data", () => {
     expect(headers.get("x-opencode-directory")).toBe(encodeURIComponent("/tmp/proj-é"))
     expect(headers.get("authorization")).toBe("Basic token")
     expect(value.id).toBe("draft_1")
+  })
+
+  test("createDebugReport posts consent flags and parses the system report draft", async () => {
+    let url = ""
+    let method = ""
+    let body = ""
+    let headers = new Headers()
+
+    const value = await createDebugReport({
+      baseUrl: "http://localhost:4096",
+      directory: "/tmp/proj-é",
+      auth: "Basic token",
+      workspace: "wrk_1",
+      run_id: "run_1",
+      body: {
+        consent: true,
+        target: "system://developers",
+        include_prompt: true,
+        include_files: true,
+      },
+      fetch: async (next, init) => {
+        url = `${next}`
+        method = `${init?.method}`
+        body = `${init?.body ?? ""}`
+        headers = new Headers(init?.headers)
+        return new Response(
+          JSON.stringify({
+            run_status: "cancel_requested",
+            draft: systemReportDraft("draft_1"),
+          }),
+          {
+            status: 200,
+            headers: {
+              "Content-Type": "application/json",
+            },
+          },
+        )
+      },
+    })
+
+    expect(url).toBe("http://localhost:4096/workflow/debug/run/run_1/report?workspace=wrk_1")
+    expect(method).toBe("POST")
+    expect(JSON.parse(body)).toEqual({
+      consent: true,
+      target: "system://developers",
+      include_prompt: true,
+      include_files: true,
+    })
+    expect(headers.get("x-opencode-directory")).toBe(encodeURIComponent("/tmp/proj-é"))
+    expect(headers.get("authorization")).toBe("Basic token")
+    expect(value.run_status).toBe("cancel_requested")
+    expect(value.draft.source_kind).toBe("system_report")
   })
 
   test("updateHistoryDraft patches a draft row", async () => {

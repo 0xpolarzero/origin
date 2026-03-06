@@ -24,6 +24,7 @@ const runsRows = {
       reason: false,
       failure: false,
     },
+    debug: false,
   },
   duplicate: {
     id: "run-dup",
@@ -50,6 +51,7 @@ const runsRows = {
       reason: true,
       failure: false,
     },
+    debug: false,
   },
   skipped: {
     id: "run-skip",
@@ -77,6 +79,7 @@ const runsRows = {
       reason: false,
       failure: false,
     },
+    debug: false,
   },
   missing: {
     id: "run-missing",
@@ -99,6 +102,7 @@ const runsRows = {
       reason: false,
       failure: false,
     },
+    debug: false,
   },
   debug: {
     id: "run-debug",
@@ -121,6 +125,7 @@ const runsRows = {
       reason: false,
       failure: false,
     },
+    debug: true,
   },
 } as const
 
@@ -221,6 +226,7 @@ test("history tabs, filtering, cross-links, duplicate events, and missing links"
           body: JSON.stringify({
             items: [runsRows.duplicate, runsRows.skipped, runsRows.missing],
             next_cursor: null,
+            hidden_debug_count: includeDebug ? 0 : 1,
           }),
         })
         return
@@ -233,6 +239,7 @@ test("history tabs, filtering, cross-links, duplicate events, and missing links"
         body: JSON.stringify({
           items: pageRows,
           next_cursor: "300:run-main",
+          hidden_debug_count: includeDebug ? 0 : 1,
         }),
       })
     }
@@ -284,6 +291,7 @@ test("history tabs, filtering, cross-links, duplicate events, and missing links"
       await expect(mainRun).toBeVisible()
       await expect(page.locator('[data-component="history-counter-runs"]')).toHaveText("1")
       await expect(page.locator('[data-component="history-counter-duplicates"]')).toHaveText("0")
+      await expect(page.locator('[data-component="history-hidden-debug-count"]')).toContainText("1")
 
       await page.getByRole("button", { name: "Load More" }).click()
       const duplicate = page.locator('[data-component="history-run-row"][data-id="run-dup"]')
@@ -379,6 +387,7 @@ test("history debug deep-link focus and debug precedence are deterministic", asy
         body: JSON.stringify({
           items: rows,
           next_cursor: null,
+          hidden_debug_count: includeDebug ? 0 : 1,
         }),
       })
     }
@@ -390,12 +399,15 @@ test("history debug deep-link focus and debug precedence are deterministic", asy
       const debugSwitch = page.locator('[data-component="history-debug-toggle"]')
 
       await expect(page.locator('[data-component="history-run-row"][data-id="run-debug"]')).toHaveCount(0)
+      await expect(page.locator('[data-component="history-hidden-debug-count"]')).toContainText("1")
 
       await debugSwitch.click()
       await expect(page.locator('[data-component="history-run-row"][data-id="run-debug"]')).toBeVisible()
+      await expect(page.locator('[data-component="history-hidden-debug-count"]')).toHaveCount(0)
 
       await page.goto(`/${slug}/history?tab=runs&debug=0&run_id=run-main`)
       await expect(page.locator('[data-component="history-run-row"][data-id="run-debug"]')).toHaveCount(0)
+      await expect(page.locator('[data-component="history-hidden-debug-count"]')).toContainText("1")
       await expect(page.locator('[data-component="history-run-row"][data-id="run-main"]')).toHaveAttribute(
         "data-focused",
         "true",

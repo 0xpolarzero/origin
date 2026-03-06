@@ -5,6 +5,7 @@ import { WorkspaceTable } from "../../src/control-plane/workspace.sql"
 import { Instance } from "../../src/project/instance"
 import { RuntimeIntegrationAttempt } from "../../src/runtime/integration-attempt"
 import { RuntimeOperation } from "../../src/runtime/operation"
+import { RuntimeReconciliation } from "../../src/runtime/reconciliation"
 import { RuntimeRun } from "../../src/runtime/run"
 import { AuditEventTable, IntegrationAttemptTable, OperationTable, RunTable } from "../../src/runtime/runtime.sql"
 import { Database, and, eq } from "../../src/storage/db"
@@ -126,6 +127,25 @@ function transitions(run_id: string) {
       .filter((item) => item.event_type === "run.transitioned")
       .map((item) => item.event_payload as { from: string; to: string }),
   )
+}
+
+function set_started(run_id: string, occurred_at: number) {
+  Database.use((db) => {
+    const event = db
+      .select()
+      .from(AuditEventTable)
+      .where(eq(AuditEventTable.run_id, run_id))
+      .all()
+      .find((item) => {
+        if (item.event_type !== "run.transitioned") return false
+        const payload = item.event_payload as { to?: unknown } | null
+        return payload?.to === "integrating"
+      })
+
+    if (!event) throw new Error(`missing integrating event for ${run_id}`)
+
+    db.update(AuditEventTable).set({ occurred_at }).where(eq(AuditEventTable.id, event.id)).run()
+  })
 }
 
 async function wait_status(run_id: string, status: string, input?: { timeout_ms?: number }) {
@@ -541,6 +561,39 @@ describe("workflow integration queue and recovery semantics", () => {
       expect(winning).toHaveLength(1)
       expect(winning[0]?.to).toBe("canceled")
       expect(events.some((item) => item.from === "canceled" && item.to === "canceled")).toBe(true)
+    })
+  })
+
+  test("Phase 12: hard stop fails long-running reconciliation with a deterministic timeout code", async () => {
+    await with_instance(["wrk_timeout"], async () => {
+      const run = integrating("wrk_timeout", { mark: 1_000 })
+      const started_at = 10_000
+      set_started(run.id, started_at)
+
+      WorkflowIntegrationQueue.Testing.set({
+        now: () => started_at + RuntimeReconciliation.hard_stop_ms,
+      })
+
+      await WorkflowIntegrationQueue.touch()
+
+      const failed = RuntimeRun.get({ id: run.id })
+      expect(failed.status).toBe("failed")
+      expect(failed.failure_code).toBe("reconciliation_timeout")
+
+      const watchdog = Database.use((db) =>
+        db
+          .select()
+          .from(AuditEventTable)
+          .where(eq(AuditEventTable.run_id, run.id))
+          .all()
+          .find((item) => {
+            if (item.event_type !== "reconciliation.watchdog") return false
+            const payload = item.event_payload as { event?: unknown } | null
+            return payload?.event === "hard_stop"
+          }),
+      )
+
+      expect(watchdog).toBeDefined()
     })
   })
 })

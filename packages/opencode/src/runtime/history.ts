@@ -1,5 +1,6 @@
 import { Database, and, desc, eq, inArray, lt, ne, or } from "@/storage/db"
 import z from "zod"
+import { RuntimeReconciliation } from "./reconciliation"
 import { DispatchAttemptTable, DraftTable, OperationTable, RunTable } from "./runtime.sql"
 
 const cursor_pattern = /^\d+:[0-9a-f-]+$/i
@@ -51,6 +52,7 @@ const run_item = z
         failure: z.boolean(),
       })
       .strict(),
+    debug: z.boolean(),
   })
   .strict()
 
@@ -110,6 +112,7 @@ const run_page = z
   .object({
     items: z.array(run_item),
     next_cursor: z.string().nullable(),
+    hidden_debug_count: z.number().int().nonnegative(),
   })
   .strict()
 
@@ -164,13 +167,13 @@ export namespace RuntimeHistory {
       return RunPage.parse({
         items: [],
         next_cursor: null,
+        hidden_debug_count: 0,
       })
     }
 
     return Database.use((db) => {
       const next = mark(value.cursor)
       const parts = [eq(RunTable.workspace_id, value.workspace_id!)]
-      if (!value.include_debug) parts.push(ne(RunTable.trigger_type, "debug"))
       if (next) {
         parts.push(
           or(
@@ -185,11 +188,12 @@ export namespace RuntimeHistory {
         .from(RunTable)
         .where(and(...parts))
         .orderBy(desc(RunTable.created_at), desc(RunTable.id))
-        .limit(value.limit + 1)
         .all()
+      const hidden_debug_count = value.include_debug ? 0 : RuntimeReconciliation.hiddenRunCount(value.workspace_id!, db)
 
-      const more = rows.length > value.limit
-      const page = more ? rows.slice(0, value.limit) : rows
+      const visible = value.include_debug ? rows : rows.filter((item) => !RuntimeReconciliation.isDebug(item))
+      const more = visible.length > value.limit
+      const page = more ? visible.slice(0, value.limit) : visible
       const run_ids = page.map((item) => item.id)
       const links = run_ids.length
         ? db
@@ -233,9 +237,11 @@ export namespace RuntimeHistory {
               reason: item.reason_code === "duplicate_event",
               failure: item.failure_code === "duplicate_event",
             },
+            debug: RuntimeReconciliation.isDebug(item),
           }
         }),
         next_cursor: more ? cursor(page[page.length - 1]!) : null,
+        hidden_debug_count,
       })
     })
   }

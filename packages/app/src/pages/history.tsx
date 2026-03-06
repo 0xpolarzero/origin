@@ -57,6 +57,7 @@ const humanize = (value: string) => value.replace(/_/g, " ")
 const prettyJson = (value: Record<string, unknown>) => JSON.stringify(value, null, 2)
 const text = (value: unknown) => (typeof value === "string" && value.trim() ? value : undefined)
 const number = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? value : undefined)
+const draftSourceLabel = (value: HistoryDraft["source_kind"]) => (value === "system_report" ? "system report" : value)
 
 function outcome(item: HistoryRun) {
   if (item.status !== "skipped") return
@@ -281,6 +282,7 @@ export default function History() {
   const [runsState, setRunsState] = createStore({
     items: [] as Awaited<ReturnType<typeof loadHistoryRuns>>["items"],
     next_cursor: null as string | null,
+    hidden_debug_count: 0,
     endpoint: "",
     loading: false,
     loadingMore: false,
@@ -424,6 +426,7 @@ export default function History() {
     setRunsState("error", "")
     setRunsState("endpoint", result.endpoint)
     setRunsState("next_cursor", result.next_cursor)
+    setRunsState("hidden_debug_count", result.hidden_debug_count)
 
     if (append) {
       setRunsState("items", (items) => [...items, ...result.items])
@@ -520,6 +523,7 @@ export default function History() {
   const refreshRunsList = () => {
     setRunsState("items", [])
     setRunsState("next_cursor", null)
+    setRunsState("hidden_debug_count", 0)
     setRunsState("loadingMore", false)
     setRunsState("error", "")
     setEventDetail(undefined)
@@ -746,6 +750,14 @@ export default function History() {
   const createBusy = () => draftEditor.saving && draftEditor.mode === "create"
 
   createEffect(() => {
+    const next = parseHistoryQuery(location.search)
+    setTab(next.tab ?? (next.draft_id ? "drafts" : next.operation_id ? "operations" : "runs"))
+    setDraftScope(next.scope ?? "pending")
+    setDebugOverride(next.debug)
+    setFocus(focusFromQuery(next))
+  })
+
+  createEffect(() => {
     if (tab() !== "runs") return
     showDebug()
     runsRefresh()
@@ -850,8 +862,8 @@ export default function History() {
                     <div class="flex items-start justify-between gap-3">
                       <div class="space-y-1 min-w-0">
                         <p class="text-14-medium text-text-strong break-all">{item.id}</p>
-                        <p class="text-12-regular text-text-weak">
-                          {humanize(item.status)} • {item.source_kind} • updated {stamp(item.updated_at)}
+                          <p class="text-12-regular text-text-weak">
+                          {humanize(item.status)} • {draftSourceLabel(item.source_kind)} • updated {stamp(item.updated_at)}
                         </p>
                       </div>
                       <div class="flex flex-wrap justify-end gap-2 shrink-0">
@@ -864,6 +876,14 @@ export default function History() {
                         <span class="rounded-md border border-border-weak-base px-2 py-1 text-12-regular text-text-weak">
                           {item.adapter_id} / {item.action_id}
                         </span>
+                        <Show when={item.source_kind === "system_report"}>
+                          <span
+                            data-component="history-draft-source"
+                            class="rounded-md border border-border-weak-base px-2 py-1 text-12-regular text-text-weak"
+                          >
+                            System Report
+                          </span>
+                        </Show>
                       </div>
                     </div>
 
@@ -971,7 +991,7 @@ export default function History() {
                             type="button"
                             variant="ghost"
                             data-component="history-draft-action-edit"
-                            disabled={!draftCanEdit(item.status) || rowBusy(item.id)}
+                            disabled={!draftCanEdit(item) || rowBusy(item.id)}
                             onClick={() => openDraftEdit(item)}
                           >
                             Edit
@@ -1116,6 +1136,11 @@ export default function History() {
               <span>
                 Duplicate events: <strong data-component="history-counter-duplicates" class="text-text-strong">{count().duplicates}</strong>
               </span>
+              <Show when={!showDebug() && runsState.hidden_debug_count > 0}>
+                <span data-component="history-hidden-debug-count">
+                  Hidden debug sessions: <strong class="text-text-strong">{runsState.hidden_debug_count}</strong>
+                </span>
+              </Show>
             </div>
           </Show>
         </div>
@@ -1203,8 +1228,26 @@ export default function History() {
                               </p>
                             </div>
                             <Show when={item.workflow_id}>
-                              <span class="rounded-md border border-border-weak-base px-2 py-1 text-12-regular text-text-weak">
-                                {item.workflow_id}
+                              <div class="flex flex-wrap justify-end gap-2">
+                                <Show when={item.debug}>
+                                  <span
+                                    data-component="history-run-debug"
+                                    class="rounded-md border border-border-weak-base px-2 py-1 text-12-regular text-text-weak"
+                                  >
+                                    Debug
+                                  </span>
+                                </Show>
+                                <span class="rounded-md border border-border-weak-base px-2 py-1 text-12-regular text-text-weak">
+                                  {item.workflow_id}
+                                </span>
+                              </div>
+                            </Show>
+                            <Show when={!item.workflow_id && item.debug}>
+                              <span
+                                data-component="history-run-debug"
+                                class="rounded-md border border-border-weak-base px-2 py-1 text-12-regular text-text-weak"
+                              >
+                                Debug
                               </span>
                             </Show>
                           </div>

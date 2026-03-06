@@ -34,7 +34,67 @@ const issue_payload = z
   })
   .strict()
 
-const registered_action_id = z.enum(["message.send", "issue.create"])
+const report_payload = z
+  .object({
+    report_type: z.literal("debug_reconciliation"),
+    metadata: z
+      .object({
+        generated_at: z.number().int().positive(),
+        reminder: z
+          .object({
+            threshold_ms: z.number().int().positive(),
+            cadence_ms: z.number().int().positive(),
+            hard_stop_ms: z.number().int().positive(),
+          })
+          .strict(),
+        run: z
+          .object({
+            id: z.string().min(1),
+            workspace_id: z.string().min(1),
+            session_id: z.string().nullable(),
+            workflow_id: z.string().nullable(),
+            status: z.string().min(1),
+            trigger_type: z.string().min(1),
+            created_at: z.number().int().positive(),
+            updated_at: z.number().int().positive(),
+            started_at: z.number().int().nullable(),
+            ready_for_integration_at: z.number().int().nullable(),
+            reason_code: z.string().nullable(),
+            failure_code: z.string().nullable(),
+            cleanup_failed: z.boolean(),
+            changed_paths: z.array(z.string()),
+          })
+          .strict(),
+      })
+      .strict(),
+    prompt: z
+      .object({
+        format: z.literal("markdown"),
+        truncated: z.boolean(),
+        content: z.string().min(1),
+      })
+      .strict()
+      .optional(),
+    files: z
+      .object({
+        truncated: z.boolean(),
+        items: z.array(
+          z
+            .object({
+              path: z.string().min(1),
+              exists: z.boolean(),
+              truncated: z.boolean(),
+              content: z.string().optional(),
+            })
+            .strict(),
+        ),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+
+const registered_action_id = z.enum(["message.send", "issue.create", "report.dispatch"])
 
 const create_input = z.object({
   id: uuid_v7.optional(),
@@ -114,13 +174,13 @@ const view = z
   .strict()
 
 type Action = {
-  adapter_id: "test"
+  adapter_id: "test" | "system"
   action_id: z.infer<typeof registered_action_id>
   payload_schema_version: 1
-  payload: typeof message_payload | typeof issue_payload
+  payload: typeof message_payload | typeof issue_payload | typeof report_payload
   targets: readonly string[]
   preview: (input: { target: string; payload_json: Record<string, unknown> }) => string
-  endpoint: "test.message" | "test.issue"
+  endpoint: "test.message" | "test.issue" | "system.report"
 }
 
 type PolicyDecision = {
@@ -174,9 +234,23 @@ const actions = [
     preview: ({ target, payload_json }) => `Issue ${target}: ${String(payload_json.title ?? "")}`,
     endpoint: "test.issue",
   },
+  {
+    adapter_id: "system",
+    action_id: "report.dispatch",
+    payload_schema_version: 1,
+    payload: report_payload,
+    targets: ["system://developers"] as const,
+    preview: ({ target, payload_json }) => {
+      const row = payload_json as { metadata?: { run?: { id?: unknown } } }
+      const run_id = typeof row.metadata?.run?.id === "string" ? row.metadata.run.id : "unknown"
+      return `Debug report ${run_id} -> ${target}`
+    },
+    endpoint: "system.report",
+  },
 ] satisfies Action[]
 
-const test_targets = [...new Set(actions.flatMap((item) => [...item.targets]))]
+const test_targets = actions.filter((item) => item.adapter_id === "test").flatMap((item) => [...item.targets])
+const system_targets = actions.filter((item) => item.adapter_id === "system").flatMap((item) => [...item.targets])
 
 let override: Seams | undefined
 
@@ -392,6 +466,17 @@ async function integration_for(input: { workspace_id: string; integration_id: st
       enabled: true,
       auth_state: "healthy",
       allowed_targets: test_targets,
+    })
+  }
+
+  if (input.adapter_id === "system" && input.integration_id === "system/default") {
+    return RuntimeOutboundIntegration.put({
+      id: input.integration_id,
+      workspace_id: input.workspace_id,
+      adapter_id: "system",
+      enabled: true,
+      auth_state: "healthy",
+      allowed_targets: system_targets,
     })
   }
 }
@@ -671,7 +756,12 @@ function test_send(input: z.infer<typeof test_send_input>) {
     }
   }
 
-  const endpoint = parsed.action_id === "message.send" ? "test.message" : "test.issue"
+  const endpoint =
+    parsed.action_id === "message.send"
+      ? "test.message"
+      : parsed.action_id === "issue.create"
+        ? "test.issue"
+        : "system.report"
   const next: TestWrite = {
     endpoint,
     action_id: parsed.action_id,
@@ -833,6 +923,18 @@ export namespace RuntimeOutbound {
     const current = RuntimeDraft.get({
       id: parsed.id,
     })
+    if (parsed.source_kind === "system_report") {
+      throw new RuntimeOutboundValidationError({
+        code: "policy_blocked",
+        message: "system report drafts must be created through the debug report flow",
+      })
+    }
+    if (current.source_kind === "system_report") {
+      throw new RuntimeOutboundValidationError({
+        code: "policy_blocked",
+        message: "system report drafts are immutable",
+      })
+    }
     if (current.status === "sent" || current.status === "rejected" || current.status === "failed") {
       throw new RuntimeOutboundValidationError({
         code: "policy_blocked",

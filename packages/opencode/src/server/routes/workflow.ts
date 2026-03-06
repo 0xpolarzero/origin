@@ -13,6 +13,9 @@ import { WorkflowValidation } from "@/workflow/validate"
 import { lazy } from "@/util/lazy"
 import { RuntimeHistory } from "@/runtime/history"
 import { RuntimeOutbound } from "@/runtime/outbound"
+import { RuntimeReconciliation } from "@/runtime/reconciliation"
+import { RuntimeRun } from "@/runtime/run"
+import { WorkflowDebugReport } from "@/workflow/debug-report"
 
 const run_validate = z
   .object({
@@ -55,6 +58,9 @@ const draft_param = z
 
 const draft_create = RuntimeOutbound.CreateInput.omit({
   workspace_id: true,
+}).refine((value) => value.source_kind !== "system_report", {
+  message: "system_report drafts must be created through the debug report flow",
+  path: ["source_kind"],
 })
 
 const draft_update = RuntimeOutbound.UpdateInput.omit({
@@ -79,6 +85,14 @@ function draft_required(draft_id: string) {
   if (draft.workspace_id === workspace_required()) return draft
   throw new HTTPException(404, {
     message: `Draft not found: ${draft_id}`,
+  })
+}
+
+function debug_run_required(run_id: string) {
+  const run = RuntimeRun.get({ id: run_id })
+  if (run.workspace_id === workspace_required()) return run
+  throw new HTTPException(404, {
+    message: `Run not found: ${run_id}`,
   })
 }
 
@@ -113,6 +127,122 @@ export const WorkflowRoutes = lazy(() =>
             body,
           }),
         )
+      },
+    )
+    .get(
+      "/debug/reminders",
+      describeRoute({
+        summary: "Poll reconciliation reminders",
+        description: "Return active reconciliation reminders and mark any due reminders as delivered.",
+        operationId: "workflow.debug.reminders",
+        responses: {
+          200: {
+            description: "Reminder state",
+            content: {
+              "application/json": {
+                schema: resolver(RuntimeReconciliation.ReminderPage),
+              },
+            },
+          },
+        },
+      }),
+      validator("query", z.object({})),
+      async (c) => {
+        return c.json(await RuntimeReconciliation.poll())
+      },
+    )
+    .post(
+      "/debug/run/:run_id/keep-running",
+      describeRoute({
+        summary: "Acknowledge a reconciliation reminder",
+        description: "Keep a long-running reconciliation active without changing its hard-stop deadline.",
+        operationId: "workflow.debug.keep_running",
+        responses: {
+          200: {
+            description: "Reminder updated",
+            content: {
+              "application/json": {
+                schema: resolver(RuntimeReconciliation.ReminderItem),
+              },
+            },
+          },
+          ...errors(400, 404, 409),
+        },
+      }),
+      validator("param", WorkflowManualRun.ControlInput),
+      async (c) => {
+        const params = c.req.valid("param")
+        const run = debug_run_required(params.run_id)
+        const value = RuntimeReconciliation.keepRunning(run.id, {
+          actor_type: "user",
+        })
+        if (value) return c.json(value)
+        throw new HTTPException(409, {
+          message: "run is not in an active reconciliation state",
+        })
+      },
+    )
+    .get(
+      "/debug/run/:run_id/report-preview",
+      describeRoute({
+        summary: "Preview a debug report payload",
+        description: "Return the allowlisted field previews for the stop/report flow before user consent.",
+        operationId: "workflow.debug.report_preview",
+        responses: {
+          200: {
+            description: "Debug report preview",
+            content: {
+              "application/json": {
+                schema: resolver(WorkflowDebugReport.Preview),
+              },
+            },
+          },
+          ...errors(400, 404, 409),
+        },
+      }),
+      validator("param", WorkflowManualRun.ControlInput),
+      validator("query", z.object({})),
+      async (c) => {
+        const params = c.req.valid("param")
+        const run = debug_run_required(params.run_id)
+        if (!RuntimeReconciliation.isActive({ status: run.status })) {
+          throw new HTTPException(409, {
+            message: "debug reports require an active reconciliation run",
+          })
+        }
+        return c.json(await WorkflowDebugReport.preview(params.run_id))
+      },
+    )
+    .post(
+      "/debug/run/:run_id/report",
+      describeRoute({
+        summary: "Create a system report draft for a reconciliation run",
+        description: "Cancel the active reconciliation run and create a first-class system report draft.",
+        operationId: "workflow.debug.report_create",
+        responses: {
+          200: {
+            description: "System report draft created",
+            content: {
+              "application/json": {
+                schema: resolver(WorkflowDebugReport.CreateResult),
+              },
+            },
+          },
+          ...errors(400, 404, 409),
+        },
+      }),
+      validator("param", WorkflowManualRun.ControlInput),
+      validator("json", WorkflowDebugReport.CreateInput),
+      async (c) => {
+        const params = c.req.valid("param")
+        const body = c.req.valid("json")
+        const run = debug_run_required(params.run_id)
+        if (!RuntimeReconciliation.isActive({ status: run.status })) {
+          throw new HTTPException(409, {
+            message: "debug reports require an active reconciliation run",
+          })
+        }
+        return c.json(await WorkflowDebugReport.create(params.run_id, body))
       },
     )
     .get(

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   createDraftEditor,
+  draftCanEdit,
   draftCreateInput,
   draftRemediation,
   draftReasonCodes,
@@ -11,12 +12,12 @@ import {
 } from "./history-drafts"
 import type { HistoryDraft } from "./history-data"
 
-const draft = (status = "approved"): HistoryDraft => ({
+const draft = (status = "approved", source_kind: HistoryDraft["source_kind"] = "user"): HistoryDraft => ({
   id: "draft_1",
   run_id: "run_1",
   workspace_id: "wrk_1",
   status,
-  source_kind: "user",
+  source_kind,
   adapter_id: "test",
   integration_id: "test/default",
   action_id: "message.send",
@@ -41,6 +42,20 @@ const draft = (status = "approved"): HistoryDraft => ({
   dispatch: null,
 })
 
+const systemReportDraft = (status = "approved"): HistoryDraft => ({
+  ...draft(status, "system_report"),
+  adapter_id: "system",
+  integration_id: "system/default",
+  action_id: "report.dispatch",
+  target: "system://developers",
+  payload_json: {
+    metadata: {
+      run_id: "run_1",
+    },
+  },
+  preview_text: "System report system://developers",
+})
+
 describe("history-drafts", () => {
   test("createDraftEditor seeds deterministic defaults for new drafts", () => {
     expect(createDraftEditor()).toEqual({
@@ -53,6 +68,24 @@ describe("history-drafts", () => {
       payload_schema_version: "1",
       payload_json: JSON.stringify({ text: "" }, null, 2),
     })
+  })
+
+  test("createDraftEditor preserves system report source kind for existing drafts", () => {
+    const value = createDraftEditor(systemReportDraft())
+
+    expect(value.source_kind).toBe("system_report")
+    expect(value.target).toBe("system://developers")
+    expect(value.payload_json).toBe(
+      JSON.stringify(
+        {
+          metadata: {
+            run_id: "run_1",
+          },
+        },
+        null,
+        2,
+      ),
+    )
   })
 
   test("draftCreateInput trims fields and builds a user request", () => {
@@ -123,6 +156,14 @@ describe("history-drafts", () => {
         }),
       }),
     ).toBe(true)
+  })
+
+  test("draftCanEdit blocks system report and terminal drafts", () => {
+    expect(draftCanEdit(draft("approved"))).toBe(true)
+    expect(draftCanEdit(systemReportDraft())).toBe(false)
+    expect(draftCanEdit(draft("sent"))).toBe(false)
+    expect(draftCanEdit(draft("rejected"))).toBe(false)
+    expect(draftCanEdit(draft("failed"))).toBe(false)
   })
 
   test("scopeFromDraftStatus and remediation cover pending, processed, and blocked hints", () => {

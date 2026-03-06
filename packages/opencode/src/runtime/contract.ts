@@ -32,7 +32,7 @@ export const dispatch_attempt_state_values = [
 
 export const run_trigger_type_values = ["manual", "cron", "signal", "debug", "system"] as const
 
-export const draft_source_kind_values = ["user", "system"] as const
+export const draft_source_kind_values = ["user", "system", "system_report"] as const
 
 export const outbound_auth_state_values = ["healthy", "missing", "expired"] as const
 

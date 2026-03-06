@@ -8,7 +8,8 @@ import { WorkspaceTable } from "../../src/control-plane/workspace.sql"
 import { JJ } from "../../src/project/jj"
 import { Instance } from "../../src/project/instance"
 import { RuntimeOutbound } from "../../src/runtime/outbound"
-import { RunTable } from "../../src/runtime/runtime.sql"
+import { RuntimeRun } from "../../src/runtime/run"
+import { DraftTable, IntegrationAttemptTable, RunTable } from "../../src/runtime/runtime.sql"
 import { SessionTable } from "../../src/session/session.sql"
 import { Database, eq } from "../../src/storage/db"
 import { Server } from "../../src/server/server"
@@ -79,6 +80,21 @@ function seams(input?: { execute?: (item: ExecuteItem) => Promise<void> }) {
       }
     },
   }
+}
+
+function integrating(workspace_id: string, directory: string) {
+  const run_workspace_directory = path.join(directory, ".origin", "runs", workspace_id)
+  const run = RuntimeRun.create({
+    workspace_id,
+    trigger_type: "manual",
+    run_workspace_root: path.dirname(run_workspace_directory),
+    run_workspace_directory,
+    integration_candidate_changed_paths: ["src/debug.txt"],
+  })
+  RuntimeRun.transition({ id: run.id, to: "running" })
+  RuntimeRun.transition({ id: run.id, to: "validating" })
+  RuntimeRun.transition({ id: run.id, to: "ready_for_integration" })
+  return RuntimeRun.transition({ id: run.id, to: "integrating" })
 }
 
 beforeEach(async () => {
@@ -688,6 +704,189 @@ describe("workflow/library routes", () => {
             },
           )
           expect(wrong.status).toBe(404)
+        },
+      })
+    } finally {
+      if (prior === undefined) delete process.env.OPENCODE_TEST_HOME
+      else process.env.OPENCODE_TEST_HOME = prior
+    }
+  })
+
+  test("draft create rejects system_report and debug routes enforce workspace scoping", async () => {
+    await using home = await tmpdir({
+      init: async (root) => {
+        const directory = path.join(root, "Documents", "origin")
+        await mkdir(directory, { recursive: true })
+        await $`git init`.cwd(directory).quiet()
+        await $`git commit --allow-empty -m "root commit ${directory}"`.cwd(directory).quiet()
+        return {
+          directory,
+        }
+      },
+    })
+
+    const prior = process.env.OPENCODE_TEST_HOME
+    process.env.OPENCODE_TEST_HOME = home.path
+    try {
+      await Instance.provide({
+        directory: home.extra.directory,
+        fn: async () => {
+          seed("wrk_debug", home.extra.directory)
+          seed("wrk_other", home.extra.directory)
+          const run = integrating("wrk_debug", home.extra.directory)
+          const app = Server.App()
+
+          const draft = await app.request(
+            `/workflow/drafts?directory=${encodeURIComponent(home.extra.directory)}&workspace=wrk_debug`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                source_kind: "system_report",
+                integration_id: "system/default",
+                adapter_id: "system",
+                action_id: "report.dispatch",
+                target: "system://developers",
+                payload_json: {
+                  report_type: "debug_reconciliation",
+                  metadata: {
+                    generated_at: 1,
+                    reminder: {
+                      threshold_ms: 1,
+                      cadence_ms: 1,
+                      hard_stop_ms: 2,
+                    },
+                    run: {
+                      id: run.id,
+                      workspace_id: "wrk_debug",
+                      session_id: null,
+                      workflow_id: null,
+                      status: "integrating",
+                      trigger_type: "manual",
+                      created_at: 1,
+                      updated_at: 1,
+                      started_at: 1,
+                      ready_for_integration_at: 1,
+                      reason_code: null,
+                      failure_code: null,
+                      cleanup_failed: false,
+                      changed_paths: [],
+                    },
+                  },
+                },
+                payload_schema_version: 1,
+                actor_type: "user",
+              }),
+            },
+          )
+
+          expect(draft.status).toBe(400)
+          expect(Database.use((db) => db.select().from(DraftTable).all())).toHaveLength(0)
+
+          const preview = await app.request(
+            `/workflow/debug/run/${run.id}/report-preview?directory=${encodeURIComponent(home.extra.directory)}&workspace=wrk_other`,
+            {
+              method: "GET",
+            },
+          )
+          expect(preview.status).toBe(404)
+
+          const keep = await app.request(
+            `/workflow/debug/run/${run.id}/keep-running?directory=${encodeURIComponent(home.extra.directory)}&workspace=wrk_other`,
+            {
+              method: "POST",
+            },
+          )
+          expect(keep.status).toBe(404)
+        },
+      })
+    } finally {
+      if (prior === undefined) delete process.env.OPENCODE_TEST_HOME
+      else process.env.OPENCODE_TEST_HOME = prior
+    }
+  })
+
+  test("debug report route requires consent and creates system report drafts for active runs", async () => {
+    await using home = await tmpdir({
+      init: async (root) => {
+        const directory = path.join(root, "Documents", "origin")
+        await mkdir(directory, { recursive: true })
+        await $`git init`.cwd(directory).quiet()
+        await $`git commit --allow-empty -m "root commit ${directory}"`.cwd(directory).quiet()
+        return {
+          directory,
+        }
+      },
+    })
+
+    const prior = process.env.OPENCODE_TEST_HOME
+    process.env.OPENCODE_TEST_HOME = home.path
+    try {
+      await Instance.provide({
+        directory: home.extra.directory,
+        fn: async () => {
+          seed("wrk_debug", home.extra.directory)
+          const run = integrating("wrk_debug", home.extra.directory)
+          const app = Server.App()
+          const query = `?directory=${encodeURIComponent(home.extra.directory)}&workspace=wrk_debug`
+
+          const rejected = await app.request(`/workflow/debug/run/${run.id}/report${query}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              consent: false,
+            }),
+          })
+          expect(rejected.status).toBe(400)
+          expect(Database.use((db) => db.select().from(DraftTable).all())).toHaveLength(0)
+
+          const preview = await app.request(`/workflow/debug/run/${run.id}/report-preview${query}`, {
+            method: "GET",
+          })
+          expect(preview.status).toBe(200)
+          const view = (await preview.json()) as {
+            fields: Array<{ id: string; selected: boolean; required: boolean }>
+          }
+          expect(view.fields.map((item) => ({
+            id: item.id,
+            selected: item.selected,
+            required: item.required,
+          }))).toEqual([
+            { id: "metadata", selected: true, required: true },
+            { id: "prompt", selected: false, required: false },
+            { id: "files", selected: false, required: false },
+          ])
+
+          const created = await app.request(`/workflow/debug/run/${run.id}/report${query}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              consent: true,
+            }),
+          })
+          expect(created.status).toBe(200)
+          const body = (await created.json()) as {
+            run_status: string
+            draft: {
+              source_kind: string
+              adapter_id: string
+              action_id: string
+              payload_json: Record<string, unknown>
+            }
+          }
+          expect(body.run_status).toBe("cancel_requested")
+          expect(body.draft.source_kind).toBe("system_report")
+          expect(body.draft.adapter_id).toBe("system")
+          expect(body.draft.action_id).toBe("report.dispatch")
+          expect(body.draft.payload_json.prompt).toBeUndefined()
+          expect(body.draft.payload_json.files).toBeUndefined()
+          expect(Database.use((db) => db.select().from(IntegrationAttemptTable).all())).toHaveLength(0)
         },
       })
     } finally {

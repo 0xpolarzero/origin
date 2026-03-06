@@ -54,6 +54,7 @@ import { ConstrainDragXAxis } from "@/utils/solid-dnd"
 import { DialogSelectDirectory } from "@/components/dialog-select-directory"
 import { DialogSelectFile } from "@/components/dialog-select-file"
 import { DialogEditProject } from "@/components/dialog-edit-project"
+import { DialogDebugReport } from "@/components/dialog-debug-report"
 import { Titlebar } from "@/components/titlebar"
 import { useServer } from "@/context/server"
 import { useLanguage, type Locale } from "@/context/language"
@@ -72,6 +73,7 @@ import {
   sortedRootSessions,
   workspaceKey,
 } from "./layout/helpers"
+import { keepDebugRun, loadDebugReminders } from "./history-data"
 import { collectOpenProjectDeepLinks, deepLinkEvent, drainPendingDeepLinks } from "./layout/deep-links"
 import { createInlineEditorController } from "./layout/inline-editor"
 import {
@@ -462,8 +464,149 @@ export default function Layout(props: ParentProps) {
       })
     })
 
+  const useDebugReminderToasts = () =>
+    onMount(() => {
+      const toastByRun = new Map<string, number>()
+      let interval: ReturnType<typeof setInterval> | undefined
+
+      const dismiss = (run_id: string) => {
+        const toastId = toastByRun.get(run_id)
+        if (toastId === undefined) return
+        toaster.dismiss(toastId)
+        toastByRun.delete(run_id)
+      }
+
+      const clear = () => {
+        for (const run_id of toastByRun.keys()) dismiss(run_id)
+      }
+
+      const auth = () => {
+        const http = server.current?.http
+        if (!http?.password) return
+        return `Basic ${btoa(`${http.username ?? "opencode"}:${http.password}`)}`
+      }
+
+      const href = (item: { run_id: string; workspace_id: string }) =>
+        `/${base64Encode(currentDir() ?? "")}/history?tab=runs&debug=1&run_id=${encodeURIComponent(item.run_id)}&workspace=${encodeURIComponent(item.workspace_id)}`
+
+      const remaining = (value: number) => {
+        const minutes = Math.max(1, Math.ceil(value / 60_000))
+        if (minutes < 60) return `${minutes}m`
+        const hours = Math.floor(minutes / 60)
+        const rest = minutes % 60
+        if (rest === 0) return `${hours}h`
+        return `${hours}h ${rest}m`
+      }
+
+      const poll = async () => {
+        const directory = currentDir()
+        const baseUrl = server.current?.http.url
+        if (!directory || !baseUrl) {
+          clear()
+          return
+        }
+
+        const result = await loadDebugReminders({
+          baseUrl,
+          directory,
+          auth: auth(),
+        }).catch(() => undefined)
+
+        if (!result) return
+
+        const active = new Set(result.items.map((item) => item.run_id))
+        for (const run_id of toastByRun.keys()) {
+          if (!active.has(run_id)) dismiss(run_id)
+        }
+
+        for (const item of result.items) {
+          if (!item.notify) continue
+
+          const title = "Debug session still reconciling"
+          const description = `${item.workflow_id ?? item.run_id} has ${remaining(item.remaining_ms)} until automatic stop.`
+          const next = href(item)
+          if (settings.notifications.agent()) {
+            void platform.notify(title, description, next)
+          }
+
+          dismiss(item.run_id)
+
+          let toastId = 0
+          toastId = showToast({
+            persistent: true,
+            title,
+            description,
+            actions: [
+              {
+                label: "Open debug session",
+                onClick: () => {
+                  dismiss(item.run_id)
+                  navigate(next)
+                },
+              },
+              {
+                label: "Keep running",
+                onClick: async () => {
+                  await keepDebugRun({
+                    baseUrl,
+                    directory,
+                    auth: auth(),
+                    workspace: item.workspace_id,
+                    run_id: item.run_id,
+                  }).catch((error) => {
+                    showToast({
+                      title: "Keep Running",
+                      description: errorMessage(error, "Request failed."),
+                    })
+                  })
+                  dismiss(item.run_id)
+                },
+              },
+              {
+                label: "Stop and report",
+                onClick: () => {
+                  dismiss(item.run_id)
+                  dialog.show(() => (
+                    <DialogDebugReport directory={directory} runID={item.run_id} workspaceID={item.workspace_id} />
+                  ))
+                },
+              },
+              {
+                label: language.t("common.dismiss"),
+                onClick: () => dismiss(item.run_id),
+              },
+            ],
+          })
+          toastByRun.set(item.run_id, toastId)
+        }
+      }
+
+      createEffect(() => {
+        currentDir()
+        server.current?.http.url
+
+        if (interval) {
+          clearInterval(interval)
+          interval = undefined
+        }
+        clear()
+
+        if (!currentDir() || !server.current?.http.url) return
+        void poll()
+        interval = setInterval(() => {
+          void poll()
+        }, 30_000)
+      })
+
+      onCleanup(() => {
+        if (interval) clearInterval(interval)
+        clear()
+      })
+    })
+
   useUpdatePolling()
   useSDKNotificationToasts()
+  useDebugReminderToasts()
 
   function scrollToSession(sessionId: string, sessionKey: string) {
     if (!scrollContainerRef) return

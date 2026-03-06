@@ -21,6 +21,7 @@ export type HistoryRun = {
     reason: boolean
     failure: boolean
   }
+  debug: boolean
 }
 
 export type HistoryOperation = {
@@ -52,7 +53,7 @@ export type HistoryDraft = {
   run_id: string | null
   workspace_id: string
   status: string
-  source_kind: "user" | "system"
+  source_kind: "user" | "system" | "system_report"
   adapter_id: string
   integration_id: string
   action_id: string
@@ -75,6 +76,7 @@ export type HistoryRunPage = {
   endpoint: string
   items: HistoryRun[]
   next_cursor: string | null
+  hidden_debug_count: number
 }
 
 export type HistoryOperationPage = {
@@ -91,6 +93,65 @@ export type HistoryDraftPage = {
 
 export type HistoryDraftSourceKind = HistoryDraft["source_kind"]
 export type HistoryDraftActorType = "system" | "user"
+
+export type HistoryDebugReminder = {
+  run_id: string
+  session_id: string | null
+  workspace_id: string
+  workflow_id: string | null
+  status: string
+  trigger_type: string
+  started_at: number
+  threshold_ms: number
+  cadence_ms: number
+  hard_stop_ms: number
+  threshold_at: number
+  hard_stop_at: number
+  next_notification_at: number
+  last_notification_at: number | null
+  last_keep_running_at: number | null
+  elapsed_ms: number
+  remaining_ms: number
+  notify: boolean
+}
+
+export type HistoryDebugReminderPage = {
+  endpoint: string
+  generated_at: number
+  items: HistoryDebugReminder[]
+}
+
+export type HistoryDebugReportField = {
+  id: "metadata" | "prompt" | "files"
+  title: string
+  required: boolean
+  selected: boolean
+  preview: string
+}
+
+export type HistoryDebugReportPreview = {
+  run_id: string
+  session_id: string | null
+  workspace_id: string
+  workflow_id: string | null
+  status: string
+  trigger_type: string
+  target: string
+  targets: string[]
+  fields: HistoryDebugReportField[]
+}
+
+export type HistoryDebugReportCreateInput = {
+  target?: string
+  include_prompt?: boolean
+  include_files?: boolean
+  consent: true
+}
+
+export type HistoryDebugReportCreateResult = {
+  run_status: string
+  draft: HistoryDraft
+}
 
 export type HistoryDraftCreateInput = {
   run_id?: string | null
@@ -205,6 +266,7 @@ const runFrom = (value: unknown) => {
     operation_exists: asBool(row.operation_exists) ?? false,
     trigger_metadata: asJsonRecord(row.trigger_metadata) ?? null,
     duplicate_event: duplicate(row.duplicate_event),
+    debug: asBool(row.debug) ?? false,
   } satisfies HistoryRun
 }
 
@@ -282,7 +344,7 @@ const draftFrom = (value: unknown) => {
   const dispatch = dispatchFrom(row.dispatch)
 
   if (!id || !workspace_id || !status || !adapter_id || !integration_id || !action_id || !target) return
-  if (source_kind !== "user" && source_kind !== "system") return
+  if (source_kind !== "user" && source_kind !== "system" && source_kind !== "system_report") return
   if (!payload_json || payload_schema_version === undefined) return
   if (preview_text === undefined || !material_hash) return
   if (created_at === undefined || updated_at === undefined) return
@@ -313,6 +375,105 @@ const draftFrom = (value: unknown) => {
   } satisfies HistoryDraft
 }
 
+const reminderFrom = (value: unknown) => {
+  const row = asRecord(value)
+  if (!row) return
+
+  const run_id = asText(row.run_id)
+  const workspace_id = asText(row.workspace_id)
+  const status = asText(row.status)
+  const trigger_type = asText(row.trigger_type)
+  const started_at = asNumber(row.started_at)
+  const threshold_ms = asNumber(row.threshold_ms)
+  const cadence_ms = asNumber(row.cadence_ms)
+  const hard_stop_ms = asNumber(row.hard_stop_ms)
+  const threshold_at = asNumber(row.threshold_at)
+  const hard_stop_at = asNumber(row.hard_stop_at)
+  const next_notification_at = asNumber(row.next_notification_at)
+  const elapsed_ms = asNumber(row.elapsed_ms)
+  const remaining_ms = asNumber(row.remaining_ms)
+
+  if (!run_id || !workspace_id || !status || !trigger_type) return
+  if (
+    started_at === undefined ||
+    threshold_ms === undefined ||
+    cadence_ms === undefined ||
+    hard_stop_ms === undefined ||
+    threshold_at === undefined ||
+    hard_stop_at === undefined ||
+    next_notification_at === undefined ||
+    elapsed_ms === undefined ||
+    remaining_ms === undefined
+  )
+    return
+
+  return {
+    run_id,
+    session_id: asNullableText(row.session_id),
+    workspace_id,
+    workflow_id: asNullableText(row.workflow_id),
+    status,
+    trigger_type,
+    started_at,
+    threshold_ms,
+    cadence_ms,
+    hard_stop_ms,
+    threshold_at,
+    hard_stop_at,
+    next_notification_at,
+    last_notification_at: asNullableNumber(row.last_notification_at),
+    last_keep_running_at: asNullableNumber(row.last_keep_running_at),
+    elapsed_ms,
+    remaining_ms,
+    notify: asBool(row.notify) ?? false,
+  } satisfies HistoryDebugReminder
+}
+
+const previewFieldFrom = (value: unknown) => {
+  const row = asRecord(value)
+  if (!row) return
+
+  const id = asText(row.id)
+  const title = asText(row.title)
+  const preview = typeof row.preview === "string" ? row.preview : undefined
+  if (!title || preview === undefined) return
+  if (id !== "metadata" && id !== "prompt" && id !== "files") return
+
+  return {
+    id,
+    title,
+    required: asBool(row.required) ?? false,
+    selected: asBool(row.selected) ?? false,
+    preview,
+  } satisfies HistoryDebugReportField
+}
+
+const debugReportPreviewFrom = (value: unknown) => {
+  const row = asRecord(value)
+  if (!row) return
+
+  const run_id = asText(row.run_id)
+  const workspace_id = asText(row.workspace_id)
+  const status = asText(row.status)
+  const trigger_type = asText(row.trigger_type)
+  const target = asText(row.target)
+  if (!run_id || !workspace_id || !status || !trigger_type || !target) return
+
+  return {
+    run_id,
+    session_id: asNullableText(row.session_id),
+    workspace_id,
+    workflow_id: asNullableText(row.workflow_id),
+    status,
+    trigger_type,
+    target,
+    targets: asTextArray(row.targets),
+    fields: Array.isArray(row.fields)
+      ? row.fields.map((item) => previewFieldFrom(item)).filter((item): item is HistoryDebugReportField => !!item)
+      : [],
+  } satisfies HistoryDebugReportPreview
+}
+
 export const normalizeRunPage = (payload: unknown) => {
   const row = asRecord(payload)
   const items = Array.isArray(row?.items)
@@ -324,6 +485,7 @@ export const normalizeRunPage = (payload: unknown) => {
   return {
     items,
     next_cursor: asNullableText(row?.next_cursor),
+    hidden_debug_count: asNumber(row?.hidden_debug_count) ?? 0,
   }
 }
 
@@ -363,6 +525,29 @@ export const normalizeDraftDetail = (payload: unknown) => {
     draftFrom(row?.data) ??
     draftFrom(payload)
   )
+}
+
+export const normalizeReminderPage = (payload: unknown) => {
+  const row = asRecord(payload)
+  return {
+    generated_at: asNumber(row?.generated_at) ?? 0,
+    items: Array.isArray(row?.items)
+      ? row.items.map((item) => reminderFrom(item)).filter((item): item is HistoryDebugReminder => !!item)
+      : [],
+  }
+}
+
+export const normalizeDebugReportPreview = (payload: unknown) => debugReportPreviewFrom(payload)
+
+export const normalizeDebugReportCreate = (payload: unknown) => {
+  const row = asRecord(payload)
+  const draft = draftFrom(row?.draft)
+  const run_status = asText(row?.run_status)
+  if (!draft || !run_status) return
+  return {
+    run_status,
+    draft,
+  } satisfies HistoryDebugReportCreateResult
 }
 
 const encodeDirectory = (directory: string) => (/[^\x00-\x7F]/.test(directory) ? encodeURIComponent(directory) : directory)
@@ -542,6 +727,29 @@ export const loadHistoryRuns = async (input: {
     endpoint,
     ...normalizeRunPage(result.body),
   } satisfies HistoryRunPage
+}
+
+export const loadDebugReminders = async (input: {
+  baseUrl: string
+  directory: string
+  auth?: string
+  fetch?: Fetcher
+}) => {
+  const endpoint = "/workflow/debug/reminders"
+  const result = await read({
+    baseUrl: input.baseUrl,
+    endpoint,
+    directory: input.directory,
+    auth: input.auth,
+    fetch: input.fetch ?? fetch,
+  })
+
+  if (result.type === "error") throw new Error(result.message)
+
+  return {
+    endpoint,
+    ...normalizeReminderPage(result.body),
+  } satisfies HistoryDebugReminderPage
 }
 
 export const loadHistoryOperations = async (input: {
@@ -749,3 +957,83 @@ const controlDraft = (path: string) => async (input: {
 export const approveHistoryDraft = controlDraft("approve")
 export const rejectHistoryDraft = controlDraft("reject")
 export const sendHistoryDraft = controlDraft("send")
+
+export const keepDebugRun = async (input: {
+  baseUrl: string
+  directory: string
+  auth?: string
+  workspace?: string
+  run_id: string
+  fetch?: Fetcher
+}) => {
+  const result = await write({
+    baseUrl: input.baseUrl,
+    endpoint: `/workflow/debug/run/${encodeURIComponent(input.run_id)}/keep-running${append({
+      workspace: input.workspace,
+    })}`,
+    directory: input.directory,
+    auth: input.auth,
+    method: "POST",
+    fetch: input.fetch ?? fetch,
+  })
+
+  if (result.type === "error") throw new Error(result.message)
+
+  const item = reminderFrom(result.body)
+  if (!item) throw new Error("Debug reminder endpoint returned invalid JSON.")
+  return item
+}
+
+export const loadDebugReportPreview = async (input: {
+  baseUrl: string
+  directory: string
+  auth?: string
+  workspace?: string
+  run_id: string
+  fetch?: Fetcher
+}) => {
+  const endpoint = `/workflow/debug/run/${encodeURIComponent(input.run_id)}/report-preview${append({
+    workspace: input.workspace,
+  })}`
+  const result = await read({
+    baseUrl: input.baseUrl,
+    endpoint,
+    directory: input.directory,
+    auth: input.auth,
+    fetch: input.fetch ?? fetch,
+  })
+
+  if (result.type === "error") throw new Error(result.message)
+
+  const preview = normalizeDebugReportPreview(result.body)
+  if (!preview) throw new Error("Debug report preview endpoint returned invalid JSON.")
+  return preview
+}
+
+export const createDebugReport = async (input: {
+  baseUrl: string
+  directory: string
+  auth?: string
+  workspace?: string
+  run_id: string
+  body: HistoryDebugReportCreateInput
+  fetch?: Fetcher
+}) => {
+  const result = await write({
+    baseUrl: input.baseUrl,
+    endpoint: `/workflow/debug/run/${encodeURIComponent(input.run_id)}/report${append({
+      workspace: input.workspace,
+    })}`,
+    directory: input.directory,
+    auth: input.auth,
+    method: "POST",
+    body: input.body,
+    fetch: input.fetch ?? fetch,
+  })
+
+  if (result.type === "error") throw new Error(result.message)
+
+  const created = normalizeDebugReportCreate(result.body)
+  if (!created) throw new Error("Debug report endpoint returned invalid JSON.")
+  return created
+}

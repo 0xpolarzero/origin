@@ -4201,6 +4201,237 @@ export type WorkflowSignalIngestResponses = {
 
 export type WorkflowSignalIngestResponse = WorkflowSignalIngestResponses[keyof WorkflowSignalIngestResponses]
 
+export type WorkflowDebugRemindersData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/debug/reminders"
+}
+
+export type WorkflowDebugRemindersResponses = {
+  /**
+   * Reminder state
+   */
+  200: {
+    generated_at: number
+    items: Array<{
+      run_id: string
+      session_id: string | null
+      workspace_id: string
+      workflow_id: string | null
+      status: "integrating" | "reconciling" | "cancel_requested"
+      trigger_type: string
+      started_at: number
+      threshold_ms: number
+      cadence_ms: number
+      hard_stop_ms: number
+      threshold_at: number
+      hard_stop_at: number
+      next_notification_at: number
+      last_notification_at: number | null
+      last_keep_running_at: number | null
+      elapsed_ms: number
+      remaining_ms: number
+      notify: boolean
+    }>
+  }
+}
+
+export type WorkflowDebugRemindersResponse = WorkflowDebugRemindersResponses[keyof WorkflowDebugRemindersResponses]
+
+export type WorkflowDebugKeepRunningData = {
+  body?: never
+  path: {
+    run_id: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/debug/run/{run_id}/keep-running"
+}
+
+export type WorkflowDebugKeepRunningErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+  /**
+   * Conflict
+   */
+  409: ConflictError
+}
+
+export type WorkflowDebugKeepRunningError = WorkflowDebugKeepRunningErrors[keyof WorkflowDebugKeepRunningErrors]
+
+export type WorkflowDebugKeepRunningResponses = {
+  /**
+   * Reminder updated
+   */
+  200: {
+    run_id: string
+    session_id: string | null
+    workspace_id: string
+    workflow_id: string | null
+    status: "integrating" | "reconciling" | "cancel_requested"
+    trigger_type: string
+    started_at: number
+    threshold_ms: number
+    cadence_ms: number
+    hard_stop_ms: number
+    threshold_at: number
+    hard_stop_at: number
+    next_notification_at: number
+    last_notification_at: number | null
+    last_keep_running_at: number | null
+    elapsed_ms: number
+    remaining_ms: number
+    notify: boolean
+  }
+}
+
+export type WorkflowDebugKeepRunningResponse =
+  WorkflowDebugKeepRunningResponses[keyof WorkflowDebugKeepRunningResponses]
+
+export type WorkflowDebugReportPreviewData = {
+  body?: never
+  path: {
+    run_id: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/debug/run/{run_id}/report-preview"
+}
+
+export type WorkflowDebugReportPreviewErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+  /**
+   * Conflict
+   */
+  409: ConflictError
+}
+
+export type WorkflowDebugReportPreviewError = WorkflowDebugReportPreviewErrors[keyof WorkflowDebugReportPreviewErrors]
+
+export type WorkflowDebugReportPreviewResponses = {
+  /**
+   * Debug report preview
+   */
+  200: {
+    run_id: string
+    session_id: string | null
+    workspace_id: string
+    workflow_id: string | null
+    status: string
+    trigger_type: string
+    target: string
+    targets: Array<string>
+    fields: Array<{
+      id: "metadata" | "prompt" | "files"
+      title: string
+      required: boolean
+      selected: boolean
+      preview: string
+    }>
+  }
+}
+
+export type WorkflowDebugReportPreviewResponse =
+  WorkflowDebugReportPreviewResponses[keyof WorkflowDebugReportPreviewResponses]
+
+export type WorkflowDebugReportCreateData = {
+  body?: {
+    target?: string
+    include_prompt?: boolean
+    include_files?: boolean
+    consent: true
+  }
+  path: {
+    run_id: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/debug/run/{run_id}/report"
+}
+
+export type WorkflowDebugReportCreateErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+  /**
+   * Conflict
+   */
+  409: ConflictError
+}
+
+export type WorkflowDebugReportCreateError = WorkflowDebugReportCreateErrors[keyof WorkflowDebugReportCreateErrors]
+
+export type WorkflowDebugReportCreateResponses = {
+  /**
+   * System report draft created
+   */
+  200: {
+    run_status: string
+    draft: {
+      id: string
+      run_id: string | null
+      workspace_id: string
+      status: "pending" | "blocked" | "approved" | "auto_approved" | "sent" | "rejected" | "failed"
+      source_kind: "user" | "system" | "system_report"
+      adapter_id: string
+      integration_id: string
+      action_id: string
+      target: string
+      payload_json: {
+        [key: string]: unknown
+      }
+      payload_schema_version: number
+      preview_text: string
+      material_hash: string
+      block_reason_code: string | null
+      policy_id: string | null
+      policy_version: string | null
+      decision_id: string | null
+      decision_reason_code: string | null
+      created_at: number
+      updated_at: number
+      dispatch: {
+        id: string
+        state: "created" | "dispatching" | "remote_accepted" | "finalized" | "failed" | "blocked"
+        idempotency_key: string
+        remote_reference: string | null
+        block_reason_code: string | null
+      } | null
+    }
+  }
+}
+
+export type WorkflowDebugReportCreateResponse =
+  WorkflowDebugReportCreateResponses[keyof WorkflowDebugReportCreateResponses]
+
 export type WorkflowHistoryRunsData = {
   body?: never
   path?: never
@@ -4242,8 +4473,10 @@ export type WorkflowHistoryRunsResponses = {
         reason: boolean
         failure: boolean
       }
+      debug: boolean
     }>
     next_cursor: string | null
+    hidden_debug_count: number
   }
 }
 
@@ -4350,7 +4583,7 @@ export type WorkflowDraftsCreateData = {
   body?: {
     id?: string
     run_id?: string | null
-    source_kind: "user" | "system"
+    source_kind: "user" | "system" | "system_report"
     integration_id: string
     adapter_id: string
     action_id: string
@@ -4392,7 +4625,7 @@ export type WorkflowDraftsCreateResponses = {
     run_id: string | null
     workspace_id: string
     status: "pending" | "blocked" | "approved" | "auto_approved" | "sent" | "rejected" | "failed"
-    source_kind: "user" | "system"
+    source_kind: "user" | "system" | "system_report"
     adapter_id: string
     integration_id: string
     action_id: string
@@ -4456,7 +4689,7 @@ export type WorkflowDraftsGetResponses = {
     run_id: string | null
     workspace_id: string
     status: "pending" | "blocked" | "approved" | "auto_approved" | "sent" | "rejected" | "failed"
-    source_kind: "user" | "system"
+    source_kind: "user" | "system" | "system_report"
     adapter_id: string
     integration_id: string
     action_id: string
@@ -4488,7 +4721,7 @@ export type WorkflowDraftsGetResponse = WorkflowDraftsGetResponses[keyof Workflo
 
 export type WorkflowDraftsUpdateData = {
   body?: {
-    source_kind?: "user" | "system"
+    source_kind?: "user" | "system" | "system_report"
     integration_id?: string
     adapter_id?: string
     action_id?: string
@@ -4535,7 +4768,7 @@ export type WorkflowDraftsUpdateResponses = {
     run_id: string | null
     workspace_id: string
     status: "pending" | "blocked" | "approved" | "auto_approved" | "sent" | "rejected" | "failed"
-    source_kind: "user" | "system"
+    source_kind: "user" | "system" | "system_report"
     adapter_id: string
     integration_id: string
     action_id: string
@@ -4605,7 +4838,7 @@ export type WorkflowDraftsApproveResponses = {
     run_id: string | null
     workspace_id: string
     status: "pending" | "blocked" | "approved" | "auto_approved" | "sent" | "rejected" | "failed"
-    source_kind: "user" | "system"
+    source_kind: "user" | "system" | "system_report"
     adapter_id: string
     integration_id: string
     action_id: string
@@ -4675,7 +4908,7 @@ export type WorkflowDraftsRejectResponses = {
     run_id: string | null
     workspace_id: string
     status: "pending" | "blocked" | "approved" | "auto_approved" | "sent" | "rejected" | "failed"
-    source_kind: "user" | "system"
+    source_kind: "user" | "system" | "system_report"
     adapter_id: string
     integration_id: string
     action_id: string
@@ -4745,7 +4978,7 @@ export type WorkflowDraftsSendResponses = {
     run_id: string | null
     workspace_id: string
     status: "pending" | "blocked" | "approved" | "auto_approved" | "sent" | "rejected" | "failed"
-    source_kind: "user" | "system"
+    source_kind: "user" | "system" | "system_report"
     adapter_id: string
     integration_id: string
     action_id: string
