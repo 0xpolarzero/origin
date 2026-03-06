@@ -1,5 +1,6 @@
 import { describeRoute, resolver, validator } from "hono-openapi"
 import { Hono } from "hono"
+import { HTTPException } from "hono/http-exception"
 import z from "zod"
 import { errors } from "../error"
 import { Instance } from "@/project/instance"
@@ -10,6 +11,7 @@ import { WorkflowRunGate } from "@/workflow/run-gate"
 import { WorkflowValidation } from "@/workflow/validate"
 import { lazy } from "@/util/lazy"
 import { RuntimeHistory } from "@/runtime/history"
+import { RuntimeOutbound } from "@/runtime/outbound"
 
 const run_validate = z
   .object({
@@ -38,6 +40,46 @@ const operation_history_query = history_query
   .extend({
     include_user: query_boolean.optional(),
   })
+
+const draft_history_query = history_query
+  .extend({
+    scope: z.enum(["pending", "processed"]).optional(),
+  })
+
+const draft_param = z
+  .object({
+    draft_id: z.string().min(1),
+  })
+  .strict()
+
+const draft_create = RuntimeOutbound.CreateInput.omit({
+  workspace_id: true,
+})
+
+const draft_update = RuntimeOutbound.UpdateInput.omit({
+  id: true,
+})
+
+const draft_control = z
+  .object({
+    actor_type: z.enum(["system", "user"]).optional(),
+  })
+  .strict()
+
+function workspace_required() {
+  if (WorkspaceContext.workspaceID) return WorkspaceContext.workspaceID
+  throw new HTTPException(400, {
+    message: "draft routes require a workspace id",
+  })
+}
+
+function draft_required(draft_id: string) {
+  const draft = RuntimeOutbound.get({ id: draft_id })
+  if (draft.workspace_id === workspace_required()) return draft
+  throw new HTTPException(404, {
+    message: `Draft not found: ${draft_id}`,
+  })
+}
 
 export const WorkflowRoutes = lazy(() =>
   new Hono()
@@ -99,6 +141,219 @@ export const WorkflowRoutes = lazy(() =>
             limit: query.limit,
             include_debug: query.include_debug,
             include_user: query.include_user,
+          }),
+        )
+      },
+    )
+    .get(
+      "/history/drafts",
+      describeRoute({
+        summary: "List workflow draft history",
+        description: "List draft history with Pending/Processed scopes and deterministic pagination.",
+        operationId: "workflow.history.drafts",
+        responses: {
+          200: {
+            description: "Draft history page",
+            content: {
+              "application/json": {
+                schema: resolver(RuntimeHistory.DraftPage),
+              },
+            },
+          },
+        },
+      }),
+      validator("query", draft_history_query),
+      async (c) => {
+        const query = c.req.valid("query")
+        return c.json(
+          RuntimeHistory.drafts({
+            workspace_id: WorkspaceContext.workspaceID,
+            cursor: query.cursor,
+            limit: query.limit,
+            scope: query.scope,
+            include_debug: query.include_debug,
+          }),
+        )
+      },
+    )
+    .post(
+      "/drafts",
+      describeRoute({
+        summary: "Create workflow draft",
+        description: "Create an outbound draft envelope for review, approval, and dispatch.",
+        operationId: "workflow.drafts.create",
+        responses: {
+          200: {
+            description: "Draft created",
+            content: {
+              "application/json": {
+                schema: resolver(RuntimeOutbound.View),
+              },
+            },
+          },
+          ...errors(400, 409),
+        },
+      }),
+      validator("json", draft_create),
+      async (c) => {
+        const body = c.req.valid("json")
+        return c.json(
+          await RuntimeOutbound.create({
+            ...body,
+            workspace_id: workspace_required(),
+          }),
+        )
+      },
+    )
+    .get(
+      "/drafts/:draft_id",
+      describeRoute({
+        summary: "Get workflow draft",
+        description: "Return the current draft envelope and dispatch state.",
+        operationId: "workflow.drafts.get",
+        responses: {
+          200: {
+            description: "Draft detail",
+            content: {
+              "application/json": {
+                schema: resolver(RuntimeOutbound.View),
+              },
+            },
+          },
+          ...errors(400, 404),
+        },
+      }),
+      validator("param", draft_param),
+      validator("query", z.object({})),
+      async (c) => {
+        const params = c.req.valid("param")
+        return c.json(draft_required(params.draft_id))
+      },
+    )
+    .patch(
+      "/drafts/:draft_id",
+      describeRoute({
+        summary: "Edit workflow draft",
+        description: "Edit a workflow draft and re-evaluate its approval/blocking state.",
+        operationId: "workflow.drafts.update",
+        responses: {
+          200: {
+            description: "Draft updated",
+            content: {
+              "application/json": {
+                schema: resolver(RuntimeOutbound.View),
+              },
+            },
+          },
+          ...errors(400, 404, 409),
+        },
+      }),
+      validator("param", draft_param),
+      validator("json", draft_update),
+      async (c) => {
+        const params = c.req.valid("param")
+        const body = c.req.valid("json")
+        draft_required(params.draft_id)
+        return c.json(
+          await RuntimeOutbound.update({
+            ...body,
+            id: params.draft_id,
+          }),
+        )
+      },
+    )
+    .post(
+      "/drafts/:draft_id/approve",
+      describeRoute({
+        summary: "Approve workflow draft",
+        description: "Mark a draft ready to send without dispatching it.",
+        operationId: "workflow.drafts.approve",
+        responses: {
+          200: {
+            description: "Draft approved",
+            content: {
+              "application/json": {
+                schema: resolver(RuntimeOutbound.View),
+              },
+            },
+          },
+          ...errors(400, 404, 409),
+        },
+      }),
+      validator("param", draft_param),
+      validator("json", draft_control),
+      async (c) => {
+        const params = c.req.valid("param")
+        const body = c.req.valid("json")
+        draft_required(params.draft_id)
+        return c.json(
+          await RuntimeOutbound.approve({
+            id: params.draft_id,
+            actor_type: body.actor_type,
+          }),
+        )
+      },
+    )
+    .post(
+      "/drafts/:draft_id/reject",
+      describeRoute({
+        summary: "Reject workflow draft",
+        description: "Reject a workflow draft without dispatching it.",
+        operationId: "workflow.drafts.reject",
+        responses: {
+          200: {
+            description: "Draft rejected",
+            content: {
+              "application/json": {
+                schema: resolver(RuntimeOutbound.View),
+              },
+            },
+          },
+          ...errors(400, 404, 409),
+        },
+      }),
+      validator("param", draft_param),
+      validator("json", draft_control),
+      async (c) => {
+        const params = c.req.valid("param")
+        const body = c.req.valid("json")
+        draft_required(params.draft_id)
+        return c.json(
+          RuntimeOutbound.reject({
+            id: params.draft_id,
+            actor_type: body.actor_type,
+          }),
+        )
+      },
+    )
+    .post(
+      "/drafts/:draft_id/send",
+      describeRoute({
+        summary: "Send workflow draft",
+        description: "Dispatch an approved or auto-approved draft through the centralized outbound dispatcher.",
+        operationId: "workflow.drafts.send",
+        responses: {
+          200: {
+            description: "Draft sent or blocked",
+            content: {
+              "application/json": {
+                schema: resolver(RuntimeOutbound.View),
+              },
+            },
+          },
+          ...errors(400, 404, 409),
+        },
+      }),
+      validator("param", draft_param),
+      validator("json", draft_control),
+      async (c) => {
+        const params = c.req.valid("param")
+        const body = c.req.valid("json")
+        draft_required(params.draft_id)
+        return c.json(
+          await RuntimeOutbound.send({
+            id: params.draft_id,
+            actor_type: body.actor_type,
           }),
         )
       },

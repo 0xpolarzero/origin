@@ -1,6 +1,4 @@
 import path from "node:path"
-import { realpath } from "node:fs/promises"
-import { Global } from "@/global"
 import {
   type LibraryItem,
   type LibraryResource,
@@ -12,6 +10,7 @@ import {
   workflow_schema,
   workspace_type,
 } from "./contract"
+import { RuntimeWorkspaceType } from "@/runtime/workspace-type"
 
 function key(value: ValidationIssue) {
   return `${value.path}\u0000${value.code}\u0000${value.message}`
@@ -390,29 +389,8 @@ async function validate_workflows(
 export namespace WorkflowValidation {
   export const Input = workspace_type.optional()
 
-  function normalize(input: string) {
-    const value = path.resolve(input).replaceAll("\\", "/").replace(/\/+$/, "")
-    if (!value) return "/"
-    return value
-  }
-
-  async function detect(directory: string): Promise<"origin" | "standard"> {
-    const root = normalize(path.join(Global.Path.home, "Documents", "origin"))
-    const current = normalize(directory)
-    if (current === root) return "origin"
-
-    const [resolved_root, resolved_current] = await Promise.all([
-      realpath(root).catch(() => undefined),
-      realpath(directory).catch(() => undefined),
-    ])
-    if (!resolved_root || !resolved_current) return "standard"
-    if (normalize(resolved_current) === normalize(resolved_root)) return "origin"
-
-    return "standard"
-  }
-
   export async function validate(input: { directory: string; workspace_type?: "origin" | "standard" }) {
-    const type = Input.parse(input.workspace_type) ?? (await detect(input.directory))
+    const type = Input.parse(input.workspace_type) ?? (await RuntimeWorkspaceType.detect(input.directory))
     const [workflows, library] = await Promise.all([read_workflows(input.directory), read_library(input.directory)])
     const index = await validate_library(input.directory, library, type)
     await validate_workflows(input.directory, workflows, index, type)

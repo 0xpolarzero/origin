@@ -49,6 +49,7 @@ const draft_transition_payload = z
   .object({
     from: z.union([z.literal("create"), draft_status]),
     to: draft_status,
+    reason_code: z.string().optional(),
   })
   .strict()
 
@@ -71,7 +72,7 @@ const dispatch_attempt_payload = z
 const dispatch_result_payload = z
   .object({
     outcome: z.enum(["sent", "failed", "blocked"]),
-    remote_id: z.string().optional(),
+    remote_reference: z.string().optional(),
     failure_code: z.string().optional(),
   })
   .strict()
@@ -109,6 +110,7 @@ const write_input = z.object({
   operation_id: uuid_v7.nullable().optional(),
   draft_id: uuid_v7.nullable().optional(),
   integration_id: z.string().nullable().optional(),
+  dispatch_attempt_id: uuid_v7.nullable().optional(),
   integration_attempt_id: uuid_v7.nullable().optional(),
   policy_id: z.string().nullable().optional(),
   policy_version: z.string().nullable().optional(),
@@ -182,6 +184,7 @@ function insert(db: Database.TxOrDb, input: z.infer<typeof write_input>) {
       operation_id: input.operation_id ?? null,
       draft_id: input.draft_id ?? null,
       integration_id: input.integration_id ?? null,
+      dispatch_attempt_id: input.dispatch_attempt_id ?? null,
       integration_attempt_id: input.integration_attempt_id ?? null,
       policy_id: input.policy_id ?? null,
       policy_version: input.policy_version ?? null,

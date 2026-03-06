@@ -11,11 +11,12 @@ export interface ButtonProps
 }
 
 export function Button(props: ButtonProps) {
-  const [split, rest] = splitProps(props, ["variant", "size", "icon", "class", "classList"])
+  const [split, rest] = splitProps(props, ["variant", "size", "icon", "class", "classList", "data-component"])
   return (
     <Kobalte
       {...rest}
-      data-component="button"
+      data-component={split["data-component"] || "button"}
+      data-ui="button"
       data-size={split.size || "normal"}
       data-variant={split.variant || "secondary"}
       data-icon={split.icon}

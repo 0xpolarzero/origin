@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   draft_status_values,
+  dispatch_attempt_state_values,
   failure_code_values,
   operation_status_values,
   reason_code_values,
@@ -9,8 +10,11 @@ import {
 import { RuntimeIllegalTransitionError, RuntimeMissingFailureCodeError, RuntimeMissingReasonCodeError } from "../../src/runtime/error"
 import {
   draft_legal_edges,
+  dispatch_attempt_legal_edges,
   operation_legal_edges,
   run_legal_edges,
+  validate_dispatch_attempt_create,
+  validate_dispatch_attempt_transition,
   validate_draft_create,
   validate_draft_transition,
   validate_operation_create,
@@ -18,7 +22,7 @@ import {
   validate_run_create,
   validate_run_transition,
 } from "../../src/runtime/state"
-import { DraftTable, OperationTable, RunTable } from "../../src/runtime/runtime.sql"
+import { DispatchAttemptTable, DraftTable, OperationTable, RunTable } from "../../src/runtime/runtime.sql"
 
 const expected_run_legal_edges = [
   { from: "queued", to: "running" },
@@ -51,10 +55,12 @@ const expected_draft_legal_edges = [
   { from: "pending", to: "auto_approved" },
   { from: "pending", to: "blocked" },
   { from: "pending", to: "rejected" },
+  { from: "approved", to: "rejected" },
   { from: "approved", to: "sent" },
   { from: "approved", to: "failed" },
   { from: "approved", to: "blocked" },
   { from: "approved", to: "pending" },
+  { from: "auto_approved", to: "rejected" },
   { from: "auto_approved", to: "sent" },
   { from: "auto_approved", to: "failed" },
   { from: "auto_approved", to: "blocked" },
@@ -62,6 +68,15 @@ const expected_draft_legal_edges = [
   { from: "blocked", to: "pending" },
   { from: "blocked", to: "rejected" },
   { from: "blocked", to: "failed" },
+] as const
+
+const expected_dispatch_attempt_legal_edges = [
+  { from: "created", to: "blocked" },
+  { from: "created", to: "dispatching" },
+  { from: "dispatching", to: "remote_accepted" },
+  { from: "dispatching", to: "failed" },
+  { from: "dispatching", to: "blocked" },
+  { from: "remote_accepted", to: "finalized" },
 ] as const
 
 function key(from: string, to: string) {
@@ -75,9 +90,10 @@ describe("runtime.contract.schema-enum-consistency", () => {
     expect(RunTable.reason_code.enumValues).toEqual([...reason_code_values])
   })
 
-  test("operation and draft tables reuse canonical status enums", () => {
+  test("operation, draft, and dispatch attempt tables reuse canonical status enums", () => {
     expect(OperationTable.status.enumValues).toEqual([...operation_status_values])
     expect(DraftTable.status.enumValues).toEqual([...draft_status_values])
+    expect(DispatchAttemptTable.state.enumValues).toEqual([...dispatch_attempt_state_values])
   })
 })
 
@@ -229,6 +245,31 @@ describe("runtime.state.draft-transition-matrix", () => {
       draft_status_values.forEach((to) => {
         if (legal.has(key(from, to))) return
         expect(() => validate_draft_transition({ from, to })).toThrow(RuntimeIllegalTransitionError)
+      })
+    })
+  })
+})
+
+describe("runtime.state.dispatch-attempt-transition-matrix", () => {
+  test("dispatch attempt matrix matches phase spec", () => {
+    expect(dispatch_attempt_legal_edges).toEqual(expected_dispatch_attempt_legal_edges)
+  })
+
+  test("dispatch attempt create rules are enforced", () => {
+    expect(() => validate_dispatch_attempt_create("created")).not.toThrow()
+    expect(() => validate_dispatch_attempt_create("dispatching")).toThrow(RuntimeIllegalTransitionError)
+  })
+
+  test("all legal dispatch attempt edges are accepted and illegal edges are rejected", () => {
+    expected_dispatch_attempt_legal_edges.forEach((item) => {
+      expect(() => validate_dispatch_attempt_transition(item)).not.toThrow()
+    })
+
+    const legal = new Set(expected_dispatch_attempt_legal_edges.map((item) => key(item.from, item.to)))
+    dispatch_attempt_state_values.forEach((from) => {
+      dispatch_attempt_state_values.forEach((to) => {
+        if (legal.has(key(from, to))) return
+        expect(() => validate_dispatch_attempt_transition({ from, to })).toThrow(RuntimeIllegalTransitionError)
       })
     })
   })

@@ -3,9 +3,11 @@ import { mkdir } from "node:fs/promises"
 import path from "node:path"
 import { WorkspaceTable } from "../../src/control-plane/workspace.sql"
 import { Instance } from "../../src/project/instance"
+import { RuntimeDispatchAttempt } from "../../src/runtime/dispatch-attempt"
+import { RuntimeDraft } from "../../src/runtime/draft"
 import { RuntimeOperation } from "../../src/runtime/operation"
 import { RuntimeRun } from "../../src/runtime/run"
-import { OperationTable, RunTable } from "../../src/runtime/runtime.sql"
+import { DraftTable, OperationTable, RunTable } from "../../src/runtime/runtime.sql"
 import { Server } from "../../src/server/server"
 import { Database, eq } from "../../src/storage/db"
 import { Log } from "../../src/util/log"
@@ -30,6 +32,18 @@ type OperationPage = {
     run_id: string
     run_exists: boolean
     provenance: "app" | "user"
+  }>
+  next_cursor: string | null
+}
+
+type DraftPage = {
+  items: Array<{
+    id: string
+    status: string
+    dispatch: {
+      state: string
+      remote_reference: string | null
+    } | null
   }>
   next_cursor: string | null
 }
@@ -72,6 +86,30 @@ function set_operation_time(operation_id: string, created_at: number) {
       .where(eq(OperationTable.id, operation_id))
       .run()
   })
+}
+
+function set_draft_time(draft_id: string, updated_at: number) {
+  Database.use((db) => {
+    db.update(DraftTable).set({ created_at: updated_at, updated_at }).where(eq(DraftTable.id, draft_id)).run()
+  })
+}
+
+function draft_input(id: string, workspace_id: string) {
+  return {
+    id,
+    workspace_id,
+    source_kind: "user" as const,
+    adapter_id: "test",
+    integration_id: "test/default",
+    action_id: "message.send",
+    target: "channel://general",
+    payload_json: {
+      text: id,
+    },
+    payload_schema_version: 1,
+    preview_text: `Message channel://general: ${id}`,
+    material_hash: `hash-${id}`,
+  }
 }
 
 beforeEach(async () => {
@@ -468,6 +506,117 @@ describe("workflow history routes", () => {
           reason: false,
           failure: true,
         })
+      },
+    })
+  })
+
+  test("draft history splits pending and processed scopes with dispatch metadata", async () => {
+    await using dir = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: dir.path,
+      fn: async () => {
+        seed("wrk_history", dir.path)
+
+        const pending = RuntimeDraft.create(draft_input("018f3c19-89f7-7b87-b72f-0ef4f34a53d1", "wrk_history"))
+        const approved = RuntimeDraft.transition({
+          id: RuntimeDraft.create(draft_input("018f3c19-89f7-7b87-b72f-0ef4f34a53d2", "wrk_history")).id,
+          to: "approved",
+        })
+        const blocked = RuntimeDraft.transition({
+          id: RuntimeDraft.create(draft_input("018f3c19-89f7-7b87-b72f-0ef4f34a53d3", "wrk_history")).id,
+          to: "blocked",
+          block_reason_code: "auth_unhealthy",
+        })
+        const auto_approved = RuntimeDraft.transition({
+          id: RuntimeDraft.create(draft_input("018f3c19-89f7-7b87-b72f-0ef4f34a53d4", "wrk_history")).id,
+          to: "auto_approved",
+        })
+        const sent = RuntimeDraft.transition({
+          id: RuntimeDraft.transition({
+            id: RuntimeDraft.create(draft_input("018f3c19-89f7-7b87-b72f-0ef4f34a53d5", "wrk_history")).id,
+            to: "approved",
+          }).id,
+          to: "sent",
+        })
+        const failed = RuntimeDraft.transition({
+          id: RuntimeDraft.transition({
+            id: RuntimeDraft.create(draft_input("018f3c19-89f7-7b87-b72f-0ef4f34a53d6", "wrk_history")).id,
+            to: "approved",
+          }).id,
+          to: "failed",
+        })
+
+        RuntimeDispatchAttempt.transition({
+          id: RuntimeDispatchAttempt.create({
+            draft_id: blocked.id,
+            workspace_id: "wrk_history",
+            integration_id: blocked.integration_id,
+            idempotency_key: "dispatch:blocked",
+          }).id,
+          to: "blocked",
+          block_reason_code: "auth_unhealthy",
+        })
+        RuntimeDispatchAttempt.transition({
+          id: RuntimeDispatchAttempt.transition({
+            id: RuntimeDispatchAttempt.create({
+              draft_id: sent.id,
+              workspace_id: "wrk_history",
+              integration_id: sent.integration_id,
+              idempotency_key: "dispatch:sent",
+            }).id,
+            to: "dispatching",
+          }).id,
+          to: "remote_accepted",
+          remote_reference: "test.message:1",
+        })
+        RuntimeDispatchAttempt.transition({
+          id: RuntimeDispatchAttempt.byDraft({
+            draft_id: sent.id,
+          })!.id,
+          to: "finalized",
+          remote_reference: "test.message:1",
+        })
+
+        set_draft_time(approved.id, 4_000)
+        set_draft_time(blocked.id, 3_000)
+        set_draft_time(auto_approved.id, 2_000)
+        set_draft_time(pending.id, 1_000)
+        set_draft_time(sent.id, 5_000)
+        set_draft_time(failed.id, 500)
+
+        const app = Server.App()
+        const pending_response = await app.request(
+          `/workflow/history/drafts${result_query({
+            directory: dir.path,
+            workspace: "wrk_history",
+            extra: "scope=pending",
+          })}`,
+          {
+            method: "GET",
+          },
+        )
+        const processed_response = await app.request(
+          `/workflow/history/drafts${result_query({
+            directory: dir.path,
+            workspace: "wrk_history",
+            extra: "scope=processed",
+          })}`,
+          {
+            method: "GET",
+          },
+        )
+
+        expect(pending_response.status).toBe(200)
+        expect(processed_response.status).toBe(200)
+
+        const pending_body = (await pending_response.json()) as DraftPage
+        const processed_body = (await processed_response.json()) as DraftPage
+
+        expect(pending_body.items.map((item) => item.id)).toEqual([approved.id, blocked.id, auto_approved.id, pending.id])
+        expect(processed_body.items.map((item) => item.id)).toEqual([sent.id, failed.id])
+        expect(pending_body.items.find((item) => item.id === blocked.id)?.dispatch?.state).toBe("blocked")
+        expect(processed_body.items.find((item) => item.id === sent.id)?.dispatch?.remote_reference).toBe("test.message:1")
       },
     })
   })

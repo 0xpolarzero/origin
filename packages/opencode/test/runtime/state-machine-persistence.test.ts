@@ -16,6 +16,24 @@ const workspace_id = "wrk_runtime"
 const session_id = "ses_runtime"
 const project_id = "proj_runtime"
 
+function draft_input(input?: { workspace_id?: string; run_id?: string | null }) {
+  return {
+    workspace_id: input?.workspace_id ?? workspace_id,
+    run_id: input?.run_id,
+    source_kind: "user" as const,
+    adapter_id: "test",
+    integration_id: "test/default",
+    action_id: "message.send",
+    target: "channel://general",
+    payload_json: {
+      text: "hello",
+    },
+    payload_schema_version: 1,
+    preview_text: "Message channel://general: hello",
+    material_hash: "hash-runtime",
+  }
+}
+
 function seed() {
   const now = Date.now()
   Database.use((db) => {
@@ -237,10 +255,7 @@ describe("runtime persistence transitions", () => {
   })
 
   test("illegal draft transition rejects with machine-readable error and no mutation", () => {
-    const draft = RuntimeDraft.create({
-      workspace_id,
-      integration_id: "email/default",
-    })
+    const draft = RuntimeDraft.create(draft_input())
 
     const before = event_count(and(eq(AuditEventTable.draft_id, draft.id), eq(AuditEventTable.event_type, "draft.transitioned")))
 

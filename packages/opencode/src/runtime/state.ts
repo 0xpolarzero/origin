@@ -1,10 +1,12 @@
 import {
   type DraftStatus,
+  type DispatchAttemptState,
   type FailureCode,
   type OperationStatus,
   type ReasonCode,
   type RunStatus,
   type RunTriggerType,
+  terminal_dispatch_attempt_states,
   terminal_draft_statuses,
   terminal_operation_statuses,
   terminal_run_statuses,
@@ -50,10 +52,12 @@ export const draft_legal_edges = [
   edge("pending", "auto_approved"),
   edge("pending", "blocked"),
   edge("pending", "rejected"),
+  edge("approved", "rejected"),
   edge("approved", "sent"),
   edge("approved", "failed"),
   edge("approved", "blocked"),
   edge("approved", "pending"),
+  edge("auto_approved", "rejected"),
   edge("auto_approved", "sent"),
   edge("auto_approved", "failed"),
   edge("auto_approved", "blocked"),
@@ -63,6 +67,15 @@ export const draft_legal_edges = [
   edge("blocked", "failed"),
 ] as const
 
+export const dispatch_attempt_legal_edges = [
+  edge("created", "blocked"),
+  edge("created", "dispatching"),
+  edge("dispatching", "remote_accepted"),
+  edge("dispatching", "failed"),
+  edge("dispatching", "blocked"),
+  edge("remote_accepted", "finalized"),
+] as const
+
 function legal<T extends string>(edges: readonly { from: T; to: T }[]) {
   return new Set(edges.map((item) => `${item.from}->${item.to}`))
 }
@@ -70,12 +83,13 @@ function legal<T extends string>(edges: readonly { from: T; to: T }[]) {
 const run_legal = legal(run_legal_edges)
 const operation_legal = legal(operation_legal_edges)
 const draft_legal = legal(draft_legal_edges)
+const dispatch_attempt_legal = legal(dispatch_attempt_legal_edges)
 
 function scheduler(trigger_type: RunTriggerType) {
   return trigger_type === "cron" || trigger_type === "signal"
 }
 
-function fail(entity: "run" | "operation" | "draft", from: string, to: string) {
+function fail(entity: "run" | "operation" | "draft" | "integration_attempt" | "dispatch_attempt", from: string, to: string) {
   throw new RuntimeIllegalTransitionError({
     entity,
     from,
@@ -141,4 +155,15 @@ export function validate_draft_transition(input: { from: DraftStatus; to: DraftS
   if (terminal_draft_statuses.has(input.from)) fail("draft", input.from, input.to)
   if (draft_legal.has(`${input.from}->${input.to}`)) return
   fail("draft", input.from, input.to)
+}
+
+export function validate_dispatch_attempt_create(state: DispatchAttemptState) {
+  if (state === "created") return
+  fail("dispatch_attempt", "create", state)
+}
+
+export function validate_dispatch_attempt_transition(input: { from: DispatchAttemptState; to: DispatchAttemptState }) {
+  if (terminal_dispatch_attempt_states.has(input.from)) fail("dispatch_attempt", input.from, input.to)
+  if (dispatch_attempt_legal.has(`${input.from}->${input.to}`)) return
+  fail("dispatch_attempt", input.from, input.to)
 }

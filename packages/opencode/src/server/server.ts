@@ -46,8 +46,13 @@ import { MDNS } from "./mdns"
 import { WorkflowRoutes } from "./routes/workflow"
 import { LibraryRoutes } from "./routes/library"
 import {
+  RuntimeIllegalTransitionError,
+  RuntimeImmutableFieldError,
   RuntimeManualRunDuplicateError,
   RuntimeManualRunWorkspaceRequiredError,
+  RuntimeManagedEndpointError,
+  RuntimeOutboundValidationError,
+  RuntimeWorkspaceMismatchError,
   RuntimeWorkflowValidationError,
 } from "@/runtime/error"
 
@@ -80,6 +85,11 @@ export namespace Server {
             else if (err instanceof RuntimeWorkflowValidationError) status = 400
             else if (err instanceof RuntimeManualRunWorkspaceRequiredError) status = 400
             else if (err instanceof RuntimeManualRunDuplicateError) status = 409
+            else if (err instanceof RuntimeIllegalTransitionError) status = 409
+            else if (err instanceof RuntimeWorkspaceMismatchError) status = 409
+            else if (err instanceof RuntimeOutboundValidationError) status = 400
+            else if (err instanceof RuntimeManagedEndpointError) status = 409
+            else if (err instanceof RuntimeImmutableFieldError) status = 400
             else if (err.name.startsWith("Worktree")) status = 400
             else status = 500
             return c.json(err.toObject(), { status })

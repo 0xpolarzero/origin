@@ -18,6 +18,24 @@ const workspace_other_id = "wrk_storage_other"
 const session_id = "ses_storage"
 const project_id = "proj_storage"
 
+function draft_input(input?: { workspace_id?: string; run_id?: string | null }) {
+  return {
+    workspace_id: input?.workspace_id ?? workspace_id,
+    run_id: input?.run_id,
+    source_kind: "user" as const,
+    adapter_id: "test",
+    integration_id: "test/default",
+    action_id: "message.send",
+    target: "channel://general",
+    payload_json: {
+      text: "hello",
+    },
+    payload_schema_version: 1,
+    preview_text: "Message channel://general: hello",
+    material_hash: "hash-storage",
+  }
+}
+
 function seed() {
   const now = Date.now()
   Database.use((db) => {
@@ -244,9 +262,10 @@ describe("runtime contract constraints", () => {
 
     expect(() =>
       RuntimeDraft.create({
-        run_id: run.id,
-        workspace_id: workspace_other_id,
-        integration_id: "email/default",
+        ...draft_input({
+          workspace_id: workspace_other_id,
+          run_id: run.id,
+        }),
       }),
     ).toThrow(RuntimeWorkspaceMismatchError)
 

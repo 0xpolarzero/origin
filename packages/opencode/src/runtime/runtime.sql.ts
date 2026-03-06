@@ -1,13 +1,17 @@
-import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core"
+import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core"
 import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core"
 import { WorkspaceTable } from "@/control-plane/workspace.sql"
 import { SessionTable } from "@/session/session.sql"
 import {
   actor_type_values,
+  block_reason_code_values,
+  dispatch_attempt_state_values,
+  draft_source_kind_values,
   draft_status_values,
   event_type_values,
   failure_code_values,
   integration_attempt_state_values,
+  outbound_auth_state_values,
   operation_status_values,
   reason_code_values,
   run_status_values,
@@ -114,7 +118,16 @@ export const DraftTable = sqliteTable(
       .notNull()
       .references(() => WorkspaceTable.id, { onDelete: "cascade" }),
     status: text({ enum: draft_status_values }).notNull(),
+    source_kind: text({ enum: draft_source_kind_values }).notNull(),
+    adapter_id: text().notNull(),
     integration_id: text().notNull(),
+    action_id: text().notNull(),
+    target: text().notNull(),
+    payload_json: text({ mode: "json" }).notNull().$type<Record<string, unknown>>(),
+    payload_schema_version: integer().notNull(),
+    preview_text: text().notNull(),
+    material_hash: text().notNull(),
+    block_reason_code: text({ enum: block_reason_code_values }),
     policy_id: text(),
     policy_version: text(),
     decision_id: text(),
@@ -125,7 +138,30 @@ export const DraftTable = sqliteTable(
     index("draft_workspace_status_idx").on(table.workspace_id, table.status),
     index("draft_run_idx").on(table.run_id),
     index("draft_integration_status_idx").on(table.integration_id, table.status),
+    index("draft_workspace_updated_idx").on(table.workspace_id, table.updated_at, table.id),
     index("draft_policy_lineage_idx").on(table.policy_id, table.policy_version, table.decision_id),
+  ],
+)
+
+export const OutboundIntegrationTable = sqliteTable(
+  "outbound_integration",
+  {
+    id: text().notNull(),
+    workspace_id: text()
+      .notNull()
+      .references(() => WorkspaceTable.id, { onDelete: "cascade" }),
+    adapter_id: text().notNull(),
+    enabled: integer({ mode: "boolean" })
+      .notNull()
+      .$default(() => true),
+    auth_state: text({ enum: outbound_auth_state_values }).notNull(),
+    allowed_targets: text({ mode: "json" }).notNull().$type<string[]>(),
+    ...Timestamps,
+  },
+  (table) => [
+    primaryKey({ columns: [table.workspace_id, table.id] }),
+    index("outbound_integration_workspace_adapter_idx").on(table.workspace_id, table.adapter_id),
+    index("outbound_integration_workspace_enabled_idx").on(table.workspace_id, table.enabled),
   ],
 )
 
@@ -152,6 +188,31 @@ export const IntegrationAttemptTable = sqliteTable(
   ],
 )
 
+export const DispatchAttemptTable = sqliteTable(
+  "dispatch_attempt",
+  {
+    id: text().primaryKey(),
+    draft_id: text()
+      .notNull()
+      .references(() => DraftTable.id, { onDelete: "cascade" }),
+    workspace_id: text()
+      .notNull()
+      .references(() => WorkspaceTable.id, { onDelete: "cascade" }),
+    integration_id: text().notNull(),
+    state: text({ enum: dispatch_attempt_state_values }).notNull(),
+    idempotency_key: text().notNull(),
+    remote_reference: text(),
+    block_reason_code: text({ enum: block_reason_code_values }),
+    ...Timestamps,
+  },
+  (table) => [
+    uniqueIndex("dispatch_attempt_draft_uq").on(table.draft_id),
+    uniqueIndex("dispatch_attempt_idempotency_key_uq").on(table.idempotency_key),
+    index("dispatch_attempt_workspace_state_idx").on(table.workspace_id, table.state),
+    index("dispatch_attempt_integration_state_idx").on(table.integration_id, table.state),
+  ],
+)
+
 export const AuditEventTable = sqliteTable(
   "audit_event",
   {
@@ -169,6 +230,7 @@ export const AuditEventTable = sqliteTable(
     operation_id: text().references(() => OperationTable.id, { onDelete: "set null" }),
     draft_id: text().references(() => DraftTable.id, { onDelete: "set null" }),
     integration_id: text(),
+    dispatch_attempt_id: text().references(() => DispatchAttemptTable.id, { onDelete: "set null" }),
     integration_attempt_id: text().references(() => IntegrationAttemptTable.id, { onDelete: "set null" }),
     policy_id: text(),
     policy_version: text(),
@@ -183,6 +245,7 @@ export const AuditEventTable = sqliteTable(
     index("audit_event_operation_occurred_idx").on(table.operation_id, table.occurred_at),
     index("audit_event_draft_occurred_idx").on(table.draft_id, table.occurred_at),
     index("audit_event_integration_occurred_idx").on(table.integration_id, table.occurred_at),
+    index("audit_event_dispatch_attempt_occurred_idx").on(table.dispatch_attempt_id, table.occurred_at),
     index("audit_event_attempt_occurred_idx").on(table.integration_attempt_id, table.occurred_at),
     index("audit_event_type_occurred_idx").on(table.event_type, table.occurred_at),
     index("audit_event_policy_lineage_idx").on(

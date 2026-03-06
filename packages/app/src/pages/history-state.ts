@@ -1,10 +1,14 @@
-export type HistoryTab = "runs" | "operations"
+export type HistoryTab = "runs" | "operations" | "drafts"
+
+export type DraftScope = "pending" | "processed"
 
 export type HistoryQuery = {
   tab?: HistoryTab
+  scope?: DraftScope
   debug?: boolean
   run_id?: string
   operation_id?: string
+  draft_id?: string
 }
 
 export type DebugState = {
@@ -19,7 +23,8 @@ type Duplicate = {
   }
 }
 
-const tabs = new Set<HistoryTab>(["runs", "operations"])
+const tabs = new Set<HistoryTab>(["runs", "operations", "drafts"])
+const scopes = new Set<DraftScope>(["pending", "processed"])
 
 const bool = (value: string | null) => {
   if (!value) return
@@ -38,14 +43,18 @@ const text = (value: string | null) => {
 export function parseHistoryQuery(value: string) {
   const params = new URLSearchParams(value.startsWith("?") ? value.slice(1) : value)
   const tab = params.get("tab")
+  const scope = params.get("scope")
   const run_id = text(params.get("run_id"))
   const operation_id = text(params.get("operation_id"))
+  const draft_id = text(params.get("draft_id"))
 
   return {
     tab: tab && tabs.has(tab as HistoryTab) ? (tab as HistoryTab) : undefined,
+    scope: scope && scopes.has(scope as DraftScope) ? (scope as DraftScope) : undefined,
     debug: bool(params.get("debug")),
     run_id,
     operation_id,
+    draft_id,
   } satisfies HistoryQuery
 }
 
@@ -69,6 +78,13 @@ export function applyDebugToggle(input: DebugState & { next: boolean }): DebugSt
 }
 
 export function focusFromQuery(input: HistoryQuery) {
+  if (input.draft_id) {
+    return {
+      tab: "drafts" as const,
+      id: input.draft_id,
+    }
+  }
+
   if (input.operation_id) {
     return {
       tab: "operations" as const,

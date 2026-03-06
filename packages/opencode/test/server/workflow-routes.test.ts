@@ -1,3 +1,4 @@
+import { $ } from "bun"
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
@@ -5,6 +6,7 @@ import { GlobalBus } from "../../src/bus/global"
 import { WorkspaceTable } from "../../src/control-plane/workspace.sql"
 import { JJ } from "../../src/project/jj"
 import { Instance } from "../../src/project/instance"
+import { RuntimeOutbound } from "../../src/runtime/outbound"
 import { RunTable } from "../../src/runtime/runtime.sql"
 import { SessionTable } from "../../src/session/session.sql"
 import { Database, eq } from "../../src/storage/db"
@@ -80,11 +82,13 @@ function seams(input?: { execute?: (item: ExecuteItem) => Promise<void> }) {
 beforeEach(async () => {
   await resetDatabase()
   WorkflowManualRun.Testing.reset()
+  RuntimeOutbound.Testing.reset()
 })
 
 afterEach(async () => {
   await resetDatabase()
   WorkflowManualRun.Testing.reset()
+  RuntimeOutbound.Testing.reset()
 })
 
 describe("workflow/library routes", () => {
@@ -539,6 +543,153 @@ describe("workflow/library routes", () => {
         await WorkflowManualRun.wait({ run_id: started.id, timeout_ms: 5000 })
       },
     })
+  })
+
+  test("draft routes create, mutate, approve, send, reject, and enforce workspace scoping", async () => {
+    await using home = await tmpdir({
+      init: async (root) => {
+        const directory = path.join(root, "Documents", "origin")
+        await mkdir(directory, { recursive: true })
+        await $`git init`.cwd(directory).quiet()
+        await $`git commit --allow-empty -m "root commit ${directory}"`.cwd(directory).quiet()
+        return {
+          directory,
+        }
+      },
+    })
+
+    const prior = process.env.OPENCODE_TEST_HOME
+    process.env.OPENCODE_TEST_HOME = home.path
+    try {
+      await Instance.provide({
+        directory: home.extra.directory,
+        fn: async () => {
+          seed("wrk_drafts", home.extra.directory)
+          seed("wrk_other", home.extra.directory)
+
+          const app = Server.App()
+          const query = `?directory=${encodeURIComponent(home.extra.directory)}&workspace=wrk_drafts`
+
+          const created = await app.request(`/workflow/drafts${query}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              source_kind: "user",
+              integration_id: "test/default",
+              adapter_id: "test",
+              action_id: "message.send",
+              target: "channel://general",
+              payload_json: {
+                text: "hello",
+              },
+              payload_schema_version: 1,
+              actor_type: "user",
+            }),
+          })
+          expect(created.status).toBe(200)
+          const draft = (await created.json()) as { id: string; status: string }
+          expect(draft.status).toBe("pending")
+
+          const current = await app.request(`/workflow/drafts/${draft.id}${query}`, {
+            method: "GET",
+          })
+          expect(current.status).toBe(200)
+
+          const updated = await app.request(`/workflow/drafts/${draft.id}${query}`, {
+            method: "PATCH",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              payload_json: {
+                text: "edited",
+              },
+              actor_type: "user",
+            }),
+          })
+          expect(updated.status).toBe(200)
+          const patched = (await updated.json()) as { preview_text: string; status: string }
+          expect(patched.status).toBe("pending")
+          expect(patched.preview_text).toBe("Message channel://general: edited")
+
+          const approved = await app.request(`/workflow/drafts/${draft.id}/approve${query}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              actor_type: "user",
+            }),
+          })
+          expect(approved.status).toBe(200)
+          const approved_body = (await approved.json()) as { status: string }
+          expect(approved_body.status).toBe("approved")
+
+          const sent = await app.request(`/workflow/drafts/${draft.id}/send${query}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              actor_type: "user",
+            }),
+          })
+          expect(sent.status).toBe(200)
+          const sent_body = (await sent.json()) as {
+            status: string
+            dispatch: { state: string; remote_reference: string | null } | null
+          }
+          expect(sent_body.status).toBe("sent")
+          expect(sent_body.dispatch?.state).toBe("finalized")
+          expect(RuntimeOutbound.Testing.writes().length).toBe(1)
+
+          const rejected = await app.request(`/workflow/drafts${query}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              source_kind: "user",
+              integration_id: "test/default",
+              adapter_id: "test",
+              action_id: "message.send",
+              target: "channel://general",
+              payload_json: {
+                text: "reject me",
+              },
+              payload_schema_version: 1,
+              actor_type: "user",
+            }),
+          })
+          const rejected_draft = (await rejected.json()) as { id: string }
+          const reject = await app.request(`/workflow/drafts/${rejected_draft.id}/reject${query}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              actor_type: "user",
+            }),
+          })
+          expect(reject.status).toBe(200)
+          const rejected_body = (await reject.json()) as { status: string }
+          expect(rejected_body.status).toBe("rejected")
+
+          const wrong = await app.request(
+            `/workflow/drafts/${draft.id}?directory=${encodeURIComponent(home.extra.directory)}&workspace=wrk_other`,
+            {
+              method: "GET",
+            },
+          )
+          expect(wrong.status).toBe(404)
+        },
+      })
+    } finally {
+      if (prior === undefined) delete process.env.OPENCODE_TEST_HOME
+      else process.env.OPENCODE_TEST_HOME = prior
+    }
   })
 
   test("history routes reject malformed cursor input", async () => {

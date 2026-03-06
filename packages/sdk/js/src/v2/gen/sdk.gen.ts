@@ -178,7 +178,20 @@ import type {
   TuiShowToastResponses,
   TuiSubmitPromptResponses,
   VcsGetResponses,
+  WorkflowDraftsApproveErrors,
+  WorkflowDraftsApproveResponses,
+  WorkflowDraftsCreateErrors,
+  WorkflowDraftsCreateResponses,
+  WorkflowDraftsGetErrors,
+  WorkflowDraftsGetResponses,
+  WorkflowDraftsRejectErrors,
+  WorkflowDraftsRejectResponses,
+  WorkflowDraftsSendErrors,
+  WorkflowDraftsSendResponses,
+  WorkflowDraftsUpdateErrors,
+  WorkflowDraftsUpdateResponses,
   WorkflowGetResponses,
+  WorkflowHistoryDraftsResponses,
   WorkflowHistoryOperationsResponses,
   WorkflowHistoryRunsResponses,
   WorkflowRunCancelErrors,
@@ -2725,6 +2738,325 @@ export class History extends HeyApiClient {
       ...params,
     })
   }
+
+  /**
+   * List workflow draft history
+   *
+   * List draft history with Pending/Processed scopes and deterministic pagination.
+   */
+  public drafts<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      cursor?: string
+      limit?: number
+      include_debug?: boolean | "0" | "1" | "true" | "false"
+      scope?: "pending" | "processed"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "cursor" },
+            { in: "query", key: "limit" },
+            { in: "query", key: "include_debug" },
+            { in: "query", key: "scope" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<WorkflowHistoryDraftsResponses, unknown, ThrowOnError>({
+      url: "/workflow/history/drafts",
+      ...options,
+      ...params,
+    })
+  }
+}
+
+export class Drafts extends HeyApiClient {
+  /**
+   * Create workflow draft
+   *
+   * Create an outbound draft envelope for review, approval, and dispatch.
+   */
+  public create<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      id?: string
+      run_id?: string | null
+      source_kind?: "user" | "system"
+      integration_id?: string
+      adapter_id?: string
+      action_id?: string
+      target?: string
+      payload_json?: {
+        [key: string]: unknown
+      }
+      payload_schema_version?: number
+      auto_approve?: boolean
+      actor_type?: "system" | "user"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "id" },
+            { in: "body", key: "run_id" },
+            { in: "body", key: "source_kind" },
+            { in: "body", key: "integration_id" },
+            { in: "body", key: "adapter_id" },
+            { in: "body", key: "action_id" },
+            { in: "body", key: "target" },
+            { in: "body", key: "payload_json" },
+            { in: "body", key: "payload_schema_version" },
+            { in: "body", key: "auto_approve" },
+            { in: "body", key: "actor_type" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      WorkflowDraftsCreateResponses,
+      WorkflowDraftsCreateErrors,
+      ThrowOnError
+    >({
+      url: "/workflow/drafts",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Get workflow draft
+   *
+   * Return the current draft envelope and dispatch state.
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      draft_id: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "draft_id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<WorkflowDraftsGetResponses, WorkflowDraftsGetErrors, ThrowOnError>({
+      url: "/workflow/drafts/{draft_id}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Edit workflow draft
+   *
+   * Edit a workflow draft and re-evaluate its approval/blocking state.
+   */
+  public update<ThrowOnError extends boolean = false>(
+    parameters: {
+      draft_id: string
+      directory?: string
+      workspace?: string
+      source_kind?: "user" | "system"
+      integration_id?: string
+      adapter_id?: string
+      action_id?: string
+      target?: string
+      payload_json?: {
+        [key: string]: unknown
+      }
+      payload_schema_version?: number
+      actor_type?: "system" | "user"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "draft_id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "source_kind" },
+            { in: "body", key: "integration_id" },
+            { in: "body", key: "adapter_id" },
+            { in: "body", key: "action_id" },
+            { in: "body", key: "target" },
+            { in: "body", key: "payload_json" },
+            { in: "body", key: "payload_schema_version" },
+            { in: "body", key: "actor_type" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<
+      WorkflowDraftsUpdateResponses,
+      WorkflowDraftsUpdateErrors,
+      ThrowOnError
+    >({
+      url: "/workflow/drafts/{draft_id}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Approve workflow draft
+   *
+   * Mark a draft ready to send without dispatching it.
+   */
+  public approve<ThrowOnError extends boolean = false>(
+    parameters: {
+      draft_id: string
+      directory?: string
+      workspace?: string
+      actor_type?: "system" | "user"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "draft_id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "actor_type" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      WorkflowDraftsApproveResponses,
+      WorkflowDraftsApproveErrors,
+      ThrowOnError
+    >({
+      url: "/workflow/drafts/{draft_id}/approve",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Reject workflow draft
+   *
+   * Reject a workflow draft without dispatching it.
+   */
+  public reject<ThrowOnError extends boolean = false>(
+    parameters: {
+      draft_id: string
+      directory?: string
+      workspace?: string
+      actor_type?: "system" | "user"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "draft_id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "actor_type" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      WorkflowDraftsRejectResponses,
+      WorkflowDraftsRejectErrors,
+      ThrowOnError
+    >({
+      url: "/workflow/drafts/{draft_id}/reject",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Send workflow draft
+   *
+   * Dispatch an approved or auto-approved draft through the centralized outbound dispatcher.
+   */
+  public send<ThrowOnError extends boolean = false>(
+    parameters: {
+      draft_id: string
+      directory?: string
+      workspace?: string
+      actor_type?: "system" | "user"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "draft_id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "actor_type" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<WorkflowDraftsSendResponses, WorkflowDraftsSendErrors, ThrowOnError>({
+      url: "/workflow/drafts/{draft_id}/send",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
 }
 
 export class Run extends HeyApiClient {
@@ -2937,6 +3269,11 @@ export class Workflow extends HeyApiClient {
   private _history?: History
   get history(): History {
     return (this._history ??= new History({ client: this.client }))
+  }
+
+  private _drafts?: Drafts
+  get drafts(): Drafts {
+    return (this._drafts ??= new Drafts({ client: this.client }))
   }
 
   private _run?: Run

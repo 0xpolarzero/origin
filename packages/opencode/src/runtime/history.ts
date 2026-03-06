@@ -1,6 +1,6 @@
 import { Database, and, desc, eq, inArray, lt, ne, or } from "@/storage/db"
 import z from "zod"
-import { OperationTable, RunTable } from "./runtime.sql"
+import { DispatchAttemptTable, DraftTable, OperationTable, RunTable } from "./runtime.sql"
 
 const cursor_pattern = /^\d+:[0-9a-f-]+$/i
 
@@ -18,6 +18,12 @@ const run_list_input = page_input
 const operation_list_input = page_input
   .extend({
     include_user: z.boolean().default(false),
+  })
+  .strict()
+
+const draft_list_input = page_input
+  .extend({
+    scope: z.enum(["pending", "processed"]).default("pending"),
   })
   .strict()
 
@@ -65,6 +71,40 @@ const operation_item = z
   })
   .strict()
 
+const draft_item = z
+  .object({
+    id: z.string(),
+    run_id: z.string().nullable(),
+    workspace_id: z.string(),
+    status: z.string(),
+    source_kind: z.string(),
+    adapter_id: z.string(),
+    integration_id: z.string(),
+    action_id: z.string(),
+    target: z.string(),
+    payload_json: z.record(z.string(), z.unknown()),
+    payload_schema_version: z.number().int().positive(),
+    preview_text: z.string(),
+    material_hash: z.string(),
+    block_reason_code: z.string().nullable(),
+    policy_id: z.string().nullable(),
+    policy_version: z.string().nullable(),
+    decision_id: z.string().nullable(),
+    decision_reason_code: z.string().nullable(),
+    created_at: z.number(),
+    updated_at: z.number(),
+    dispatch: z
+      .object({
+        id: z.string(),
+        state: z.string(),
+        idempotency_key: z.string(),
+        remote_reference: z.string().nullable(),
+        block_reason_code: z.string().nullable(),
+      })
+      .nullable(),
+  })
+  .strict()
+
 const run_page = z
   .object({
     items: z.array(run_item),
@@ -75,6 +115,13 @@ const run_page = z
 const operation_page = z
   .object({
     items: z.array(operation_item),
+    next_cursor: z.string().nullable(),
+  })
+  .strict()
+
+const draft_page = z
+  .object({
+    items: z.array(draft_item),
     next_cursor: z.string().nullable(),
   })
   .strict()
@@ -102,10 +149,13 @@ function cursor(input: Mark) {
 export namespace RuntimeHistory {
   export const RunListInput = run_list_input
   export const OperationListInput = operation_list_input
+  export const DraftListInput = draft_list_input
   export const RunItem = run_item
   export const OperationItem = operation_item
+  export const DraftItem = draft_item
   export const RunPage = run_page
   export const OperationPage = operation_page
+  export const DraftPage = draft_page
 
   export function runs(input: z.input<typeof RunListInput>) {
     const value = RunListInput.parse(input)
@@ -248,6 +298,77 @@ export namespace RuntimeHistory {
           provenance: item.actor_type === "user" ? "user" : "app",
         })),
         next_cursor: more ? cursor(page[page.length - 1]!) : null,
+      })
+    })
+  }
+
+  export function drafts(input: z.input<typeof DraftListInput>) {
+    const value = DraftListInput.parse(input)
+    if (!value.workspace_id) {
+      return DraftPage.parse({
+        items: [],
+        next_cursor: null,
+      })
+    }
+
+    return Database.use((db) => {
+      const next = mark(value.cursor)
+      const statuses =
+        value.scope === "pending"
+          ? (["pending", "blocked", "approved", "auto_approved"] as const)
+          : (["sent", "rejected", "failed"] as const)
+      const parts = [eq(DraftTable.workspace_id, value.workspace_id!), inArray(DraftTable.status, statuses)]
+      if (next) {
+        parts.push(
+          or(
+            lt(DraftTable.updated_at, next.created_at),
+            and(eq(DraftTable.updated_at, next.created_at), lt(DraftTable.id, next.id)),
+          )!,
+        )
+      }
+
+      const rows = db
+        .select()
+        .from(DraftTable)
+        .where(and(...parts))
+        .orderBy(desc(DraftTable.updated_at), desc(DraftTable.id))
+        .limit(value.limit + 1)
+        .all()
+
+      const more = rows.length > value.limit
+      const page = more ? rows.slice(0, value.limit) : rows
+      const draft_ids = page.map((item) => item.id)
+      const dispatches = draft_ids.length
+        ? db
+            .select()
+            .from(DispatchAttemptTable)
+            .where(inArray(DispatchAttemptTable.draft_id, draft_ids))
+            .all()
+        : []
+      const attempts = new Map(dispatches.map((item) => [item.draft_id, item] as const))
+
+      return DraftPage.parse({
+        items: page.map((item) => {
+          const dispatch = attempts.get(item.id)
+          return {
+            ...item,
+            dispatch: dispatch
+              ? {
+                  id: dispatch.id,
+                  state: dispatch.state,
+                  idempotency_key: dispatch.idempotency_key,
+                  remote_reference: dispatch.remote_reference,
+                  block_reason_code: dispatch.block_reason_code,
+                }
+              : null,
+          }
+        }),
+        next_cursor: more
+          ? cursor({
+              created_at: page[page.length - 1]!.updated_at,
+              id: page[page.length - 1]!.id,
+            })
+          : null,
       })
     })
   }

@@ -1,11 +1,11 @@
 import { NamedError } from "@opencode-ai/util/error"
 import z from "zod"
-import { validation_code } from "./contract"
+import { block_reason_code, validation_code } from "./contract"
 
 export const RuntimeIllegalTransitionError = NamedError.create(
   "RuntimeIllegalTransitionError",
   z.object({
-    entity: z.enum(["run", "operation", "draft", "integration_attempt"]),
+    entity: z.enum(["run", "operation", "draft", "integration_attempt", "dispatch_attempt"]),
     from: z.string(),
     to: z.string(),
     code: z.literal("illegal_transition"),
@@ -57,11 +57,32 @@ export const RuntimeAuditPayloadError = NamedError.create(
 export const RuntimeWorkspaceMismatchError = NamedError.create(
   "RuntimeWorkspaceMismatchError",
   z.object({
-    entity: z.enum(["operation", "draft", "integration_attempt"]),
+    entity: z.enum(["operation", "draft", "integration_attempt", "dispatch_attempt"]),
     run_id: z.string(),
     run_workspace_id: z.string(),
     workspace_id: z.string(),
     code: z.literal("workspace_mismatch"),
+  }),
+)
+
+export const RuntimeOutboundValidationError = NamedError.create(
+  "RuntimeOutboundValidationError",
+  z.object({
+    code: block_reason_code,
+    message: z.string(),
+    field: z.string().optional(),
+  }),
+)
+
+export const RuntimeManagedEndpointError = NamedError.create(
+  "RuntimeManagedEndpointError",
+  z.object({
+    code: z.enum(["managed_endpoint_rejected", "dispatch_context_mismatch"]),
+    message: z.string(),
+    draft_id: z.string().optional(),
+    dispatch_attempt_id: z.string().optional(),
+    integration_id: z.string().optional(),
+    workspace_id: z.string().optional(),
   }),
 )
 

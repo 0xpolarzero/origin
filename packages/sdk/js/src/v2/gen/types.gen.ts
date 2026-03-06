@@ -4228,6 +4228,491 @@ export type WorkflowHistoryOperationsResponses = {
 export type WorkflowHistoryOperationsResponse =
   WorkflowHistoryOperationsResponses[keyof WorkflowHistoryOperationsResponses]
 
+export type WorkflowHistoryDraftsData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    cursor?: string
+    limit?: number
+    include_debug?: boolean | "0" | "1" | "true" | "false"
+    scope?: "pending" | "processed"
+  }
+  url: "/workflow/history/drafts"
+}
+
+export type WorkflowHistoryDraftsResponses = {
+  /**
+   * Draft history page
+   */
+  200: {
+    items: Array<{
+      id: string
+      run_id: string | null
+      workspace_id: string
+      status: string
+      source_kind: string
+      adapter_id: string
+      integration_id: string
+      action_id: string
+      target: string
+      payload_json: {
+        [key: string]: unknown
+      }
+      payload_schema_version: number
+      preview_text: string
+      material_hash: string
+      block_reason_code: string | null
+      policy_id: string | null
+      policy_version: string | null
+      decision_id: string | null
+      decision_reason_code: string | null
+      created_at: number
+      updated_at: number
+      dispatch: {
+        id: string
+        state: string
+        idempotency_key: string
+        remote_reference: string | null
+        block_reason_code: string | null
+      } | null
+    }>
+    next_cursor: string | null
+  }
+}
+
+export type WorkflowHistoryDraftsResponse = WorkflowHistoryDraftsResponses[keyof WorkflowHistoryDraftsResponses]
+
+export type WorkflowDraftsCreateData = {
+  body?: {
+    id?: string
+    run_id?: string | null
+    source_kind: "user" | "system"
+    integration_id: string
+    adapter_id: string
+    action_id: string
+    target: string
+    payload_json: {
+      [key: string]: unknown
+    }
+    payload_schema_version: number
+    auto_approve?: boolean
+    actor_type?: "system" | "user"
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/drafts"
+}
+
+export type WorkflowDraftsCreateErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Conflict
+   */
+  409: ConflictError
+}
+
+export type WorkflowDraftsCreateError = WorkflowDraftsCreateErrors[keyof WorkflowDraftsCreateErrors]
+
+export type WorkflowDraftsCreateResponses = {
+  /**
+   * Draft created
+   */
+  200: {
+    id: string
+    run_id: string | null
+    workspace_id: string
+    status: "pending" | "blocked" | "approved" | "auto_approved" | "sent" | "rejected" | "failed"
+    source_kind: "user" | "system"
+    adapter_id: string
+    integration_id: string
+    action_id: string
+    target: string
+    payload_json: {
+      [key: string]: unknown
+    }
+    payload_schema_version: number
+    preview_text: string
+    material_hash: string
+    block_reason_code: string | null
+    policy_id: string | null
+    policy_version: string | null
+    decision_id: string | null
+    decision_reason_code: string | null
+    created_at: number
+    updated_at: number
+    dispatch: {
+      id: string
+      state: "created" | "dispatching" | "remote_accepted" | "finalized" | "failed" | "blocked"
+      idempotency_key: string
+      remote_reference: string | null
+      block_reason_code: string | null
+    } | null
+  }
+}
+
+export type WorkflowDraftsCreateResponse = WorkflowDraftsCreateResponses[keyof WorkflowDraftsCreateResponses]
+
+export type WorkflowDraftsGetData = {
+  body?: never
+  path: {
+    draft_id: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/drafts/{draft_id}"
+}
+
+export type WorkflowDraftsGetErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type WorkflowDraftsGetError = WorkflowDraftsGetErrors[keyof WorkflowDraftsGetErrors]
+
+export type WorkflowDraftsGetResponses = {
+  /**
+   * Draft detail
+   */
+  200: {
+    id: string
+    run_id: string | null
+    workspace_id: string
+    status: "pending" | "blocked" | "approved" | "auto_approved" | "sent" | "rejected" | "failed"
+    source_kind: "user" | "system"
+    adapter_id: string
+    integration_id: string
+    action_id: string
+    target: string
+    payload_json: {
+      [key: string]: unknown
+    }
+    payload_schema_version: number
+    preview_text: string
+    material_hash: string
+    block_reason_code: string | null
+    policy_id: string | null
+    policy_version: string | null
+    decision_id: string | null
+    decision_reason_code: string | null
+    created_at: number
+    updated_at: number
+    dispatch: {
+      id: string
+      state: "created" | "dispatching" | "remote_accepted" | "finalized" | "failed" | "blocked"
+      idempotency_key: string
+      remote_reference: string | null
+      block_reason_code: string | null
+    } | null
+  }
+}
+
+export type WorkflowDraftsGetResponse = WorkflowDraftsGetResponses[keyof WorkflowDraftsGetResponses]
+
+export type WorkflowDraftsUpdateData = {
+  body?: {
+    source_kind?: "user" | "system"
+    integration_id?: string
+    adapter_id?: string
+    action_id?: string
+    target?: string
+    payload_json?: {
+      [key: string]: unknown
+    }
+    payload_schema_version?: number
+    actor_type?: "system" | "user"
+  }
+  path: {
+    draft_id: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/drafts/{draft_id}"
+}
+
+export type WorkflowDraftsUpdateErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+  /**
+   * Conflict
+   */
+  409: ConflictError
+}
+
+export type WorkflowDraftsUpdateError = WorkflowDraftsUpdateErrors[keyof WorkflowDraftsUpdateErrors]
+
+export type WorkflowDraftsUpdateResponses = {
+  /**
+   * Draft updated
+   */
+  200: {
+    id: string
+    run_id: string | null
+    workspace_id: string
+    status: "pending" | "blocked" | "approved" | "auto_approved" | "sent" | "rejected" | "failed"
+    source_kind: "user" | "system"
+    adapter_id: string
+    integration_id: string
+    action_id: string
+    target: string
+    payload_json: {
+      [key: string]: unknown
+    }
+    payload_schema_version: number
+    preview_text: string
+    material_hash: string
+    block_reason_code: string | null
+    policy_id: string | null
+    policy_version: string | null
+    decision_id: string | null
+    decision_reason_code: string | null
+    created_at: number
+    updated_at: number
+    dispatch: {
+      id: string
+      state: "created" | "dispatching" | "remote_accepted" | "finalized" | "failed" | "blocked"
+      idempotency_key: string
+      remote_reference: string | null
+      block_reason_code: string | null
+    } | null
+  }
+}
+
+export type WorkflowDraftsUpdateResponse = WorkflowDraftsUpdateResponses[keyof WorkflowDraftsUpdateResponses]
+
+export type WorkflowDraftsApproveData = {
+  body?: {
+    actor_type?: "system" | "user"
+  }
+  path: {
+    draft_id: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/drafts/{draft_id}/approve"
+}
+
+export type WorkflowDraftsApproveErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+  /**
+   * Conflict
+   */
+  409: ConflictError
+}
+
+export type WorkflowDraftsApproveError = WorkflowDraftsApproveErrors[keyof WorkflowDraftsApproveErrors]
+
+export type WorkflowDraftsApproveResponses = {
+  /**
+   * Draft approved
+   */
+  200: {
+    id: string
+    run_id: string | null
+    workspace_id: string
+    status: "pending" | "blocked" | "approved" | "auto_approved" | "sent" | "rejected" | "failed"
+    source_kind: "user" | "system"
+    adapter_id: string
+    integration_id: string
+    action_id: string
+    target: string
+    payload_json: {
+      [key: string]: unknown
+    }
+    payload_schema_version: number
+    preview_text: string
+    material_hash: string
+    block_reason_code: string | null
+    policy_id: string | null
+    policy_version: string | null
+    decision_id: string | null
+    decision_reason_code: string | null
+    created_at: number
+    updated_at: number
+    dispatch: {
+      id: string
+      state: "created" | "dispatching" | "remote_accepted" | "finalized" | "failed" | "blocked"
+      idempotency_key: string
+      remote_reference: string | null
+      block_reason_code: string | null
+    } | null
+  }
+}
+
+export type WorkflowDraftsApproveResponse = WorkflowDraftsApproveResponses[keyof WorkflowDraftsApproveResponses]
+
+export type WorkflowDraftsRejectData = {
+  body?: {
+    actor_type?: "system" | "user"
+  }
+  path: {
+    draft_id: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/drafts/{draft_id}/reject"
+}
+
+export type WorkflowDraftsRejectErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+  /**
+   * Conflict
+   */
+  409: ConflictError
+}
+
+export type WorkflowDraftsRejectError = WorkflowDraftsRejectErrors[keyof WorkflowDraftsRejectErrors]
+
+export type WorkflowDraftsRejectResponses = {
+  /**
+   * Draft rejected
+   */
+  200: {
+    id: string
+    run_id: string | null
+    workspace_id: string
+    status: "pending" | "blocked" | "approved" | "auto_approved" | "sent" | "rejected" | "failed"
+    source_kind: "user" | "system"
+    adapter_id: string
+    integration_id: string
+    action_id: string
+    target: string
+    payload_json: {
+      [key: string]: unknown
+    }
+    payload_schema_version: number
+    preview_text: string
+    material_hash: string
+    block_reason_code: string | null
+    policy_id: string | null
+    policy_version: string | null
+    decision_id: string | null
+    decision_reason_code: string | null
+    created_at: number
+    updated_at: number
+    dispatch: {
+      id: string
+      state: "created" | "dispatching" | "remote_accepted" | "finalized" | "failed" | "blocked"
+      idempotency_key: string
+      remote_reference: string | null
+      block_reason_code: string | null
+    } | null
+  }
+}
+
+export type WorkflowDraftsRejectResponse = WorkflowDraftsRejectResponses[keyof WorkflowDraftsRejectResponses]
+
+export type WorkflowDraftsSendData = {
+  body?: {
+    actor_type?: "system" | "user"
+  }
+  path: {
+    draft_id: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/drafts/{draft_id}/send"
+}
+
+export type WorkflowDraftsSendErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+  /**
+   * Conflict
+   */
+  409: ConflictError
+}
+
+export type WorkflowDraftsSendError = WorkflowDraftsSendErrors[keyof WorkflowDraftsSendErrors]
+
+export type WorkflowDraftsSendResponses = {
+  /**
+   * Draft sent or blocked
+   */
+  200: {
+    id: string
+    run_id: string | null
+    workspace_id: string
+    status: "pending" | "blocked" | "approved" | "auto_approved" | "sent" | "rejected" | "failed"
+    source_kind: "user" | "system"
+    adapter_id: string
+    integration_id: string
+    action_id: string
+    target: string
+    payload_json: {
+      [key: string]: unknown
+    }
+    payload_schema_version: number
+    preview_text: string
+    material_hash: string
+    block_reason_code: string | null
+    policy_id: string | null
+    policy_version: string | null
+    decision_id: string | null
+    decision_reason_code: string | null
+    created_at: number
+    updated_at: number
+    dispatch: {
+      id: string
+      state: "created" | "dispatching" | "remote_accepted" | "finalized" | "failed" | "blocked"
+      idempotency_key: string
+      remote_reference: string | null
+      block_reason_code: string | null
+    } | null
+  }
+}
+
+export type WorkflowDraftsSendResponse = WorkflowDraftsSendResponses[keyof WorkflowDraftsSendResponses]
+
 export type WorkflowValidateData = {
   body?: never
   path?: never
