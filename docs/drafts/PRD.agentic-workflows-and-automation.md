@@ -1,641 +1,410 @@
-# PRD: Origin Agentic Workflows and Automation
+# PRD: Origin Graph-First Workflows and Automation
 
 ## Document Status
 
-- Status: Draft for product alignment
-- Date: 2026-03-05
+- Status: Draft for product and implementation alignment
+- Date: 2026-03-06
 - Product: `origin` native desktop app
 - Audience: Product, design, engineering
-- Execution note: This PRD is design input. Implementation must still be planned and executed via numbered phase specs/logs in `docs/specs/` per `docs/specs/GUIDE.md`.
-- Critical scope rule: any `jj`/changeset/checkpoint language in this PRD describes app runtime behavior in user workspaces. It does not instruct implementation agents to run VCS commands in this repository unless explicitly requested for a code contribution task.
+- Execution note: this PRD is product direction input. Implementation must still be planned and executed through numbered phase specs and logs in [GUIDE.md](/Users/polarzero/code/projects/origin/docs/specs/GUIDE.md).
 
 ## Summary
 
-Origin should evolve from a chat-first coding surface into a local-first personal operations app where users can define workflows, run them manually or automatically, and review all effects safely. The system must stay understandable for non-developers while preserving strong auditability and control.
+Origin should stop treating workflows as "a prompt that creates a session and happens to run some automation." A workflow should instead be a graph-first automation program with reusable local resources, reusable shared library items, explicit execution structure, and inspectable run history.
 
-This PRD defines a workflow-first model with:
+The authoring entrypoint should be AI-first. Users should usually start by describing the workflow they want to an agent. That agent should create and refine the workflow definition, supporting workflow-local resources, and shared library resources as needed. The primary editing surface should then be the workflow graph itself, with direct node editing and scoped AI editing available from the graph.
 
-- Local desktop execution only (no cloud runtime in this phase)
-- Single-user operation
-- JJ-tracked workspace state (changesets + operation log) for restorable user-facing changes
-- Database-backed runtime/control-plane state
-- Origin-only integrations/signals
-- Outbound draft review before external writes
-
-The product objective is to make automation powerful and reliable without exposing users to VCS complexity, conflict resolution mechanics, or unsafe external side effects.
+The execution entrypoint should be snapshot-first. Each run should execute one immutable fully resolved workflow snapshot and render the same workflow graph the user authored, but with live and historical results overlaid. Sessions remain valuable, but only as linked artifacts inside this model: builder chats, scoped node-edit chats, node execution transcripts, and run follow-up chats.
 
 ## Problem Statement
 
-Today, users can prompt agents in chat, but recurring and structured work lacks first-class primitives. There is no coherent model for:
+Origin's current workflow direction is still too session-first. The existing execution model assumes one top-level run session, the main history surfaces are centered on runs and operations rather than on the workflow graph, and the product does not yet distinguish clearly between:
 
-- Scheduled recurring execution
-- External-event-triggered execution
-- Reusable resources for workflows
-- Human review gates for outbound actions
-- Clear separation between "what changed on disk" and "what happened at runtime"
+- the workflow definition a user authored
+- the in-progress edits an agent makes while refining it
+- the exact immutable version that a run actually executed
 
-This leads to fragmented behavior, weak auditability, and unclear UX when automation grows beyond ad hoc chats. Users need predictable automation with understandable history and strong control over external effects.
+That produces the wrong mental model for real workflows. Users need to reason about scripts, agent requests, branches, loops, reusable resources, outputs, and retries as parts of one executable graph. A single session thread is not a sufficient container for that.
+
+This becomes more problematic as workflows become more capable:
+
+- one workflow may need multiple agent requests, not one main chat
+- multiple steps may run in parallel and touch overlapping files
+- one run may need retries, reconciliation, and partial reruns from a failed point
+- users need to inspect old runs against the exact graph that actually executed, even after the workflow changes later
+
+Without a graph-first model, Origin risks turning "workflow automation" into a collection of opaque chat sessions with weak explainability and poor reuse.
 
 ## Why This Matters
 
-Users want to:
+Users want automation they can trust and understand.
 
-- Capture intent once and rerun safely
-- See what changed and revert it easily
-- Trust that external integrations do not act without explicit control
-- Keep all behavior local, private, and inspectable
+They want to:
 
-If Origin provides this in a consumer-friendly way, it can become a dependable daily operations layer, not just a chat surface.
+- describe a workflow once and reuse it safely
+- inspect the structure of a workflow without reading a long chat transcript
+- click into any step and understand what code ran, what an agent was asked, and what happened
+- rerun only the failed portion of a workflow without losing the rest of the run context
+- reuse scripts, prompts, and queries across workflows without giving up local edits
+- understand the difference between the current workflow definition and the version that ran yesterday
+
+If Origin gets this right, workflows become a durable product surface rather than a thin wrapper around chat.
+
+## Inherited Platform Constraints
+
+This PRD does not replace the broader direction already established in earlier phases. The following remain true:
+
+- Origin remains desktop-first and local-first.
+- Runtime state remains database-backed.
+- File mutations remain JJ-tracked and restorable through the app's existing runtime model.
+- Outbound effects still route through the Draft and Dispatcher model.
+- Signals and integrations remain Origin-workspace capabilities, not standard-workspace capabilities.
+- The app can remain session-first overall outside the dedicated Workflows and Runs surfaces.
 
 ## Product Principles
 
-1. Local-first and explicit: no hidden cloud behavior.
-2. Workflow-first: triggerable structured units of automation.
-3. Safe outbound model: agent proposes drafts, user controls sending.
-4. Human-readable state: YAML and Markdown where appropriate.
-5. Auditability without overload: clean operation history plus run telemetry.
-6. Hidden complexity: advanced reconciliation/debug sessions run automatically.
-7. Strong boundaries: no cross-workspace access; integrations only in Origin workspace.
-8. Baseline preservation: existing accepted direction from phase `02` and phase `03` remains in effect unless a future phase spec explicitly supersedes it.
+1. Workflow-first, not session-first. The workflow graph is the primary unit of automation.
+2. AI-first authoring. The default way to build workflows is by talking to an agent with the right scoped context.
+3. One source of truth. The workflow file on disk is canonical. Graph editing, AI editing, and manual file editing all operate on the same underlying definition.
+4. Snapshot integrity. Every run executes one immutable fully resolved snapshot.
+5. Sessions as artifacts. Sessions are linked tools for authoring, execution detail, and follow-up, not the workflow container.
+6. Reuse without rigidity. Workflows may use local resources or shared library items, and AI may promote useful local resources into the shared library.
+7. Auditability without clutter. History should stay sparse and readable at the top level, with rich nested detail on demand.
+8. Desktop guardrails remain. Nothing in this workflow revamp expands Origin into cloud, multi-user, or web-first scope.
 
 ## Goals
 
-1. Enable users to create and run workflows via manual, cron, and signal triggers.
-2. Provide reusable Library resources (`query`, `script`, `prompt_template`) with clear "used by" relationships.
-3. Ensure file mutations are JJ-tracked, operation-linked, and restorable.
-4. Track all runtime activity in DB (`Runs`, `Drafts`, status/notifications).
-5. Prevent direct outbound side effects by default through a Drafts inbox.
-6. Keep non-origin workspaces useful but intentionally constrained.
-7. Keep UX simple for average users while retaining full traceability.
+1. Make workflows graph-first in both authoring and execution.
+2. Make AI the primary in-app workflow authoring and refinement path.
+3. Preserve manual file editing and direct graph editing as first-class escape hatches.
+4. Reuse the current session UI and runtime systems where they fit, especially for agent transcripts and detailed node inspection.
+5. Support immutable run snapshots, deterministic reruns, and deterministic parallel-branch reconciliation.
+6. Keep global history coherent by adding workflow-native history rather than replacing runs, operations, and drafts.
+7. Let workflows create and reuse shared library items freely, while making impact and usage visible.
 
 ## Non-Goals
 
-1. Cloud-hosted execution or remote control endpoints.
-2. Multi-user collaboration and shared ownership semantics.
-3. Cross-workspace read/write automation.
-4. Full sandboxing in this phase (noted as future requirement).
-5. Manual terminal-based VCS workflow support for end users.
-6. Best-effort fallback operation when DB is unavailable.
+1. Replacing the entire app shell with workflows as the default home surface.
+2. Cloud-hosted or multi-user workflow execution.
+3. Subworkflows, runtime-generated graph topology, or open-ended dynamic orchestration in v1.
+4. Interactive approval/input pause nodes in v1.
+5. Full sandboxing in this phase.
+6. A separate draft/publish model for workflow definitions in v1.
 
 ## Target Users
 
 ### Primary
 
 - Individuals using Origin as a local personal operations app.
-- Users who want automation power without needing deep VCS knowledge.
+- Users who want the power of automation but do not want to author everything manually.
 
 ### Secondary
 
-- Power users who inspect history, customize workflows/resources, and debug behavior.
+- Power users who will inspect run history deeply, edit workflow files directly, and curate reusable scripts, prompts, and queries.
 
 ## Scope by Workspace Type
 
 ### Origin Workspace
 
-The Origin workspace is the only workspace with integrations and signals.
+Origin workspaces support the full workflow model, including:
 
-Views:
+- manual workflows
+- cron and signal workflows when those trigger phases are implemented
+- integrations and outbound drafts
+- reusable shared library items
 
-- History
-- Drafts
-- Workflows
-- Library
-- Integrations
-- Calendar
-- Notes
-- Knowledge Base
+### Standard Workspace
 
-### Non-Origin Workspaces
+Standard workspaces keep the graph-first workflow model, but remain constrained by the earlier capability rules:
 
-Constrained local automation, no integrations/signals/outbound drafts.
+- no integrations
+- no signal triggers
+- no outbound drafts
+- no capability expansion beyond earlier approved phases
 
-Views:
-
-- History
-- Workflows
-- Library
-- Knowledge Base
-
-Workspace type is selected at creation (`origin` or `standard`) and is immutable in this phase.
-Workspace type must be visible in workspace settings.
-
-## Information Architecture
-
-## History
-
-Tabs:
-
-- Operations: app-level mutation history linked to JJ operation IDs and resulting changesets
-- Runs: all execution attempts and outcomes
-
-Operations and Runs must cross-link where relevant.
-Default `Operations` filter shows app-authored entries. A source toggle allows including user-authored entries.
-Minimum cross-link contract:
-- Operation rows linked to a run expose `Open run`.
-- Runs with file changes expose `Open operation`.
-- Runs that produced drafts expose `Open draft(s)`.
-
-## Drafts
-
-Tabs:
-
-- Pending
-- Processed
-
-Drafts represent outbound external actions proposed by agents and controlled by the user.
-
-## Core Concepts
+## Core Product Model
 
 ### Workflow
 
-A declarative automation definition with:
+A workflow is a graph-first YAML definition stored on disk. It orchestrates code execution, agent requests, branching, looping, validation, integration drafting, and reusable resources.
 
-- Trigger (`manual`, `cron`, `signal`)
-- Steps / instructions
-- References to Library resources
+### Workflow Revision
 
-Workflows are the top-level automation object.
+An immutable saved authored state of a workflow. A workflow has one live revision at a time.
+
+### Workflow Edit Session
+
+A session linked to exactly one workflow for authoring or refinement. One workflow edit session may create multiple checkpoints and may publish multiple live revisions over time.
+
+### Checkpoint
+
+A session-local recovery and compare point inside one workflow edit session. Checkpoints are not top-level history rows in v1.
+
+### Workflow-Local Resource
+
+A script, prompt, query, or other supporting artifact owned by a single workflow and stored alongside the workflow definition as sibling files.
+
+### Shared Library Item
+
+A reusable library resource available to multiple workflows, with `used by` visibility and its own history.
+
+### Run Snapshot
+
+The immutable fully resolved execution input for a run. It freezes the workflow revision, workflow-local resources, exact shared-library content, and the run input together.
 
 ### Run
 
-A single execution instance of a workflow or trigger context. Runs are DB records and always link to a chat session.
+One execution of one snapshot plus one input.
+
+### Run Node
+
+One executable graph item instance inside a run. Nodes include user-authored steps and system steps such as reconcile.
+
+### Session Artifact
+
+A linked session used for one specific role inside the workflow model:
+
+- `builder`
+- `node_edit`
+- `execution_node`
+- `run_followup`
 
 ### Operation
 
-A run may produce file mutations. If file changes exist, integration records one app operation for the full top-level run and links it to the corresponding JJ operation entry and resulting changeset IDs.
-
-### Library Resource
-
-Unified reusable resource registry with kinds:
-
-- `query`
-- `script`
-- `prompt_template`
-
-Availability:
-
-- Origin workspace: all kinds
-- Non-origin workspace: `script`, `prompt_template` only
+The existing runtime record for file-change effects remains. Operations should be attributable to specific run nodes when possible.
 
 ### Draft
 
-A DB record representing a proposed outbound integration action. User can edit, approve, send, reject, or open linked session.
-
-## Data and Storage Model
+The existing outbound proposal record remains. Drafts should also be attributable to specific run nodes when possible.
 
-## Source of Truth Split
+## Workflow Authoring Experience
 
-- JJ repository state: versioned changesets and operation log
-- JJ workspace state: working-copy content and workspace metadata
-- DB: runtime/control-plane state (runs, drafts, statuses, notifications, links)
-
-DB availability is mandatory. If DB is unavailable or corrupt, app enters blocking error state and cannot proceed.
-Blocking screen must provide these actions:
-- `Retry`
-- `Open diagnostics`
-- `Recovery steps`
-
-## Data Retention
-
-Retention is split to keep user history durable while bounding telemetry growth.
-
-- Core product data is retained without automatic expiry in this phase:
-  - workspaces, sessions, runs, operations, drafts, workflows, library resources, settings, linkage records
-- Audit/event logs are pruned with default retention of 30 days:
-  - lifecycle transitions, policy decisions, notification events, watchdog/debug events
-- Integration idempotency keys (`integration_attempt_id`) are retained for at least 90 days to avoid duplicate side effects after crashes/retries.
-
-## File Layout
-
-- `.origin/workflows/*.yaml`
-- `.origin/library/*.yaml`
-- `.origin/knowledge-base/**`
-- `calendar/YYYY-MM.yaml` (Origin workspace only)
-- `notes/**/*.md` (Origin workspace only)
-
-All YAML definitions include `schema_version`.
-
-## JJ Runtime Behavior (App-Managed)
-
-- The app bundles and uses a pinned `jj` runtime for all product operations. Runtime behavior must not depend on users having `jj` installed globally.
-- Auto-bootstrap JJ metadata in workspaces:
-  - If workspace already has JJ metadata, do nothing.
-  - If workspace has `.git` but no JJ metadata, initialize JJ in colocated mode without modifying existing git history.
-  - If workspace has no VCS metadata, initialize JJ metadata in place without requiring terminal setup.
-- Identity write rules (JJ config, repo/workspace-local scope only):
-  - If both are missing, set `user.name=origin` and `user.email=origin@local`.
-  - If only one field is missing, set only the missing field.
-  - Never overwrite existing local identity values.
-  - Never write user/global config.
-- Create Operations entries only when file content changed.
-- No-change runs do not create Operations entries.
-- User-authored and app-authored history entries appear in Operations with filtering.
-
-## Operation Metadata
-
-Canonical operation linkage fields are stored in DB and linked to JJ identifiers:
-
-- `operation_id`
-- `session_id`
-- `run_id`
-- `trigger_type`
-- `workspace_id`
-- `workflow_id` (when applicable)
-- `integration_attempt_id`
-- `ready_for_integration_at` (immutable after first enqueue)
-- `jj_base_change_id`
-- `jj_result_change_ids`
-- `jj_operation_ids` (ordered append-only list in execution order)
-- `jj_operation_phases` (same-length ordered phase labels for `jj_operation_ids`)
-- `jj_commit_ids`
-- `changed_paths`
-- `source_operation_id` (when operation reverts a prior operation)
-- `integration_head_change_id_before_apply`
-- `integration_head_change_id_after_apply`
-
-ID format: UUIDv7.
-
-## State Models
-
-Canonical status values are explicit and shared across UI and runtime.
-
-- `run.status`: `queued`, `running`, `validating`, `ready_for_integration`, `integrating`, `reconciling`, `cancel_requested`, `completed`, `completed_no_change`, `failed`, `canceled`, `skipped`
-- `operation.status`: `completed`, `reverted`
-- `draft.status`: `pending`, `blocked`, `approved`, `auto_approved`, `sent`, `rejected`, `failed`
-
-Tab mapping:
-
-- Drafts > Pending includes `pending`, `blocked`, `approved`, and `auto_approved`.
-- Drafts > Processed includes `sent`, `rejected`, and `failed`.
-
-## Audit Event Baseline
-
-Audit events are DB records distinct from core product entities.
-
-Required categories in this phase:
-
-- run lifecycle transitions
-- integration attempt lifecycle
-- reconciliation/debug watchdog notifications and terminal outcomes
-- draft lifecycle transitions
-- policy decisions for auto-approve and destination/action constraints
-- outbound dispatch attempt/result
-- security-impacting setting changes (for example auto-approve toggles)
-
-Required fields per event:
-
-- `event_id`
-- `occurred_at`
-- `workspace_id`
-- `session_id`
-- `run_id` (when applicable)
-- `operation_id` (when applicable)
-- `draft_id` (when applicable)
-- `integration_id` (when applicable)
-- `integration_attempt_id` (when applicable)
-- `actor_type` (`system` or `user`)
-- `event_type`
-- `event_payload`
-- `policy_id` (required for policy/dispatch events)
-- `policy_version` (required for policy/dispatch events)
-- `decision_id` (required for policy/dispatch events)
-- `decision_reason_code` (required for policy/dispatch events)
-
-`event_payload` must follow a typed per-event schema and must not include raw secrets/tokens.
-
-## Revert and Restore Semantics
-
-- User-facing `Revert changes` in Operations creates a new app operation by applying the inverse delta of the selected operation in the active workspace (default primitive is JJ revision-level revert semantics).
-- User-facing label and helper copy remain non-technical: `Revert changes` means "Creates a new operation that reverses these file changes."
-- Revert target set is deterministic: the runtime derives the revision list from `source_operation_id` and applies inverse changes in original integration apply order.
-- Default user revert path must not use JJ operation-level commands (`jj op restore`, `jj op revert`, `jj undo`).
-- JJ operation-level commands are internal recovery tools and are not the default user-facing revert mechanism.
-- A separate optional action `Restore files` may use file/path-scoped restore semantics for explicit file restoration flows.
-- If target state is dirty or revert cannot apply cleanly, route to debug flow and expose explicit actions: `Open debug session` and `Stop and report`.
-
-## Execution Model
-
-## Orchestration
-
-- Entry begins with base orchestration agent.
-- Trigger-specific runs inject additional system context.
-- Subagent delegation is encouraged.
-- Every workflow run opens a new chat session thread.
-
-## Mutable Run Lifecycle
-
-1. Run starts and executes in isolated JJ workspace.
-2. Agent performs work.
-3. End-of-run validation runs.
-4. If validation fails, same session receives fix prompt and retries.
-5. If final output has file changes, create integration-ready JJ changeset state for that run.
-6. Integration gate applies one operation at a time per workspace.
-7. If success, operation is recorded in History > Operations.
-8. Run finalization always performs run-workspace cleanup.
-
-Run-workspace cleanup rules:
-
-- Cleanup runs in session finalization for all terminal outcomes (`completed`, `completed_no_change`, `failed`, `canceled`, `skipped`).
-- Successful integration triggers immediate cleanup for that run workspace.
-- App startup runs a janitor pass that removes orphaned temporary run workspaces not linked to active DB runs.
-- Cleanup must remove JJ workspace metadata first (equivalent to `jj workspace forget`) before deleting run workspace paths.
-- Cleanup is idempotent: missing workspace metadata/path is treated as success and logged as warning telemetry.
-- If cleanup still fails, record `cleanup_failed` and retry in startup janitor.
-
-## Concurrency and Reconciliation
-
-- Workflow runs execute in parallel by default in isolated JJ workspaces.
-- Integration is serialized per workspace.
-- Integration queue order is FIFO by immutable `ready_for_integration_at`.
-- If two runs share the same timestamp, tie-break order is lexical `run_id`.
-- Retries and reconciliation must not rewrite `ready_for_integration_at`.
-- On app restart, queued `ready_for_integration` runs resume in preserved FIFO order.
-- If a run is canceled before integration starts, it is removed from integration queue.
-- Atomic integration boundary is: JJ integration mutation + DB operation linkage commit.
-- Integration attempt identity is created before integration mutation starts (`integration_attempt_id`) and reused for retries/recovery of the same logical attempt.
-- (`run_id`, `integration_attempt_id`) must be unique.
-- If app restarts during an in-flight integration, startup reconciliation resumes that same integration attempt atomically before processing next queued entries.
-- If crash happens after JJ mutation but before DB finalize, startup recovery must finalize linkage for the same `integration_attempt_id` and must not apply a second integration mutation.
-- Stale-base is detected when integration head differs from `integration_head_change_id_before_apply` at apply time.
-- One mechanical stale-base replay retry is allowed and remains inside the same logical integration attempt (`replay_index` increments on replay) via `workspace update-stale` then re-apply.
-- If stale-base replay is exhausted, run fails with `failure_code=stale_base_replay_exhausted`.
-- Draft dispatch for the same logical integration attempt must be idempotent (no duplicate external side effects for one successful logical attempt).
-- If cancel is requested after integration starts, current integration completes atomically; cancellation applies to subsequent run phases only.
-- If file-level conflicts remain, automatic hidden reconciliation session attempts to resolve and complete integration.
-- If reconciliation cannot safely merge changes, run terminates with `failed` and failure code `reconciliation_failed`.
-- Reconciliation failure must not silently continue; it must expose explicit user actions: `Open debug session` and `Stop and report`.
-- Reconciliation monitoring in this phase is time-based only. No heuristic "progress scoring" is required.
-- Reconciliation complexity remains abstracted from standard users.
-- Reconciliation runs are categorized as debug runs.
-- By default, debug runs are excluded from the primary `Runs` list and represented as a compact hidden-count indicator.
-- Enabling `Show Debug Sessions` reveals full debug/reconciliation run entries, including status, touched files, and outcomes.
-
-Cancellation outcomes by phase:
-
-- `queued`, `running`, `validating`, `ready_for_integration`: immediate transition to `canceled`.
-- `integrating`, `reconciling`: transition to `cancel_requested`, allow current atomic step to finish. If operation linkage was committed, final status is `completed` with `cancel_requested_after_integration_started=true`; otherwise final status is `canceled`.
-- If timeout and cancel race, first persisted terminal transition wins; the later event is logged as no-op.
-
-## Long-Running Debug Sessions
-
-Hidden dev/debug sessions (including reconciliation) are monitored by elapsed time only.
-
-- Default threshold: 15 minutes (user-configurable)
-- Reminder cadence after keep-running: every 10 minutes
-- Default hard stop: 45 minutes elapsed (user-configurable)
-- Notification actions:
-  - Open debug session
-  - Keep running
-  - Stop and report
-
-`Keep running` acknowledges the current reminder and keeps the same run active. It does not bypass hard-stop policy.
-Reminder text must include remaining time until hard stop.
-
-Hard-stop behavior:
-
-- When hard stop is reached, run transitions to `failed` with `failure_code=reconciliation_timeout`.
-- Hard stop is elapsed-time based in this phase and does not depend on heuristic progress signals.
-
-Stop and report supports optional send-to-developers flow.
-
-Default report payload is metadata-only; prompt/file content requires explicit user consent.
-Send-to-developers flow must show field-level preview before final consent.
-Report payload uses an explicit allowlist and excludes non-allowlisted fields by default.
-Report destinations are allowlisted by integration configuration and cannot be overridden by consent UI.
+### AI-First Builder
 
-Suggested report artifact path:
+The default way to create a workflow should be:
 
-- `.origin/reports/<timestamp>-<operation-id>.zip`
+1. User chooses `Build workflow with AI`.
+2. Origin opens a workflow builder surface with chat and a live graph.
+3. The agent gathers relevant workflow and library context lazily.
+4. The agent creates or edits the workflow file and supporting resources.
+5. The graph updates after each applied save/checkpoint.
 
-Debug/reconciliation runs are hidden by default in `Runs` and can be included via filtering.
-`Show Debug Sessions` setting defines default filter state; users can still toggle the filter in-view for the current session.
-`Open debug session` actions from notifications must auto-enable debug visibility for that view and focus the target run/session.
+This is not a separate toy builder. It should create the real workflow definition and real resources on disk.
 
-## Trigger Semantics
+### Graph-Primary Editing
 
-## Manual Trigger
+The workflow page should be graph-primary, not chat-primary. Chat is docked into the workflow page and supports continued refinement, but the graph remains the main authoring surface.
 
-User-invoked workflow execution.
+Users should be able to:
 
-## Cron Trigger
+- click a node and inspect its details
+- edit node configuration directly
+- add, delete, and reconnect nodes for basic structural edits
+- ask AI to modify a node or the whole workflow
+- keep working in the original builder session or open new scoped edit sessions
 
-- Uses user timezone
-- Missed runs default to skip + notify
-- Missed cron slots create a skipped run record in `Runs` with explicit reason metadata.
-- Retry default: max 3 with exponential backoff (base 5s, jitter 20%)
-- Retry classification:
-  - retryable: transient runtime and integration transport failures
-  - non-retryable: validation/schema/configuration/policy failures
+### AI and Manual Editing Should Converge
 
-## Signal Trigger
+Manual file edits, direct graph edits, and AI edits must all converge on the same canonical workflow file and related resource files. Origin must not create separate hidden workflow states depending on how the user edited.
 
-- Origin workspace only
-- No backfill on enable (new events only)
-- Requires event dedupe keys (provider event ID/hash) in DB
-- Dedupe uniqueness key: `(workspace_id, integration_id, provider_event_id_or_hash)`
-- Dedupe retention minimum: 30 days.
-- If provider event ID is missing, fallback key is SHA-256 over adapter-defined canonical JSON fields.
-- Duplicate signals do not create a new run; they log deterministic `duplicate_event` outcome.
-- Duplicate outcomes must be visible in `Runs` as non-error event rows (`Ignored duplicate signal`) with drill-down details.
-- Duplicate-event rows are excluded from run-execution counters.
+Workflow edit sessions are intent-scoped to one workflow, not sandboxed to workflow files. They may still touch other workspace files, and workflow edit history should surface those broader effects explicitly.
 
-## Drafts and Outbound Safety Model
+### Save Model
 
-Outbound writes to integrations do not execute directly from agent reasoning.
+In v1, `save == live`. There is no separate draft/publish concept for workflow definitions.
 
-Instead:
+Workflow edit sessions may still create internal checkpoints, but future runs use the latest saved live revision.
 
-1. Agent creates draft with integration metadata.
-2. Draft appears in Drafts > Pending.
-3. User may edit, approve (ready-to-send), send now, reject, or open linked session.
-4. After handling with terminal outcome (`sent`, `rejected`, `failed`), draft appears in Drafts > Processed (no expiry).
+### Runs Start From Live Revisions in V1
 
-Per-integration auto-approve exists as a user setting, default OFF.
-Auto-approve is constrained by integration policy rules (allowed action classes and destination constraints) defined per integration adapter.
-Auto-approved items enter `auto_approved` state in Pending, then move to Processed only after dispatch reaches a terminal outcome.
-If auto-approve is enabled but policy rules reject the action/destination, draft remains in `Pending` with machine-readable block reason `policy_blocked`, and no external write occurs.
-If policy evaluation cannot complete, decision is default-deny (`blocked`) and no external write occurs.
+In v1, runs should start from live revisions only. Checkpoints are for recovery, comparison, and nested history inside the workflow edit session. They are not alternate runnable drafts in v1.
 
-`blocked` status means the draft cannot be sent yet due to a resolvable gate, such as:
+## Resource Model
 
-- integration auth disconnected/expired
-- destination disallowed by adapter policy
-- payload/schema validation failure
-- integration temporarily disabled
+### Local and Shared Resources
 
-Blocked drafts remain user-visible with reason and recovery action.
+Nodes may reference either:
 
-Draft lifecycle and edits are logged as DB events.
+- workflow-local resources
+- shared library items
 
-Approval invalidation:
+The default behavior should be pragmatic:
 
-- Material edits to destination, action class, or payload after `approved`/`auto_approved` reset draft state to `pending` and require policy re-evaluation.
+- AI should inspect relevant shared library items before creating new resources.
+- AI may create workflow-local resources when reuse is not obvious.
+- AI may promote local resources into the shared library when reuse looks likely.
+- Shared library items remain live dependencies for future runs.
+- Old runs remain frozen because the run snapshot stores exact shared-library content.
 
-Outbound dispatch invariants:
-
-- External writes must originate from Draft records only.
-- Sender dispatch is allowed only from `approved` or `auto_approved`.
-- Dispatch from `pending`, `blocked`, `rejected`, or `failed` is rejected.
-- Policy decision metadata is persisted with the draft event trail (`policy_id`, `policy_version`, `decision_id`, `decision_reason_code`).
-- Dispatch performs revalidation at send time (policy, destination/action constraints, integration enabled-state, and auth health). Revalidation failures fail closed to `blocked`.
-- Draft create/approve/dispatch in non-Origin workspaces is rejected with deterministic reason code `workspace_policy_blocked`.
-- Runtime egress policy is strict: managed integration endpoints accept writes only from dispatcher calls that include valid `draft_id` and `integration_attempt_id`; direct agent/tool outbound writes are rejected.
-- Non-Origin outbound rejections must surface as visible `Runs` outcomes with remediation hint.
+### Shared Resource Editing
 
-## Validation and Repair
+When a user edits a shared resource from a workflow node, Origin should surface `used by` and offer:
 
-## Agent-Originated Changes
+- edit the shared item
+- create a workflow-local copy
 
-- Validation always runs at end of run.
-- If invalid, same session is prompted to repair automatically before completion.
+AI may directly edit shared library items when it judges that a shared change is the correct outcome, but those edits must be explicit in history and library item detail views.
 
-## User-Originated Manual Edits
+## Execution Experience
 
-- Validation is debounced.
-- Invalid state is surfaced clearly.
+### First-Class V1 Node Types
 
-## Runtime Behavior on Invalid Definitions
+V1 workflow graphs should support:
 
-- Invalid workflow/resource at trigger time: skip run, notify user, log reason in Runs.
-- Non-origin workspaces enforce strict capability boundaries. Unsupported config is invalid and non-runnable.
-- Unsupported options are hidden in non-origin authoring UI, and manually edited invalid configs are surfaced as explicit validation errors.
+- script/code execution
+- agent request
+- condition/branch
+- parallel block
+- loop block
+- validation/end
+- integration draft/send action where allowed by existing outbound rules
 
-## Validation Surface
+V1 should not support interactive approval/input pause nodes, subworkflows, or runtime-generated nodes.
 
-Fast checks only in this phase:
+### Same Graph for Design and Run
 
-- YAML parsing
-- Schema shape checks
-- Reference integrity checks
-- Required file existence checks
+The run page should render the same graph structure as the design page, but with runtime results overlaid:
 
-## Knowledge Base Behavior
+- status
+- outputs
+- logs
+- transcripts
+- artifacts
+- timings
+- retries
+- failures
+- skipped paths
 
-- Imported resources are copied inside workspace under `.origin/knowledge-base/**`.
-- On path/name collision: prompt with `Replace`, `Create copy`, or `Cancel`.
-- For non-interactive automated runs (`cron`, `signal`), collision handling must not block for user input. Default policy is deterministic `Create copy` plus notification.
+Unreached or skipped paths should remain visible but dimmed with reasons such as `not taken`, `upstream failed`, or `downstream invalidated`.
 
-## Library and Reference Rules
+### Rerun Behavior
 
-- Workflows may reference Library resources.
-- Deleting a referenced resource is blocked until usage is removed.
-- Broken references should surface deterministic validation errors and a clear action to open a repair session.
+V1 rerun actions should be:
 
-## Settings
+- `Rerun workflow`
+- `Rerun from here`
 
-Required settings introduced or clarified by this PRD:
+`Rerun from here` means:
 
-1. Debug session visibility:
-   - `Show Debug Sessions`
-2. Long-running debug threshold:
-   - Default 15 minutes, configurable
-3. Long-running debug hard stop:
-   - Default 45 minutes, configurable
-4. Integration auto-approve:
-   - Per integration, default OFF
+- create a new run
+- reuse the same workflow snapshot and same input
+- keep valid upstream results
+- invalidate downstream dependents
+- recompute from the selected failed node or block forward
 
-Settings constraints in this phase:
+### Parallel Mutation Model
 
-- Debug threshold allowed range: 1..120 minutes.
-- Debug hard-stop allowed range: 5..240 minutes.
-- Invariant: `hard_stop >= threshold + 1 minute`.
+Parallel branches may both mutate files, including overlapping files. Prompt guidance alone is not sufficient for correctness.
 
-## UX Requirements
+The runtime model should instead be:
 
-1. Keep standard user surfaces non-technical.
-2. Hide debug/reconciliation sessions by default.
-3. Provide linked navigation between History, Runs, Drafts, Sessions, and JJ-linked operation/change records.
-4. Preserve clear distinction:
-   - Operations: "what changed on disk"
-   - Runs: "what executed"
-   - Drafts: "what can be sent externally"
+- each parallel branch starts from the same base snapshot
+- each branch executes in isolation
+- an implicit join happens at the end of the block
+- one reconcile pass runs on merge conflict
+- if reconcile fails, the block fails deterministically
 
-## Security and Trust Guardrails
+Reconcile should appear as a visible system node in the run graph.
 
-1. Integrations/signals only in Origin workspace.
-2. No cross-workspace access.
-3. Agents never read raw integration API keys. Integration calls are brokered by backend adapters that hold credentials and expose only operation APIs to agents.
-4. Outbound integration writes are controlled through drafts.
-5. Sandboxing is acknowledged as important and explicitly planned later.
-6. Monitoring/polling reads over JJ for runtime telemetry must use read-only invocation patterns to avoid unintended working-copy snapshots.
-7. Integration credentials are stored only in OS secure secret storage and are never persisted in workspace files, JJ history, core DB rows, draft payloads, or report artifacts.
-8. Secrets must be redacted from diagnostics, crash dumps, agent-visible tool output, and exported report payloads.
-9. Runtime polling/telemetry commands must use canonical read-only JJ flags (`--ignore-working-copy --at-op=@`) where supported.
+### Inputs
 
-## Standard Failure Codes
+Manual runs should support typed inputs in v1. The initial set should stay simple:
 
-This phase standardizes these machine-readable outcome codes:
+- text
+- long text
+- number
+- boolean
+- select
+- file/path pick
 
-- `reconciliation_failed`
-- `reconciliation_timeout`
-- `stale_base_replay_exhausted`
-- `cleanup_failed`
-- `dispatch_revalidation_failed`
-- `duplicate_event`
-- `workspace_policy_blocked`
+## Sessions and Visibility
 
-## Success Metrics
+Sessions remain valuable, but not as the workflow container.
 
-## Product Health
+Recommended session roles:
 
-1. Share of runs that complete without manual intervention.
-2. Share of outbound actions routed through Drafts before send.
-3. Time-to-resolution for invalid configuration states.
-4. Rate of successful restore flows from Operations.
-Metric targets, windows, and pass/fail thresholds are defined in numbered phase specs, not in this PRD.
+- `builder`
+- `node_edit`
+- `execution_node`
+- `run_followup`
 
-## UX Quality
+Visibility should be role-based, not derived from `parent_id`.
 
-1. Reduction in user confusion between run state vs file state.
-2. Percentage of users who can locate and act on pending drafts without guidance.
-3. Drop in visible conflict complexity exposed to non-debug users.
-Quantitative UX targets are defined in numbered phase specs.
+- `builder` and `node_edit` sessions are workflow-local by default.
+- `execution_node` sessions are run-local by default and open from node detail.
+- `run_followup` is persistent per run and opens from the run page.
+- Power users may still open any linked session in the normal session view.
 
-## Risks and Mitigations
+## Navigation and History
 
-1. Complexity creep from automation features.
-Mitigation: strict workspace boundaries, workflow-first model, hidden debug complexity.
+### Primary Surfaces
 
-2. JJ operation-log/DB divergence concerns.
-Mitigation: explicit split of responsibilities, startup reconciliation checks, and strong metadata linking.
+The app may remain session-first overall, but workflows need dedicated graph-first surfaces:
 
-3. Integration duplicate events.
-Mitigation: required event dedupe keys in DB.
+- `/:dir/workflows/:workflowId`
+- `/:dir/runs/:runId`
+- `/:dir/library/:itemId`
 
-4. Invalid hand-edited YAML.
-Mitigation: debounced validation, visible errors, and strict non-runnable handling for invalid definitions.
+### Workflow Page
 
-5. Outbound safety regressions.
-Mitigation: Drafts model, default auto-approve OFF, explicit user control.
+Workflow detail should default to `Design` and include:
 
-## Rollout Guidance
+- `Design`
+- `Runs`
+- `Edit History`
+- `Resources`
 
-Implement in incremental phases mapped to specs, with each phase maintaining:
+### Run Page
 
-- Clear acceptance criteria
-- Validation commands for touched packages
-- Direction updates when scope boundaries change
-- Extremely thorough e2e coverage for all new/changed user-facing behavior
+Run detail should default to graph + summary. Node detail should open in a side panel and be deep-linkable by URL.
 
-Acceptance criteria and validation are the highest-priority correctness gate in phase specs. New features are not complete without objective, reproducible validation, including e2e tests for happy path, regression path, and negative/error path behavior.
+### History
 
-This PRD should act as the functional and UX baseline for those specs.
+Global history should keep:
 
-When phase specs discuss JJ operations, changesets, snapshots, or checkpoints, wording must describe app runtime behavior only. Specs must not instruct implementation agents to run VCS history-editing commands or create contribution commits as part of development workflow unless explicitly requested for a code contribution task.
+- `Runs`
+- `Operations`
+- `Drafts`
 
-## Final Scope Boundary Recap
+And add:
 
-Included now:
+- `Workflow Edits`
 
-- Workflow-first automation
-- Origin-only integrations/signals
-- Unified Library
-- Drafts outbound flow
-- History split into Operations and Runs
-- Hidden automatic reconciliation/debug handling
+Workflow edit history should be one top-level row per workflow edit session, with checkpoints nested inside the detail view for that session.
 
-Explicitly later:
+## Notifications
 
-- Cloud endpoint operation
-- Full sandboxing model
-- Multi-user collaboration
+Long-running or completed workflow execution notifications should deep-link to the workflow or run surface, not to hidden execution sessions.
+
+## Safety and Invariants
+
+1. The workflow file on disk is canonical.
+2. Every run executes one immutable fully resolved snapshot.
+3. Past runs never silently adopt later workflow edits or later shared-library edits.
+4. Workflow runs do not rewrite workflow definitions or library items by default.
+5. `save == live` in v1 for workflow definitions.
+6. One workflow edit session may publish multiple live revisions over time.
+7. History stays sparse at the top level and detailed on drill-down.
+8. The app continues to reuse existing session, runtime, draft, and JJ foundations where they still fit.
+
+## Success Measures
+
+This direction succeeds when:
+
+- users can create and refine workflows primarily through the graph-first workflow surface instead of ad hoc chat-only flows
+- users can inspect a run without needing one main session transcript to understand it
+- rerun and recovery behavior is understandable at the graph level
+- shared-library reuse grows without making library ownership opaque
+- workflow edit history remains readable even when AI creates multiple internal checkpoints
+
+## Deferred Scope
+
+The following are intentionally deferred after this PRD:
+
+- interactive approval/input pause nodes
+- subworkflows
+- runtime-generated graph topology
+- full visual rule-builder authoring for conditions
+- full sandboxing and permission profiles
+
+Deferred details remain tracked in [FUTURE_DESIGN_NOTES.md](/Users/polarzero/code/projects/origin/docs/drafts/FUTURE_DESIGN_NOTES.md).
