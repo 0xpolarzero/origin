@@ -8,6 +8,7 @@ import { Snapshot } from "@/snapshot"
 
 import { Storage } from "@/storage/storage"
 import { Bus } from "@/bus"
+import { NotFoundError } from "@/storage/db"
 
 export namespace SessionSummary {
   function unquoteGitPath(input: string) {
@@ -82,7 +83,7 @@ export namespace SessionSummary {
 
   async function summarizeSession(input: { sessionID: string; messages: MessageV2.WithParts[] }) {
     const diffs = await computeDiff({ messages: input.messages })
-    await Session.setSummary({
+    const updated = await Session.setSummary({
       sessionID: input.sessionID,
       summary: {
         additions: diffs.reduce((sum, x) => sum + x.additions, 0),
@@ -90,6 +91,12 @@ export namespace SessionSummary {
         files: diffs.length,
       },
     })
+      .then(() => true)
+      .catch((error) => {
+        if (NotFoundError.isInstance(error)) return false
+        throw error
+      })
+    if (!updated) return
     await Storage.write(["session_diff", input.sessionID], diffs)
     Bus.publish(Session.Event.Diff, {
       sessionID: input.sessionID,
@@ -101,7 +108,8 @@ export namespace SessionSummary {
     const messages = input.messages.filter(
       (m) => m.info.id === input.messageID || (m.info.role === "assistant" && m.info.parentID === input.messageID),
     )
-    const msgWithParts = messages.find((m) => m.info.id === input.messageID)!
+    const msgWithParts = messages.find((m) => m.info.id === input.messageID)
+    if (!msgWithParts || msgWithParts.info.role !== "user") return
     const userMsg = msgWithParts.info as MessageV2.User
     const diffs = await computeDiff({ messages })
     userMsg.summary = {

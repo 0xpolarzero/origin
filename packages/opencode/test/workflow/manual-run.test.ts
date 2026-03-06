@@ -691,6 +691,60 @@ describe("workflow automated run orchestration", () => {
     })
   })
 
+  test("retryable cron failures exhaust after three attempts and preserve cron metadata", async () => {
+    await using dir = await tmpdir({ git: true })
+
+    let attempts = 0
+
+    await Instance.provide({
+      directory: dir.path,
+      fn: async () => {
+        seed("wrk_auto", dir.path)
+
+        await WorkspaceContext.provide({
+          workspaceID: "wrk_auto",
+          fn: async () => {
+            WorkflowManualRun.Testing.set({
+              ...seams(),
+              execute: async () => {
+                attempts += 1
+                throw new Error("boom")
+              },
+            })
+
+            const run = await WorkflowAutoRun.start({
+              workflow: {
+                id: "auto_retryable_cron",
+                name: "Auto Retryable Cron",
+                instructions: "run",
+              },
+              trigger_type: "cron",
+              trigger_id: "cron:retryable",
+              trigger_metadata_json: {
+                source: "cron",
+                slot_utc: 1,
+              },
+            })
+            const done = await WorkflowManualRun.wait({ run_id: run.id, timeout_ms: 5000 })
+
+            expect(done.status).toBe("failed")
+            expect(done.failure_code).toBe("transient_runtime_error")
+            expect(done.reason_code).toBe("retry_exhausted")
+            expect(done.trigger_metadata).toEqual({
+              source: "cron",
+              slot_utc: 1,
+            })
+            expect(attempts).toBe(3)
+
+            const sessions = Database.use((db) => db.select().from(SessionTable).all())
+            expect(sessions).toHaveLength(1)
+            expect(done.session_id).toBe(sessions[0]?.id ?? null)
+          },
+        })
+      },
+    })
+  })
+
   test("non-retryable automated failures do not retry and persist non_retryable reason", async () => {
     await using dir = await tmpdir({ git: true })
 

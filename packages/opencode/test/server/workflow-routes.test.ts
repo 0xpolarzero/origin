@@ -7,6 +7,7 @@ import { WorkspaceContext } from "../../src/control-plane/workspace-context"
 import { WorkspaceTable } from "../../src/control-plane/workspace.sql"
 import { JJ } from "../../src/project/jj"
 import { Instance } from "../../src/project/instance"
+import { RuntimeDispatchAttempt } from "../../src/runtime/dispatch-attempt"
 import { RuntimeOutbound } from "../../src/runtime/outbound"
 import { RuntimeRun } from "../../src/runtime/run"
 import { DraftTable, IntegrationAttemptTable, RunTable } from "../../src/runtime/runtime.sql"
@@ -14,6 +15,7 @@ import { SessionTable } from "../../src/session/session.sql"
 import { Database, eq } from "../../src/storage/db"
 import { Server } from "../../src/server/server"
 import { Log } from "../../src/util/log"
+import { WorkflowIntegrationQueue } from "../../src/workflow/integration-queue"
 import { WorkflowManualRun } from "../../src/workflow/manual-run"
 import { WorkflowTriggerEngine } from "../../src/workflow/trigger-engine"
 import { resetDatabase } from "../fixture/db"
@@ -22,7 +24,10 @@ import { tmpdir } from "../fixture/fixture"
 Log.init({ print: false })
 
 type ExecuteItem = {
+  phase: string
+  directory: string
   abort: AbortSignal
+  session_id?: string | null
 }
 
 async function write(root: string, file: string, content: string) {
@@ -99,6 +104,7 @@ function integrating(workspace_id: string, directory: string) {
 
 beforeEach(async () => {
   await resetDatabase()
+  WorkflowIntegrationQueue.Testing.reset()
   WorkflowManualRun.Testing.reset()
   WorkflowTriggerEngine.Testing.reset()
   RuntimeOutbound.Testing.reset()
@@ -106,6 +112,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await resetDatabase()
+  WorkflowIntegrationQueue.Testing.reset()
   WorkflowManualRun.Testing.reset()
   WorkflowTriggerEngine.Testing.reset()
   RuntimeOutbound.Testing.reset()
@@ -337,6 +344,87 @@ describe("workflow/library routes", () => {
         expect(canceled.status).toBe("canceled")
         const done = await WorkflowManualRun.wait({ run_id: started.id, timeout_ms: 5000 })
         expect(done.status).toBe("canceled")
+      },
+    })
+  })
+
+  test("manual run start flows through integration and history routes with linked records", async () => {
+    await using dir = await tmpdir({ git: true })
+
+    await write(
+      dir.path,
+      ".origin/workflows/basic.yaml",
+      [
+        "schema_version: 1",
+        "id: basic",
+        "name: Basic",
+        "trigger:",
+        "  type: manual",
+        "instructions: ok",
+      ].join("\n"),
+    )
+
+    await Instance.provide({
+      directory: dir.path,
+      fn: async () => {
+        seed("wrk_manual", dir.path)
+        WorkflowIntegrationQueue.Testing.set({
+          head: async ({ run }) => run.integration_candidate_base_change_id,
+          apply: async ({ run }) => ({
+            head_after: run.integration_candidate_base_change_id,
+          }),
+        })
+        WorkflowManualRun.Testing.set(
+          seams({
+            execute: async (item) => {
+              if (item.phase !== "initial") return
+              await write(item.directory, "notes/result.md", "changed")
+            },
+          }),
+        )
+
+        const app = Server.App()
+        const query = `?directory=${encodeURIComponent(dir.path)}&workspace=wrk_manual`
+        const start = await app.request(`/workflow/run/start${query}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            workflow_id: "basic",
+            trigger_id: "route-history",
+          }),
+        })
+        expect(start.status).toBe(200)
+        const started = (await start.json()) as { id: string }
+
+        await WorkflowManualRun.wait({ run_id: started.id, timeout_ms: 5000 })
+        await WorkflowIntegrationQueue.Testing.drain({ timeout_ms: 5000 })
+        const current = await app.request(`/workflow/run/${started.id}${query}`, {
+          method: "GET",
+        })
+        expect(current.status).toBe(200)
+        const done = (await current.json()) as { status: string }
+        expect(done.status).toBe("completed")
+
+        const runs = await app.request(`/workflow/history/runs${query}`, {
+          method: "GET",
+        })
+        expect(runs.status).toBe(200)
+        const runs_body = (await runs.json()) as { items: Array<Record<string, unknown>> }
+        const run = runs_body.items.find((item) => item.id === started.id)
+        expect(run?.operation_exists).toBe(true)
+        expect(typeof run?.operation_id).toBe("string")
+
+        const operations = await app.request(`/workflow/history/operations${query}`, {
+          method: "GET",
+        })
+        expect(operations.status).toBe(200)
+        const operations_body = (await operations.json()) as { items: Array<Record<string, unknown>> }
+        const operation = operations_body.items.find((item) => item.run_id === started.id)
+        expect(operation?.run_exists).toBe(true)
+        expect(operation?.status).toBe("completed")
+        expect(operation?.id).toBe(run?.operation_id)
       },
     })
   })
@@ -704,6 +792,148 @@ describe("workflow/library routes", () => {
             },
           )
           expect(wrong.status).toBe(404)
+        },
+      })
+    } finally {
+      if (prior === undefined) delete process.env.OPENCODE_TEST_HOME
+      else process.env.OPENCODE_TEST_HOME = prior
+    }
+  })
+
+  test("draft send route dedupes retries and recovers remote-accepted attempts without duplicate writes", async () => {
+    await using home = await tmpdir({
+      init: async (root) => {
+        const directory = path.join(root, "Documents", "origin")
+        await mkdir(directory, { recursive: true })
+        await $`git init`.cwd(directory).quiet()
+        await $`git commit --allow-empty -m "root commit ${directory}"`.cwd(directory).quiet()
+        return {
+          directory,
+        }
+      },
+    })
+
+    const prior = process.env.OPENCODE_TEST_HOME
+    process.env.OPENCODE_TEST_HOME = home.path
+    try {
+      await Instance.provide({
+        directory: home.extra.directory,
+        fn: async () => {
+          seed("wrk_drafts", home.extra.directory)
+
+          const app = Server.App()
+          const query = `?directory=${encodeURIComponent(home.extra.directory)}&workspace=wrk_drafts`
+          const control = {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              actor_type: "user",
+            }),
+          } as const
+
+          const created = await app.request(`/workflow/drafts${query}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              source_kind: "user",
+              integration_id: "test/default",
+              adapter_id: "test",
+              action_id: "message.send",
+              target: "channel://general",
+              payload_json: {
+                text: "hello",
+              },
+              payload_schema_version: 1,
+              actor_type: "user",
+            }),
+          })
+          const draft = (await created.json()) as { id: string }
+
+          const approved = await app.request(`/workflow/drafts/${draft.id}/approve${query}`, control)
+          expect(approved.status).toBe(200)
+
+          const send = () => app.request(`/workflow/drafts/${draft.id}/send${query}`, control)
+          const [first, second] = await Promise.all([send(), send()])
+          expect(first.status).toBe(200)
+          expect(second.status).toBe(200)
+
+          const first_body = (await first.json()) as {
+            status: string
+            dispatch: { id: string; idempotency_key: string } | null
+          }
+          const second_body = (await second.json()) as {
+            status: string
+            dispatch: { id: string; idempotency_key: string } | null
+          }
+
+          expect(first_body.status).toBe("sent")
+          expect(second_body.status).toBe("sent")
+          expect(second_body.dispatch?.id).toBe(first_body.dispatch?.id)
+          expect(second_body.dispatch?.idempotency_key).toBe(first_body.dispatch?.idempotency_key)
+          expect(RuntimeOutbound.Testing.writes().length).toBe(1)
+
+          const replay = await send()
+          expect(replay.status).toBe(200)
+          const replay_body = (await replay.json()) as {
+            status: string
+            dispatch: { id: string } | null
+          }
+          expect(replay_body.status).toBe("sent")
+          expect(replay_body.dispatch?.id).toBe(first_body.dispatch?.id)
+          expect(RuntimeOutbound.Testing.writes().length).toBe(1)
+
+          const recoverable = await app.request(`/workflow/drafts${query}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              source_kind: "user",
+              integration_id: "test/default",
+              adapter_id: "test",
+              action_id: "message.send",
+              target: "channel://general",
+              payload_json: {
+                text: "recover",
+              },
+              payload_schema_version: 1,
+              actor_type: "user",
+            }),
+          })
+          const recoverable_draft = (await recoverable.json()) as { id: string }
+
+          const recoverable_approved = await app.request(`/workflow/drafts/${recoverable_draft.id}/approve${query}`, control)
+          expect(recoverable_approved.status).toBe(200)
+
+          RuntimeOutbound.Testing.set({
+            crash_after_remote_accepted: true,
+          })
+
+          const failed = await app.request(`/workflow/drafts/${recoverable_draft.id}/send${query}`, control)
+          expect(failed.status).toBe(500)
+
+          const before = RuntimeDispatchAttempt.byDraft({
+            draft_id: recoverable_draft.id,
+          })
+          expect(before?.state).toBe("remote_accepted")
+          expect(RuntimeOutbound.Testing.writes().length).toBe(2)
+
+          RuntimeOutbound.Testing.set({})
+
+          const recovered = await app.request(`/workflow/drafts/${recoverable_draft.id}/send${query}`, control)
+          expect(recovered.status).toBe(200)
+          const recovered_body = (await recovered.json()) as {
+            status: string
+            dispatch: { id: string; idempotency_key: string } | null
+          }
+          expect(recovered_body.status).toBe("sent")
+          expect(recovered_body.dispatch?.id).toBe(before?.id)
+          expect(recovered_body.dispatch?.idempotency_key).toBe(before?.idempotency_key)
+          expect(RuntimeOutbound.Testing.writes().length).toBe(2)
         },
       })
     } finally {

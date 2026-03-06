@@ -52,6 +52,12 @@ const extraArgs = (() => {
   return args
 })()
 
+const runnerArgs = (() => {
+  const workers = extraArgs.some((arg) => arg === "--workers" || arg.startsWith("--workers="))
+  if (workers) return ["bun", "test:e2e", ...extraArgs]
+  return ["bun", "test:e2e", "--workers", process.env.PLAYWRIGHT_WORKERS ?? "1", ...extraArgs]
+})()
+
 const [serverPort, webPort] = await Promise.all([freePort(), freePort()])
 
 const sandbox = await fs.mkdtemp(path.join(os.tmpdir(), "opencode-e2e-"))
@@ -161,7 +167,7 @@ try {
     console.log(`opencode server listening on http://127.0.0.1:${serverPort}`)
 
     await waitForHealth(`http://127.0.0.1:${serverPort}/global/health`)
-    runner = Bun.spawn(["bun", "test:e2e", ...extraArgs], {
+    runner = Bun.spawn(runnerArgs, {
       cwd: appDir,
       env: runnerEnv,
       stdout: "inherit",

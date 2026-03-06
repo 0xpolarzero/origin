@@ -513,33 +513,29 @@ export async function openStatusPopover(page: Page) {
 
 export async function openProjectMenu(page: Page, projectSlug: string) {
   const trigger = page.locator(projectMenuTriggerSelector(projectSlug)).first()
-  await expect(trigger).toHaveCount(1)
+  const menu = page.locator(`${dropdownMenuContentSelector}:visible`).first()
+  await expect(trigger).toBeVisible()
 
-  await trigger.focus()
-  await page.keyboard.press("Enter")
-
-  const menu = page.locator(dropdownMenuContentSelector).first()
   const opened = await menu
     .waitFor({ state: "visible", timeout: 1500 })
     .then(() => true)
     .catch(() => false)
 
-  if (opened) {
-    const viewport = page.viewportSize()
-    const x = viewport ? Math.max(viewport.width - 5, 0) : 1200
-    const y = viewport ? Math.max(viewport.height - 5, 0) : 800
-    await page.mouse.move(x, y)
-    return menu
+  if (!opened) {
+    await trigger.focus()
+    await page.keyboard.press("Enter")
+
+    const keyboardOpened = await menu
+      .waitFor({ state: "visible", timeout: 1500 })
+      .then(() => true)
+      .catch(() => false)
+
+    if (!keyboardOpened) {
+      await trigger.click({ force: true })
+      await expect(menu).toBeVisible()
+    }
   }
 
-  await trigger.click({ force: true })
-
-  await expect(menu).toBeVisible()
-
-  const viewport = page.viewportSize()
-  const x = viewport ? Math.max(viewport.width - 5, 0) : 1200
-  const y = viewport ? Math.max(viewport.height - 5, 0) : 800
-  await page.mouse.move(x, y)
   return menu
 }
 
@@ -553,9 +549,9 @@ export async function setWorkspacesEnabled(page: Page, projectSlug: string, enab
 
   if (current === enabled) return
 
-  await openProjectMenu(page, projectSlug)
+  const menu = await openProjectMenu(page, projectSlug)
 
-  const toggle = page.locator(projectWorkspacesToggleSelector(projectSlug)).first()
+  const toggle = menu.locator('[data-action="project-workspaces-toggle"]').first()
   await expect(toggle).toBeVisible()
   await toggle.click({ force: true })
 

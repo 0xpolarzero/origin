@@ -679,7 +679,9 @@ export namespace Session {
   export const updateMessage = fn(MessageV2.Info, async (msg) => {
     const time_created = msg.time.created
     const { id, sessionID, ...data } = msg
-    Database.use((db) => {
+    Database.transaction((db) => {
+      const session = db.select({ id: SessionTable.id }).from(SessionTable).where(eq(SessionTable.id, sessionID)).get()
+      if (!session) return
       db.insert(MessageTable)
         .values({
           id,
@@ -748,7 +750,13 @@ export namespace Session {
   export const updatePart = fn(UpdatePartInput, async (part) => {
     const { id, messageID, sessionID, ...data } = part
     const time = Date.now()
-    Database.use((db) => {
+    Database.transaction((db) => {
+      const message = db
+        .select({ id: MessageTable.id })
+        .from(MessageTable)
+        .where(and(eq(MessageTable.id, messageID), eq(MessageTable.session_id, sessionID)))
+        .get()
+      if (!message) return
       db.insert(PartTable)
         .values({
           id,

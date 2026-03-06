@@ -6,18 +6,19 @@ test("/terminal toggles the terminal panel", async ({ page, gotoSession }) => {
 
   const prompt = page.locator(promptSelector)
   const terminal = page.locator(terminalSelector)
+  const command = page.locator('[data-slash-id="terminal.toggle"]').first()
 
   await expect(terminal).not.toBeVisible()
 
   await prompt.click()
   await page.keyboard.type("/terminal")
-  await expect(page.locator('[data-slash-id="terminal.toggle"]').first()).toBeVisible()
-  await page.keyboard.press("Enter")
+  await expect(command).toBeVisible()
+  await command.click()
   await expect(terminal).toBeVisible()
 
   await prompt.click()
   await page.keyboard.type("/terminal")
-  await expect(page.locator('[data-slash-id="terminal.toggle"]').first()).toBeVisible()
-  await page.keyboard.press("Enter")
-  await expect(terminal).not.toBeVisible()
+  await expect(command).toBeVisible()
+  await command.click()
+  await expect(terminal).toHaveCount(0)
 })

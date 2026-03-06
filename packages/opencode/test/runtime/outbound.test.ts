@@ -9,6 +9,7 @@ import { RuntimeDispatchAttempt } from "../../src/runtime/dispatch-attempt"
 import { RuntimeManagedEndpointError, RuntimeOutboundValidationError } from "../../src/runtime/error"
 import { RuntimeOutbound } from "../../src/runtime/outbound"
 import { RuntimeOutboundIntegration } from "../../src/runtime/outbound-integration"
+import { RuntimeRun } from "../../src/runtime/run"
 import { AuditEventTable, DispatchAttemptTable, DraftTable, IntegrationAttemptTable } from "../../src/runtime/runtime.sql"
 import { Database } from "../../src/storage/db"
 import { resetDatabase } from "../fixture/db"
@@ -43,6 +44,7 @@ function seed(workspace: string, directory: string) {
 }
 
 function draft(input: {
+  run_id?: string | null
   workspace_id: string
   source_kind?: "user" | "system"
   action_id?: "message.send" | "issue.create"
@@ -52,6 +54,7 @@ function draft(input: {
   actor_type?: "user" | "system"
 }) {
   return {
+    run_id: input.run_id,
     workspace_id: input.workspace_id,
     source_kind: input.source_kind ?? "user",
     integration_id: "test/default",
@@ -218,11 +221,101 @@ describe("runtime outbound", () => {
     })
   })
 
+  test("one run can emit multiple drafts with independent lifecycle outcomes", async () => {
+    await origin(async ({ directory }) => {
+      const run_workspace_directory = path.join(directory, ".origin", "runs", "outbound-release-gate")
+      const run = RuntimeRun.create({
+        workspace_id,
+        trigger_type: "manual",
+        run_workspace_root: path.dirname(run_workspace_directory),
+        run_workspace_directory,
+      })
+
+      const pending = await RuntimeOutbound.create(
+        draft({
+          run_id: run.id,
+          workspace_id,
+          payload_json: {
+            text: "pending",
+          },
+        }),
+      )
+      const auto = await RuntimeOutbound.create(
+        draft({
+          run_id: run.id,
+          workspace_id,
+          source_kind: "system",
+          auto_approve: true,
+          actor_type: "system",
+          payload_json: {
+            text: "auto",
+          },
+        }),
+      )
+      const rejected = await RuntimeOutbound.create(
+        draft({
+          run_id: run.id,
+          workspace_id,
+          payload_json: {
+            text: "reject",
+          },
+        }),
+      )
+
+      await RuntimeOutbound.send({
+        id: auto.id,
+        actor_type: "user",
+      })
+      await RuntimeOutbound.reject({
+        id: rejected.id,
+        actor_type: "user",
+      })
+
+      expect(RuntimeOutbound.get({ id: pending.id })).toMatchObject({
+        run_id: run.id,
+        status: "pending",
+      })
+      expect(RuntimeOutbound.get({ id: auto.id })).toMatchObject({
+        run_id: run.id,
+        status: "sent",
+      })
+      expect(RuntimeOutbound.get({ id: rejected.id })).toMatchObject({
+        run_id: run.id,
+        status: "rejected",
+      })
+      expect(RuntimeOutbound.Testing.writes().length).toBe(1)
+    })
+  })
+
   test("non-origin outbound attempts are blocked with visible remediation state", async () => {
     await standard(async () => {
       const blocked = await RuntimeOutbound.create(draft({ workspace_id }))
       expect(blocked.status).toBe("blocked")
       expect(blocked.block_reason_code).toBe("workspace_policy_blocked")
+    })
+  })
+
+  test("auto-approved drafts send without an explicit approval step", async () => {
+    await origin(async () => {
+      const created = await RuntimeOutbound.create(
+        draft({
+          workspace_id,
+          source_kind: "system",
+          auto_approve: true,
+          actor_type: "system",
+        }),
+      )
+
+      expect(created.status).toBe("auto_approved")
+
+      const sent = await RuntimeOutbound.send({
+        id: created.id,
+        actor_type: "user",
+      })
+
+      expect(sent.status).toBe("sent")
+      expect(sent.dispatch?.state).toBe("finalized")
+      expect(RuntimeOutbound.Testing.writes().length).toBe(1)
     })
   })
 
@@ -247,6 +340,30 @@ describe("runtime outbound", () => {
       expect(sent.dispatch?.state).toBe("finalized")
       expect(sent.dispatch?.idempotency_key).toBe(`dispatch:${created.id}`)
       expect(Database.use((db) => db.select().from(IntegrationAttemptTable).all().length)).toBe(0)
+      expect(RuntimeOutbound.Testing.writes().length).toBe(1)
+    })
+  })
+
+  test("sent drafts ignore resend attempts without duplicate outbound writes", async () => {
+    await origin(async () => {
+      const created = await RuntimeOutbound.create(draft({ workspace_id }))
+      await RuntimeOutbound.approve({
+        id: created.id,
+        actor_type: "user",
+      })
+
+      const first = await RuntimeOutbound.send({
+        id: created.id,
+        actor_type: "user",
+      })
+      const second = await RuntimeOutbound.send({
+        id: created.id,
+        actor_type: "user",
+      })
+
+      expect(first.status).toBe("sent")
+      expect(second.status).toBe("sent")
+      expect(second.dispatch?.id).toBe(first.dispatch?.id)
       expect(RuntimeOutbound.Testing.writes().length).toBe(1)
     })
   })
@@ -300,6 +417,60 @@ describe("runtime outbound", () => {
 
       const event = result(created.id).find((item) => item.event_type === "draft.transitioned")
       expect((event?.event_payload as { reason_code?: string } | undefined)?.reason_code).toBe("material_edit_invalidation")
+    })
+  })
+
+  test("blocked drafts can be repaired, re-approved, and sent with a fresh dispatch attempt", async () => {
+    await origin(async () => {
+      const created = await RuntimeOutbound.create(draft({ workspace_id }))
+      await RuntimeOutbound.approve({
+        id: created.id,
+        actor_type: "user",
+      })
+
+      RuntimeOutbound.Testing.set({
+        fail_policy_action: "draft.dispatch",
+      })
+
+      const blocked = await RuntimeOutbound.send({
+        id: created.id,
+        actor_type: "user",
+      })
+
+      expect(blocked.status).toBe("blocked")
+      expect(blocked.block_reason_code).toBe("policy_evaluation_failed")
+      const first = blocked.dispatch?.id
+      if (!first) throw new Error("missing blocked dispatch attempt")
+
+      RuntimeOutbound.Testing.set({})
+
+      const updated = await RuntimeOutbound.update({
+        id: created.id,
+        payload_json: {
+          text: "fixed",
+        },
+        actor_type: "user",
+      })
+
+      expect(updated.status).toBe("pending")
+      expect(updated.dispatch).toBeNull()
+
+      const approved = await RuntimeOutbound.approve({
+        id: created.id,
+        actor_type: "user",
+      })
+
+      expect(approved.status).toBe("approved")
+
+      const sent = await RuntimeOutbound.send({
+        id: created.id,
+        actor_type: "user",
+      })
+
+      expect(sent.status).toBe("sent")
+      expect(sent.dispatch?.id).not.toBe(first)
+      expect(sent.dispatch?.state).toBe("finalized")
+      expect(RuntimeOutbound.Testing.writes().length).toBe(1)
     })
   })
 

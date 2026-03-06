@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import {
   createDraftEditor,
   draftCanEdit,
+  draftCanSend,
   draftCreateInput,
   draftRemediation,
   draftReasonCodes,
@@ -164,6 +165,15 @@ describe("history-drafts", () => {
     expect(draftCanEdit(draft("sent"))).toBe(false)
     expect(draftCanEdit(draft("rejected"))).toBe(false)
     expect(draftCanEdit(draft("failed"))).toBe(false)
+  })
+
+  test("draftCanSend hides terminal draft states but keeps pending review states actionable", () => {
+    expect(draftCanSend("approved")).toBe(true)
+    expect(draftCanSend("auto_approved")).toBe(true)
+    expect(draftCanSend("blocked")).toBe(true)
+    expect(draftCanSend("sent")).toBe(false)
+    expect(draftCanSend("rejected")).toBe(false)
+    expect(draftCanSend("failed")).toBe(false)
   })
 
   test("scopeFromDraftStatus and remediation cover pending, processed, and blocked hints", () => {

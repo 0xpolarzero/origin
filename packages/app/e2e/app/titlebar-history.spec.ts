@@ -12,12 +12,10 @@ test("titlebar back/forward navigates between sessions", async ({ page, slug, sd
     await withSession(sdk, `e2e titlebar history 2 ${stamp}`, async (two) => {
       await gotoSession(one.id)
 
-      await openSidebar(page)
+        await openSidebar(page)
 
-      const link = page.locator(`[data-session-id="${two.id}"] a`).first()
-      await expect(link).toBeVisible()
-      await link.scrollIntoViewIfNeeded()
-      await link.click()
+        await expect(page.locator(`[data-session-id="${two.id}"] a`).first()).toBeVisible()
+        await page.locator(`[data-session-id="${two.id}"] a`).first().click()
 
       await expect(page).toHaveURL(new RegExp(`/${slug}/session/${two.id}(?:\\?|#|$)`))
       await expect(page.locator(promptSelector)).toBeVisible()
@@ -54,10 +52,8 @@ test("titlebar forward is cleared after branching history from sidebar", async (
 
         await openSidebar(page)
 
-        const second = page.locator(`[data-session-id="${b.id}"] a`).first()
-        await expect(second).toBeVisible()
-        await second.scrollIntoViewIfNeeded()
-        await second.click()
+        await expect(page.locator(`[data-session-id="${b.id}"] a`).first()).toBeVisible()
+        await page.locator(`[data-session-id="${b.id}"] a`).first().click()
 
         await expect(page).toHaveURL(new RegExp(`/${slug}/session/${b.id}(?:\\?|#|$)`))
         await expect(page.locator(promptSelector)).toBeVisible()
@@ -74,10 +70,8 @@ test("titlebar forward is cleared after branching history from sidebar", async (
 
         await openSidebar(page)
 
-        const third = page.locator(`[data-session-id="${c.id}"] a`).first()
-        await expect(third).toBeVisible()
-        await third.scrollIntoViewIfNeeded()
-        await third.click()
+        await expect(page.locator(`[data-session-id="${c.id}"] a`).first()).toBeVisible()
+        await page.locator(`[data-session-id="${c.id}"] a`).first().click()
 
         await expect(page).toHaveURL(new RegExp(`/${slug}/session/${c.id}(?:\\?|#|$)`))
         await expect(page.locator(promptSelector)).toBeVisible()
@@ -100,10 +94,8 @@ test("keyboard shortcuts navigate titlebar history", async ({ page, slug, sdk, g
 
       await openSidebar(page)
 
-      const link = page.locator(`[data-session-id="${two.id}"] a`).first()
-      await expect(link).toBeVisible()
-      await link.scrollIntoViewIfNeeded()
-      await link.click()
+      await expect(page.locator(`[data-session-id="${two.id}"] a`).first()).toBeVisible()
+      await page.locator(`[data-session-id="${two.id}"] a`).first().click()
 
       await expect(page).toHaveURL(new RegExp(`/${slug}/session/${two.id}(?:\\?|#|$)`))
       await expect(page.locator(promptSelector)).toBeVisible()

@@ -6,6 +6,7 @@ import { Log } from "../../src/util/log"
 import { Instance } from "../../src/project/instance"
 import { MessageV2 } from "../../src/session/message-v2"
 import { Identifier } from "../../src/id/id"
+import { SessionSummary } from "../../src/session/summary"
 
 const projectRoot = path.join(__dirname, "../..")
 Log.init({ print: false })
@@ -139,4 +140,116 @@ describe("step-finish token propagation via Bus event", () => {
     },
     { timeout: 30000 },
   )
+})
+
+describe("session concurrency races", () => {
+  test("updateMessage no-ops when the parent session has already been removed", async () => {
+    await Instance.provide({
+      directory: projectRoot,
+      fn: async () => {
+        const session = await Session.create({})
+        const message = {
+          id: Identifier.ascending("message"),
+          sessionID: session.id,
+          role: "user",
+          time: { created: Date.now() },
+          agent: "user",
+          model: { providerID: "test", modelID: "test" },
+          tools: {},
+          mode: "",
+        } as unknown as MessageV2.Info
+
+        await Session.remove(session.id)
+
+        const result = await Session.updateMessage(message)
+        expect(result.id).toBe(message.id)
+        expect(result.sessionID).toBe(message.sessionID)
+        expect(result.role).toBe(message.role)
+        await expect(Session.messages({ sessionID: session.id })).resolves.toEqual([])
+      },
+    })
+  })
+
+  test("updatePart no-ops when the parent message has already been removed", async () => {
+    await Instance.provide({
+      directory: projectRoot,
+      fn: async () => {
+        const session = await Session.create({})
+        const message = await Session.updateMessage({
+          id: Identifier.ascending("message"),
+          sessionID: session.id,
+          role: "user",
+          time: { created: Date.now() },
+          agent: "user",
+          model: { providerID: "test", modelID: "test" },
+          tools: {},
+          mode: "",
+        } as unknown as MessageV2.Info)
+        const part = {
+          id: Identifier.ascending("part"),
+          sessionID: session.id,
+          messageID: message.id,
+          type: "text" as const,
+          text: "race",
+          time: { start: Date.now() },
+        }
+
+        await Session.removeMessage({ sessionID: session.id, messageID: message.id })
+
+        await expect(Session.updatePart(part)).resolves.toEqual(part)
+        await expect(Session.messages({ sessionID: session.id })).resolves.toEqual([])
+
+        await Session.remove(session.id)
+      },
+    })
+  })
+
+  test("SessionSummary.summarize ignores removed sessions and removed messages", async () => {
+    await Instance.provide({
+      directory: projectRoot,
+      fn: async () => {
+        const removedSession = await Session.create({})
+        const removedSessionMessage = await Session.updateMessage({
+          id: Identifier.ascending("message"),
+          sessionID: removedSession.id,
+          role: "user",
+          time: { created: Date.now() },
+          agent: "user",
+          model: { providerID: "test", modelID: "test" },
+          tools: {},
+          mode: "",
+        } as unknown as MessageV2.Info)
+        await Session.remove(removedSession.id)
+
+        await expect(
+          SessionSummary.summarize({
+            sessionID: removedSession.id,
+            messageID: removedSessionMessage.id,
+          }),
+        ).resolves.toBeUndefined()
+
+        const liveSession = await Session.create({})
+        const removedMessage = await Session.updateMessage({
+          id: Identifier.ascending("message"),
+          sessionID: liveSession.id,
+          role: "user",
+          time: { created: Date.now() },
+          agent: "user",
+          model: { providerID: "test", modelID: "test" },
+          tools: {},
+          mode: "",
+        } as unknown as MessageV2.Info)
+        await Session.removeMessage({ sessionID: liveSession.id, messageID: removedMessage.id })
+
+        await expect(
+          SessionSummary.summarize({
+            sessionID: liveSession.id,
+            messageID: removedMessage.id,
+          }),
+        ).resolves.toBeUndefined()
+
+        await Session.remove(liveSession.id)
+      },
+    })
+  })
 })

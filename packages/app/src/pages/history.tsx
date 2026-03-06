@@ -24,6 +24,7 @@ import {
 import {
   createDraftEditor,
   draftCanEdit,
+  draftCanSend,
   draftCreateInput,
   draftNeedsApproval,
   draftReasonCodes,
@@ -969,15 +970,17 @@ export default function History() {
                           >
                             Approve
                           </Button>
-                          <Button
-                            type="button"
-                            variant="primary"
-                            data-component="history-draft-action-send"
-                            disabled={rowBusy(item.id) || sendBlocked()}
-                            onClick={() => void controlDraft(item, "send")}
-                          >
-                            Send Now
-                          </Button>
+                          <Show when={draftCanSend(item.status)}>
+                            <Button
+                              type="button"
+                              variant="primary"
+                              data-component="history-draft-action-send"
+                              disabled={rowBusy(item.id) || sendBlocked()}
+                              onClick={() => void controlDraft(item, "send")}
+                            >
+                              Send Now
+                            </Button>
+                          </Show>
                           <Button
                             type="button"
                             variant="ghost"
@@ -1005,7 +1008,7 @@ export default function History() {
                           </Show>
                         </div>
 
-                        <Show when={sendBlocked()}>
+                        <Show when={draftCanSend(item.status) && sendBlocked()}>
                           <p data-component="history-draft-send-hint" class="text-12-regular text-text-weak">
                             Approve first. Send does not imply approval.
                           </p>

@@ -2,7 +2,7 @@ import { base64Decode } from "@opencode-ai/util/encode"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import type { Page } from "@playwright/test"
+import type { Locator, Page } from "@playwright/test"
 
 import { test, expect } from "../fixtures"
 
@@ -187,6 +187,7 @@ test("can rename a workspace", async ({ page, withProject }) => {
     await expect(item).toBeVisible()
     const input = item.locator(inlineInputSelector).first()
     await expect(input).toBeVisible()
+    await expect(input).toBeFocused()
     await input.fill(rename)
     await input.press("Enter")
     await expect(item).toContainText(rename)
@@ -335,13 +336,23 @@ test("can reorder workspaces by drag and drop", async ({ page, withProject }) =>
     const drag = async (from: string, to: string) => {
       const src = page.locator(workspaceItemSelector(from)).first()
       const dst = page.locator(workspaceItemSelector(to)).first()
+      const box = async (locator: Locator, label: string) => {
+        await expect(locator).toBeVisible()
+        for (const _ of Array.from({ length: 20 })) {
+          const value = await locator.boundingBox()
+          if (value) return value
+          await page.waitForTimeout(100)
+        }
+        throw new Error(`Failed to resolve ${label} workspace drag bounds`)
+      }
 
       await src.scrollIntoViewIfNeeded()
       await dst.scrollIntoViewIfNeeded()
+      await src.hover()
+      await dst.hover()
 
-      const a = await src.boundingBox()
-      const b = await dst.boundingBox()
-      if (!a || !b) throw new Error("Failed to resolve workspace drag bounds")
+      const a = await box(src, "source")
+      const b = await box(dst, "target")
 
       await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2)
       await page.mouse.down()

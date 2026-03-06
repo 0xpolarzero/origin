@@ -1,6 +1,6 @@
 import { test, expect } from "../fixtures"
 import { promptSelector } from "../selectors"
-import { sessionIDFromUrl } from "../actions"
+import { sessionIDFromUrl, withSession } from "../actions"
 
 // Regression test for Issue #12453: the synchronous POST /message endpoint holds
 // the connection open while the agent works, causing "Failed to fetch" over
@@ -11,17 +11,18 @@ test("prompt succeeds when sync message endpoint is unreachable", async ({ page,
   // Simulate Tailscale/VPN killing the long-lived sync connection
   await page.route("**/session/*/message", (route) => route.abort("connectionfailed"))
 
-  await gotoSession()
-
   const token = `E2E_ASYNC_${Date.now()}`
-  await page.locator(promptSelector).click()
-  await page.keyboard.type(`Reply with exactly: ${token}`)
-  await page.keyboard.press("Enter")
 
-  await expect(page).toHaveURL(/\/session\/[^/?#]+/, { timeout: 30_000 })
-  const sessionID = sessionIDFromUrl(page.url())!
+  await withSession(sdk, `e2e async ${token}`, async (session) => {
+    await gotoSession(session.id)
 
-  try {
+    await page.locator(promptSelector).click()
+    await page.keyboard.type(`Reply with exactly: ${token}`)
+    await page.keyboard.press("Enter")
+
+    await expect(page).toHaveURL(new RegExp(`/session/${session.id}(?:[/?#]|$)`), { timeout: 30_000 })
+    const sessionID = sessionIDFromUrl(page.url())!
+
     // Agent response arrives via SSE despite sync endpoint being dead
     await expect
       .poll(
@@ -37,7 +38,5 @@ test("prompt succeeds when sync message endpoint is unreachable", async ({ page,
         { timeout: 90_000 },
       )
       .toContain(token)
-  } finally {
-    await sdk.session.delete({ sessionID }).catch(() => undefined)
-  }
+  })
 })

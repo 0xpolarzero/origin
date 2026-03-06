@@ -170,6 +170,8 @@ export const scopeFromDraftStatus = (status: string): DraftScope => {
 export const draftCanEdit = (draft: Pick<HistoryDraft, "status" | "source_kind">) =>
   draft.source_kind !== "system_report" && draft.status !== "sent" && draft.status !== "rejected" && draft.status !== "failed"
 
+export const draftCanSend = (status: string) => status !== "sent" && status !== "rejected" && status !== "failed"
+
 export const draftNeedsApproval = (status: string) => status !== "approved" && status !== "auto_approved"
 
 export const draftReasonCodes = (draft: Pick<HistoryDraft, "block_reason_code" | "decision_reason_code" | "dispatch">) =>
