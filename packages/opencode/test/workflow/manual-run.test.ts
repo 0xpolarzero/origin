@@ -9,6 +9,7 @@ import { RuntimeManualRunDuplicateError } from "../../src/runtime/error"
 import { AuditEventTable, OperationTable, RunTable } from "../../src/runtime/runtime.sql"
 import { Session } from "../../src/session"
 import { Database, eq } from "../../src/storage/db"
+import { WorkflowIntegrationQueue } from "../../src/workflow/integration-queue"
 import { WorkflowManualRun } from "../../src/workflow/manual-run"
 import { resetDatabase } from "../fixture/db"
 import { tmpdir } from "../fixture/fixture"
@@ -115,10 +116,12 @@ function seams(input?: {
 
 beforeEach(async () => {
   await resetDatabase()
+  WorkflowIntegrationQueue.Testing.reset()
   WorkflowManualRun.Testing.reset()
 })
 
 afterEach(async () => {
+  WorkflowIntegrationQueue.Testing.reset()
   await resetDatabase()
   WorkflowManualRun.Testing.reset()
 })
@@ -375,7 +378,7 @@ describe("workflow manual run orchestration", () => {
     })
   })
 
-  test("change classification persists integration candidate and reaches ready_for_integration", async () => {
+  test("change classification persists integration candidate and completes integration", async () => {
     await using dir = await tmpdir({ git: true })
 
     await write(
@@ -392,6 +395,12 @@ describe("workflow manual run orchestration", () => {
         await WorkspaceContext.provide({
           workspaceID: "wrk_manual",
           fn: async () => {
+            WorkflowIntegrationQueue.Testing.set({
+              head: async ({ run }) => run.integration_candidate_base_change_id,
+              apply: async ({ run }) => ({
+                head_after: run.integration_candidate_base_change_id,
+              }),
+            })
             WorkflowManualRun.Testing.set(
               seams({
                 execute: async (item) => {
@@ -402,17 +411,21 @@ describe("workflow manual run orchestration", () => {
             )
 
             const run = await WorkflowManualRun.start({ workflow_id: "basic" })
-            const done = await WorkflowManualRun.wait({ run_id: run.id, timeout_ms: 5000 })
+            await WorkflowManualRun.wait({ run_id: run.id, timeout_ms: 5000 })
+            await WorkflowIntegrationQueue.Testing.drain({ timeout_ms: 5000 })
+            const done = WorkflowManualRun.get({ run_id: run.id })
 
-            expect(done.status).toBe("ready_for_integration")
+            expect(done.status).toBe("completed")
             expect(done.integration_candidate?.changed_paths).toContain("notes/result.md")
             const operations = Database.use((db) => db.select().from(OperationTable).all())
-            expect(operations).toHaveLength(0)
+            expect(operations).toHaveLength(1)
             expect(transitions(done.id)).toEqual([
               { from: "create", to: "queued" },
               { from: "queued", to: "running" },
               { from: "running", to: "validating" },
               { from: "validating", to: "ready_for_integration" },
+              { from: "ready_for_integration", to: "integrating" },
+              { from: "integrating", to: "completed" },
             ])
           },
         })

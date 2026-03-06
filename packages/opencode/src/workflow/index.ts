@@ -1,4 +1,5 @@
 export * from "./contract"
+export * from "./integration-queue"
 export * from "./knowledge"
 export * from "./manual-run"
 export * from "./run-gate"

@@ -22,6 +22,13 @@ const transition_input = z.object({
   actor_type: z.enum(["system", "user"]).default("system"),
 })
 
+const replay_input = z.object({
+  id: uuid_v7,
+  from: z.number().int().nonnegative(),
+  to: z.number().int().nonnegative(),
+  actor_type: z.enum(["system", "user"]).default("system"),
+})
+
 const legal = new Set(["attempt_created->jj_applied", "jj_applied->db_linked", "db_linked->finalized"])
 
 function validate(from: z.infer<typeof integration_attempt_state>, to: z.infer<typeof integration_attempt_state>) {
@@ -37,6 +44,7 @@ function validate(from: z.infer<typeof integration_attempt_state>, to: z.infer<t
 export namespace RuntimeIntegrationAttempt {
   export const CreateInput = create_input
   export const TransitionInput = transition_input
+  export const ReplayInput = replay_input
 
   export function create(input: z.input<typeof CreateInput>) {
     const parsed = CreateInput.parse(input)
@@ -100,6 +108,64 @@ export namespace RuntimeIntegrationAttempt {
         .update(IntegrationAttemptTable)
         .set({
           state: parsed.to,
+          updated_at: Date.now(),
+        })
+        .where(eq(IntegrationAttemptTable.id, parsed.id))
+        .returning()
+        .get()
+      if (!updated) throw new NotFoundError({ message: `Integration attempt not found: ${parsed.id}` })
+      RuntimeAudit.write(
+        {
+          event_type: "integration_attempt.transitioned",
+          actor_type: parsed.actor_type,
+          workspace_id: updated.workspace_id,
+          run_id: updated.run_id,
+          integration_attempt_id: updated.id,
+          event_payload: {
+            from: row.state,
+            to: updated.state,
+            replay_index: updated.replay_index,
+          },
+        },
+        db,
+      )
+      return updated
+    })
+  }
+
+  export function replay(input: z.input<typeof ReplayInput>) {
+    const parsed = ReplayInput.parse(input)
+    return Database.transaction((db) => {
+      const row = db.select().from(IntegrationAttemptTable).where(eq(IntegrationAttemptTable.id, parsed.id)).get()
+      if (!row) throw new NotFoundError({ message: `Integration attempt not found: ${parsed.id}` })
+      if (row.state !== "attempt_created") {
+        throw new RuntimeIllegalTransitionError({
+          entity: "integration_attempt",
+          from: row.state,
+          to: "replay_index_update",
+          code: "illegal_transition",
+        })
+      }
+      if (parsed.to !== parsed.from + 1) {
+        throw new RuntimeIllegalTransitionError({
+          entity: "integration_attempt",
+          from: `replay_index:${parsed.from}`,
+          to: `replay_index:${parsed.to}`,
+          code: "illegal_transition",
+        })
+      }
+      if (row.replay_index !== parsed.from) {
+        throw new RuntimeIllegalTransitionError({
+          entity: "integration_attempt",
+          from: `replay_index:${row.replay_index}`,
+          to: `replay_index:${parsed.to}`,
+          code: "illegal_transition",
+        })
+      }
+      const updated = db
+        .update(IntegrationAttemptTable)
+        .set({
+          replay_index: parsed.to,
           updated_at: Date.now(),
         })
         .where(eq(IntegrationAttemptTable.id, parsed.id))

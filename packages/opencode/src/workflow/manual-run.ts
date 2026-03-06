@@ -11,6 +11,7 @@ import { RuntimeIllegalTransitionError, RuntimeManualRunDuplicateError, RuntimeM
 import { NotFoundError } from "@/storage/db"
 import { WorkspaceContext } from "@/control-plane/workspace-context"
 import { Workspace } from "@/control-plane/workspace"
+import { WorkflowIntegrationQueue } from "./integration-queue"
 import { WorkflowRunGate } from "./run-gate"
 import z from "zod"
 
@@ -149,6 +150,14 @@ function key(workspace_id: string, workflow_id: string, trigger_id?: string) {
   return [workspace_id, workflow_id, trigger_id ?? "manual"].join("\u0000")
 }
 
+function queue_start() {
+  void WorkflowIntegrationQueue.start().catch(() => undefined)
+}
+
+function queue_touch() {
+  void WorkflowIntegrationQueue.touch().catch(() => undefined)
+}
+
 function is_terminal(status: string) {
   return terminal_run_statuses.has(status as any)
 }
@@ -241,17 +250,25 @@ function fail(run_id: string, failure_code: "manual_start_failed" | "repair_exha
 }
 
 function cancel_status(run_id: string, actor_type: "system" | "user") {
-  const row = read(run_id)
-  if (is_terminal(row.status)) return row
-  try {
-    return transition({
-      id: run_id,
-      to: "canceled",
-      actor_type,
-    })
-  } catch (error) {
-    if (error instanceof RuntimeIllegalTransitionError) return read(run_id)
-    throw error
+  while (true) {
+    const row = read(run_id)
+    if (row.status === "cancel_requested" || is_terminal(row.status)) return row
+
+    const to = row.status === "integrating" || row.status === "reconciling" ? "cancel_requested" : "canceled"
+    const reason_code = to === "cancel_requested" ? "cancel_requested_after_integration_started" : undefined
+
+    try {
+      return transition({
+        id: run_id,
+        to,
+        reason_code,
+        actor_type,
+      })
+    } catch (error) {
+      if (!(error instanceof RuntimeIllegalTransitionError)) throw error
+      const next = read(run_id)
+      if (next.status === row.status) return next
+    }
   }
 }
 
@@ -522,6 +539,8 @@ async function drive(input: {
       integration_candidate_change_ids: result.change_ids ?? [],
       integration_candidate_changed_paths: result.changed_paths,
     })
+
+    queue_touch()
   } catch (error) {
     if (error instanceof NotFoundError) return
     const row = (() => {
@@ -558,6 +577,7 @@ export namespace WorkflowManualRun {
     const workspace_id = workspace_required()
     const workspace = await Workspace.get(workspace_id)
     if (!workspace) throw new NotFoundError({ message: `Workspace not found: ${workspace_id}` })
+    queue_start()
 
     const gate = await WorkflowRunGate.validate({
       directory: Instance.directory,
@@ -693,20 +713,25 @@ export namespace WorkflowManualRun {
   export function cancel(value: z.input<typeof ControlInput>) {
     const input = ControlInput.parse(value)
     const row = read_scoped(input.run_id)
-    if (is_terminal(row.status)) return present(row)
+    if (row.status === "cancel_requested" || is_terminal(row.status)) return present(row)
 
-    const task = state().tasks.get(input.run_id)
-    task?.abort.abort()
-    if (row.session_id) {
-      void Instance.provide({
-        directory: row.run_workspace_directory ?? Instance.directory,
-        fn: async () => {
-          SessionPrompt.cancel(row.session_id!)
-        },
-      }).catch(() => undefined)
+    if (row.status === "queued" || row.status === "running" || row.status === "validating" || row.status === "ready_for_integration") {
+      const task = state().tasks.get(input.run_id)
+      task?.abort.abort()
+      if (row.session_id) {
+        void Instance.provide({
+          directory: row.run_workspace_directory ?? Instance.directory,
+          fn: async () => {
+            SessionPrompt.cancel(row.session_id!)
+          },
+        }).catch(() => undefined)
+      }
     }
 
     const next = cancel_status(input.run_id, "user")
+    if (row.status === "ready_for_integration" || row.status === "integrating" || row.status === "reconciling") {
+      queue_touch()
+    }
     return present(next)
   }
 
