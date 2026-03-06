@@ -69,6 +69,8 @@ describe("runtime contract migration shape", () => {
       expect(idx).toContain("run_status_idx")
       expect(idx).toContain("run_workflow_idx")
       expect(idx).toContain("run_cleanup_failed_idx")
+      expect(idx).toContain("run_workspace_created_idx")
+      expect(idx).toContain("run_workspace_trigger_created_idx")
       expect(idx).toContain("run_workspace_status_idx")
       expect(idx).toContain("run_queue_idx")
     })
@@ -79,6 +81,7 @@ describe("runtime contract migration shape", () => {
       const cols = names(state.sqlite, "operation")
       expect(cols).toContain("source_operation_id")
       expect(cols).toContain("session_id")
+      expect(cols).toContain("actor_type")
       expect(cols).toContain("trigger_type")
       expect(cols).toContain("workflow_id")
       expect(cols).toContain("integration_attempt_id")
@@ -91,6 +94,11 @@ describe("runtime contract migration shape", () => {
       expect(cols).toContain("changed_paths")
       expect(cols).toContain("integration_head_change_id_before_apply")
       expect(cols).toContain("integration_head_change_id_after_apply")
+
+      const idx = indexes(state.sqlite, "operation")
+      expect(idx).toContain("operation_workspace_created_idx")
+      expect(idx).toContain("operation_workspace_actor_created_idx")
+      expect(idx).toContain("operation_workspace_trigger_created_idx")
     })
   })
 

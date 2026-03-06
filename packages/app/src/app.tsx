@@ -33,6 +33,7 @@ const Home = lazy(() => import("@/pages/home"))
 const Session = lazy(() => import("@/pages/session"))
 const Workflows = lazy(() => import("@/pages/workflows"))
 const Library = lazy(() => import("@/pages/library"))
+const History = lazy(() => import("@/pages/history"))
 const Loading = () => <div class="size-full" />
 
 const HomeRoute = () => (
@@ -58,6 +59,12 @@ const WorkflowsRoute = () => (
 const LibraryRoute = () => (
   <Suspense fallback={<Loading />}>
     <Library />
+  </Suspense>
+)
+
+const HistoryRoute = () => (
+  <Suspense fallback={<Loading />}>
+    <History />
   </Suspense>
 )
 
@@ -173,6 +180,7 @@ export function AppInterface(props: {
                 <Route path="/session/:id?" component={SessionRoute} />
                 <Route path="/workflows" component={WorkflowsRoute} />
                 <Route path="/library" component={LibraryRoute} />
+                <Route path="/history" component={HistoryRoute} />
               </Route>
             </Router>
           </GlobalSyncProvider>

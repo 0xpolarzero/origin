@@ -4142,6 +4142,92 @@ export type ProviderOauthCallbackResponses = {
 
 export type ProviderOauthCallbackResponse = ProviderOauthCallbackResponses[keyof ProviderOauthCallbackResponses]
 
+export type WorkflowHistoryRunsData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    cursor?: string
+    limit?: number
+    include_debug?: boolean | "0" | "1" | "true" | "false"
+  }
+  url: "/workflow/history/runs"
+}
+
+export type WorkflowHistoryRunsResponses = {
+  /**
+   * Run history page
+   */
+  200: {
+    items: Array<{
+      id: string
+      status: string
+      trigger_type: string
+      workflow_id: string | null
+      workspace_id: string
+      session_id: string | null
+      reason_code: string | null
+      failure_code: string | null
+      ready_for_integration_at: number | null
+      created_at: number
+      updated_at: number
+      started_at: number | null
+      finished_at: number | null
+      operation_id: string | null
+      operation_exists: boolean
+      duplicate_event: {
+        reason: boolean
+        failure: boolean
+      }
+    }>
+    next_cursor: string | null
+  }
+}
+
+export type WorkflowHistoryRunsResponse = WorkflowHistoryRunsResponses[keyof WorkflowHistoryRunsResponses]
+
+export type WorkflowHistoryOperationsData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    cursor?: string
+    limit?: number
+    include_debug?: boolean | "0" | "1" | "true" | "false"
+    include_user?: boolean | "0" | "1" | "true" | "false"
+  }
+  url: "/workflow/history/operations"
+}
+
+export type WorkflowHistoryOperationsResponses = {
+  /**
+   * Operation history page
+   */
+  200: {
+    items: Array<{
+      id: string
+      run_id: string
+      run_exists: boolean
+      status: string
+      trigger_type: string
+      workflow_id: string | null
+      workspace_id: string
+      session_id: string | null
+      ready_for_integration_at: number | null
+      changed_paths: Array<string>
+      created_at: number
+      updated_at: number
+      provenance: "app" | "user"
+    }>
+    next_cursor: string | null
+  }
+}
+
+export type WorkflowHistoryOperationsResponse =
+  WorkflowHistoryOperationsResponses[keyof WorkflowHistoryOperationsResponses]
+
 export type WorkflowValidateData = {
   body?: never
   path?: never

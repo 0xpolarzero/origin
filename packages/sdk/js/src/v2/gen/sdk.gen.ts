@@ -179,6 +179,8 @@ import type {
   TuiSubmitPromptResponses,
   VcsGetResponses,
   WorkflowGetResponses,
+  WorkflowHistoryOperationsResponses,
+  WorkflowHistoryRunsResponses,
   WorkflowRunCancelErrors,
   WorkflowRunCancelResponses,
   WorkflowRunGetErrors,
@@ -2649,6 +2651,82 @@ export class Provider extends HeyApiClient {
   }
 }
 
+export class History extends HeyApiClient {
+  /**
+   * List workflow runs history
+   *
+   * List run history with deterministic sorting, cursor pagination, and safe operation-link metadata.
+   */
+  public runs<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      cursor?: string
+      limit?: number
+      include_debug?: boolean | "0" | "1" | "true" | "false"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "cursor" },
+            { in: "query", key: "limit" },
+            { in: "query", key: "include_debug" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<WorkflowHistoryRunsResponses, unknown, ThrowOnError>({
+      url: "/workflow/history/runs",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * List workflow operations history
+   *
+   * List operations history with deterministic sorting, cursor pagination, provenance metadata, and safe run-link metadata.
+   */
+  public operations<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      cursor?: string
+      limit?: number
+      include_debug?: boolean | "0" | "1" | "true" | "false"
+      include_user?: boolean | "0" | "1" | "true" | "false"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "cursor" },
+            { in: "query", key: "limit" },
+            { in: "query", key: "include_debug" },
+            { in: "query", key: "include_user" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<WorkflowHistoryOperationsResponses, unknown, ThrowOnError>({
+      url: "/workflow/history/operations",
+      ...options,
+      ...params,
+    })
+  }
+}
+
 export class Run extends HeyApiClient {
   /**
    * Validate workflow run entrypoint
@@ -2854,6 +2932,11 @@ export class Workflow extends HeyApiClient {
       ...options,
       ...params,
     })
+  }
+
+  private _history?: History
+  get history(): History {
+    return (this._history ??= new History({ client: this.client }))
   }
 
   private _run?: Run

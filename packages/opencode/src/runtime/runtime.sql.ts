@@ -55,6 +55,8 @@ export const RunTable = sqliteTable(
     index("run_session_idx").on(table.session_id),
     index("run_workflow_idx").on(table.workflow_id),
     index("run_cleanup_failed_idx").on(table.cleanup_failed),
+    index("run_workspace_created_idx").on(table.workspace_id, table.created_at, table.id),
+    index("run_workspace_trigger_created_idx").on(table.workspace_id, table.trigger_type, table.created_at, table.id),
     index("run_workspace_status_idx").on(table.workspace_id, table.status),
     index("run_queue_idx").on(table.workspace_id, table.status, table.ready_for_integration_at, table.id),
   ],
@@ -71,6 +73,9 @@ export const OperationTable = sqliteTable(
     workspace_id: text()
       .notNull()
       .references(() => WorkspaceTable.id, { onDelete: "cascade" }),
+    actor_type: text({ enum: actor_type_values })
+      .notNull()
+      .$default(() => "system"),
     status: text({ enum: operation_status_values }).notNull(),
     trigger_type: text({ enum: run_trigger_type_values }).notNull(),
     workflow_id: text(),
@@ -90,6 +95,9 @@ export const OperationTable = sqliteTable(
   (table) => [
     index("operation_run_idx").on(table.run_id),
     index("operation_workspace_idx").on(table.workspace_id),
+    index("operation_workspace_created_idx").on(table.workspace_id, table.created_at, table.id),
+    index("operation_workspace_actor_created_idx").on(table.workspace_id, table.actor_type, table.created_at, table.id),
+    index("operation_workspace_trigger_created_idx").on(table.workspace_id, table.trigger_type, table.created_at, table.id),
     index("operation_status_idx").on(table.status),
     index("operation_source_idx").on(table.source_operation_id),
     index("operation_attempt_idx").on(table.integration_attempt_id),

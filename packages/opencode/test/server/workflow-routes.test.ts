@@ -540,4 +540,22 @@ describe("workflow/library routes", () => {
       },
     })
   })
+
+  test("history routes reject malformed cursor input", async () => {
+    await using dir = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: dir.path,
+      fn: async () => {
+        const app = Server.App()
+        const response = await app.request(
+          `/workflow/history/runs?directory=${encodeURIComponent(dir.path)}&cursor=bad_cursor`,
+          {
+            method: "GET",
+          },
+        )
+        expect(response.status).toBe(400)
+      },
+    })
+  })
 })

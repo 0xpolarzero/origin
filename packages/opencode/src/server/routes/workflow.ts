@@ -3,11 +3,13 @@ import { Hono } from "hono"
 import z from "zod"
 import { errors } from "../error"
 import { Instance } from "@/project/instance"
+import { WorkspaceContext } from "@/control-plane/workspace-context"
 import { validation_report, workflow_item } from "@/workflow/contract"
 import { WorkflowManualRun } from "@/workflow/manual-run"
 import { WorkflowRunGate } from "@/workflow/run-gate"
 import { WorkflowValidation } from "@/workflow/validate"
 import { lazy } from "@/util/lazy"
+import { RuntimeHistory } from "@/runtime/history"
 
 const run_validate = z
   .object({
@@ -15,8 +17,92 @@ const run_validate = z
   })
   .strict()
 
+const query_boolean = z
+  .preprocess(
+    (value) => (typeof value === "string" ? value.trim().toLowerCase() : value),
+    z.union([z.boolean(), z.enum(["true", "false", "1", "0"])]),
+  )
+  .transform((value) => {
+    if (typeof value === "boolean") return value
+    return value === "true" || value === "1"
+  })
+
+const history_query = z
+  .object({
+    cursor: z.string().regex(/^\d+:[0-9a-f-]+$/i).optional(),
+    limit: z.coerce.number().int().min(1).max(200).optional(),
+    include_debug: query_boolean.optional(),
+  })
+
+const operation_history_query = history_query
+  .extend({
+    include_user: query_boolean.optional(),
+  })
+
 export const WorkflowRoutes = lazy(() =>
   new Hono()
+    .get(
+      "/history/runs",
+      describeRoute({
+        summary: "List workflow runs history",
+        description: "List run history with deterministic sorting, cursor pagination, and safe operation-link metadata.",
+        operationId: "workflow.history.runs",
+        responses: {
+          200: {
+            description: "Run history page",
+            content: {
+              "application/json": {
+                schema: resolver(RuntimeHistory.RunPage),
+              },
+            },
+          },
+        },
+      }),
+      validator("query", history_query),
+      async (c) => {
+        const query = c.req.valid("query")
+        return c.json(
+          RuntimeHistory.runs({
+            workspace_id: WorkspaceContext.workspaceID,
+            cursor: query.cursor,
+            limit: query.limit,
+            include_debug: query.include_debug,
+          }),
+        )
+      },
+    )
+    .get(
+      "/history/operations",
+      describeRoute({
+        summary: "List workflow operations history",
+        description:
+          "List operations history with deterministic sorting, cursor pagination, provenance metadata, and safe run-link metadata.",
+        operationId: "workflow.history.operations",
+        responses: {
+          200: {
+            description: "Operation history page",
+            content: {
+              "application/json": {
+                schema: resolver(RuntimeHistory.OperationPage),
+              },
+            },
+          },
+        },
+      }),
+      validator("query", operation_history_query),
+      async (c) => {
+        const query = c.req.valid("query")
+        return c.json(
+          RuntimeHistory.operations({
+            workspace_id: WorkspaceContext.workspaceID,
+            cursor: query.cursor,
+            limit: query.limit,
+            include_debug: query.include_debug,
+            include_user: query.include_user,
+          }),
+        )
+      },
+    )
     .get(
       "/",
       describeRoute({

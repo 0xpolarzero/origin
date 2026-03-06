@@ -43,6 +43,7 @@ function create_row(input: z.infer<typeof create_input>) {
     id: create_uuid_v7(input.id),
     run_id: input.run_id,
     workspace_id: input.workspace_id,
+    actor_type: input.actor_type,
     status: input.status,
     source_operation_id: input.source_operation_id ?? null,
     session_id: input.session_id ?? null,
