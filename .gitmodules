@@ -1,0 +1,3 @@
+[submodule "docs/references/smithers"]
+	path = docs/references/smithers
+	url = https://github.com/jjhub-ai/smithers
