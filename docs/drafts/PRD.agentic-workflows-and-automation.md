@@ -251,13 +251,16 @@ AI may directly edit shared library items when it judges that a shared change is
 
 V1 workflow graphs should support:
 
-- script/code execution
-- agent request
-- condition/branch
-- parallel block
-- loop block
-- validation/end
-- integration draft/send action where allowed by existing outbound rules
+- `script`
+- `agent_request`
+- `condition`
+- `parallel`
+- `loop`
+- `validation`
+- `draft_action`
+- `end`
+
+One `agent_request` node should represent one agent request. Multi-agent behavior should be modeled as multiple nodes, not one node containing many agents.
 
 V1 should not support interactive approval/input pause nodes, subworkflows, or runtime-generated nodes.
 
@@ -291,6 +294,8 @@ V1 rerun actions should be:
 - keep valid upstream results
 - invalidate downstream dependents
 - recompute from the selected failed node or block forward
+
+Non-terminal runs should auto-resume after app restart from persisted workflow run state.
 
 ### Parallel Mutation Model
 
@@ -335,6 +340,10 @@ Visibility should be role-based, not derived from `parent_id`.
 - `run_followup` is persistent per run and opens from the run page.
 - Power users may still open any linked session in the normal session view.
 
+Execution-node transcripts should be read-only history by default and expose an explicit `Continue from here` action.
+
+Run-followup chats should default to analysis/debugging. If the user wants to turn run analysis into workflow changes, Origin should fork a dedicated workflow edit session linked back to the run instead of silently mutating the follow-up session's role.
+
 ## Navigation and History
 
 ### Primary Surfaces
@@ -372,6 +381,8 @@ And add:
 
 Workflow edit history should be one top-level row per workflow edit session, with checkpoints nested inside the detail view for that session.
 
+Deleting a workflow with historical runs should behave like archive/hide in v1 rather than erasing the workflow's historical run surfaces. Past runs and snapshots must remain renderable.
+
 ## Notifications
 
 Long-running or completed workflow execution notifications should deep-link to the workflow or run surface, not to hidden execution sessions.
@@ -386,6 +397,7 @@ Long-running or completed workflow execution notifications should deep-link to t
 6. One workflow edit session may publish multiple live revisions over time.
 7. History stays sparse at the top level and detailed on drill-down.
 8. The app continues to reuse existing session, runtime, draft, and JJ foundations where they still fit.
+9. Shared library items that are still in use should be blocked from deletion by default; users should resolve usage explicitly instead of silently breaking workflows.
 
 ## Success Measures
 

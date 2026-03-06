@@ -136,6 +136,13 @@ flowchart LR
 
 Workflow edit sessions are intent-scoped to one workflow, but they are not sandboxed to workflow files. History must surface when those sessions also changed unrelated workspace files.
 
+### Session Detail Rules
+
+- `execution_node` transcripts are read-only by default.
+- node detail should expose explicit `Continue from here` rather than turning the execution transcript itself into a live mutable chat.
+- `run_followup` is analysis/debug-first by default.
+- when the user wants to change the workflow from a run-followup context, Origin should fork a new workflow edit session linked back to the run and seeded with the run snapshot context.
+
 ### Important Constraint
 
 Do not model these behaviors through `parent_id`.
@@ -166,6 +173,8 @@ The graph model in v1 should support:
 - `validation`
 - `draft_action`
 - `end`
+
+One `agent_request` node equals one agent request. Multi-agent flows are modeled as multiple nodes in the graph.
 
 ### Run Node Status
 
@@ -239,6 +248,19 @@ Skip reasons should carry more meaning than additional statuses. Useful reasons 
 - draft creation and send-related graph steps are visible workflow nodes where outbound rules allow them
 - node detail should render payload, target, approval state, and send history
 
+## Manual Run Inputs
+
+Manual runs should support a small typed-input contract in v1:
+
+- text
+- long text
+- number
+- boolean
+- select
+- file/path pick
+
+Scheduled and signal-triggered runs continue to bind inputs from their trigger context.
+
 ## Rerun Semantics
 
 ### Rerun Workflow
@@ -254,6 +276,10 @@ Always creates a new run linked to the source run and:
 - keeps valid upstream results
 - invalidates downstream dependents
 - recomputes from the selected failed node or block forward
+
+### Restart Behavior
+
+Non-terminal runs should auto-resume after app restart from persisted run, node, attempt, and event state.
 
 ## Navigation Model
 
@@ -321,10 +347,11 @@ Add:
 Primary run page should expose:
 
 - run summary
-- latest graph projection
+- the full workflow snapshot graph that actually executed
 - node status and summaries
 - side effect summary
 - follow-up chat entrypoint
+- dimmed unreached or skipped paths with explicit reasons
 
 Advanced inspectors should expose:
 
@@ -347,6 +374,13 @@ Advanced inspectors should expose:
 3. AI may promote useful local resources into the shared library.
 4. User edits to shared resources should surface `used by` and allow copy-on-write.
 5. AI may directly edit shared library items when appropriate, but those impacts must be explicit in history.
+6. Shared library items that are still used by workflows should be blocked from deletion by default.
+
+## Workflow Lifecycle Policy
+
+- workflow runs do not rewrite workflow definitions or library items by default
+- deleting a workflow with historical runs should archive or hide it rather than erase historical run surfaces
+- duplicating a workflow should copy workflow-local resources while leaving shared-library references shared by default
 
 ## Reuse Strategy
 
