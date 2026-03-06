@@ -44,6 +44,7 @@ export const RunTable = sqliteTable(
     ready_for_integration_at: integer(),
     failure_code: text({ enum: failure_code_values }),
     reason_code: text({ enum: reason_code_values }),
+    trigger_metadata_json: text({ mode: "json" }).$type<Record<string, unknown>>(),
     integration_candidate_base_change_id: text(),
     integration_candidate_change_ids: text({ mode: "json" }).$type<string[]>(),
     integration_candidate_changed_paths: text({ mode: "json" }).$type<string[]>(),
@@ -63,6 +64,55 @@ export const RunTable = sqliteTable(
     index("run_workspace_trigger_created_idx").on(table.workspace_id, table.trigger_type, table.created_at, table.id),
     index("run_workspace_status_idx").on(table.workspace_id, table.status),
     index("run_queue_idx").on(table.workspace_id, table.status, table.ready_for_integration_at, table.id),
+  ],
+)
+
+export const WorkflowTriggerTable = sqliteTable(
+  "workflow_trigger",
+  {
+    id: text().primaryKey(),
+    workspace_id: text()
+      .notNull()
+      .references(() => WorkspaceTable.id, { onDelete: "cascade" }),
+    workflow_id: text().notNull(),
+    trigger_type: text({ enum: ["cron", "signal"] }).notNull(),
+    trigger_value: text().notNull(),
+    timezone: text(),
+    enabled_at: integer().notNull(),
+    cursor_at: integer(),
+    ...Timestamps,
+  },
+  (table) => [
+    uniqueIndex("workflow_trigger_workspace_workflow_type_uq").on(table.workspace_id, table.workflow_id, table.trigger_type),
+    index("workflow_trigger_workspace_type_idx").on(table.workspace_id, table.trigger_type),
+    index("workflow_trigger_workspace_value_idx").on(table.workspace_id, table.trigger_type, table.trigger_value),
+  ],
+)
+
+export const WorkflowSignalDedupeTable = sqliteTable(
+  "workflow_signal_dedupe",
+  {
+    id: text().primaryKey(),
+    trigger_id: text()
+      .notNull()
+      .references(() => WorkflowTriggerTable.id, { onDelete: "cascade" }),
+    workspace_id: text()
+      .notNull()
+      .references(() => WorkspaceTable.id, { onDelete: "cascade" }),
+    workflow_id: text().notNull(),
+    dedupe_key: text().notNull(),
+    provider_event_id: text(),
+    fallback_hash: text(),
+    event_time: integer().notNull(),
+    payload_json: text({ mode: "json" }).notNull().$type<Record<string, unknown>>(),
+    source_json: text({ mode: "json" }).$type<Record<string, unknown>>(),
+    first_run_id: text().references(() => RunTable.id, { onDelete: "set null" }),
+    ...Timestamps,
+  },
+  (table) => [
+    uniqueIndex("workflow_signal_dedupe_trigger_key_uq").on(table.trigger_id, table.dedupe_key),
+    index("workflow_signal_dedupe_workspace_workflow_idx").on(table.workspace_id, table.workflow_id, table.created_at),
+    index("workflow_signal_dedupe_run_idx").on(table.first_run_id),
   ],
 )
 

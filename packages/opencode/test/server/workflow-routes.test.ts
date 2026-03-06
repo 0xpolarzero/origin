@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
 import { GlobalBus } from "../../src/bus/global"
+import { WorkspaceContext } from "../../src/control-plane/workspace-context"
 import { WorkspaceTable } from "../../src/control-plane/workspace.sql"
 import { JJ } from "../../src/project/jj"
 import { Instance } from "../../src/project/instance"
@@ -13,6 +14,7 @@ import { Database, eq } from "../../src/storage/db"
 import { Server } from "../../src/server/server"
 import { Log } from "../../src/util/log"
 import { WorkflowManualRun } from "../../src/workflow/manual-run"
+import { WorkflowTriggerEngine } from "../../src/workflow/trigger-engine"
 import { resetDatabase } from "../fixture/db"
 import { tmpdir } from "../fixture/fixture"
 
@@ -82,12 +84,14 @@ function seams(input?: { execute?: (item: ExecuteItem) => Promise<void> }) {
 beforeEach(async () => {
   await resetDatabase()
   WorkflowManualRun.Testing.reset()
+  WorkflowTriggerEngine.Testing.reset()
   RuntimeOutbound.Testing.reset()
 })
 
 afterEach(async () => {
   await resetDatabase()
   WorkflowManualRun.Testing.reset()
+  WorkflowTriggerEngine.Testing.reset()
   RuntimeOutbound.Testing.reset()
 })
 
@@ -708,5 +712,388 @@ describe("workflow/library routes", () => {
         expect(response.status).toBe(400)
       },
     })
+  })
+
+  test("signal ingress rejects malformed bodies and missing workspace context", async () => {
+    await using home = await tmpdir()
+    const previous = process.env.OPENCODE_TEST_HOME
+    const origin = path.join(home.path, "Documents", "origin")
+    process.env.OPENCODE_TEST_HOME = home.path
+
+    try {
+      await write(
+        origin,
+        ".origin/workflows/incoming.yaml",
+        [
+          "schema_version: 1",
+          "id: incoming",
+          "name: Incoming",
+          "trigger:",
+          "  type: signal",
+          "  signal: incoming",
+          "instructions: run",
+        ].join("\n"),
+      )
+
+      await Instance.provide({
+        directory: origin,
+        fn: async () => {
+          seed("wrk_signal", origin)
+          WorkflowManualRun.Testing.set(seams())
+          WorkflowTriggerEngine.Testing.set({
+            now: () => 1_000,
+          })
+
+          const app = Server.App()
+          const base = `?directory=${encodeURIComponent(origin)}`
+
+          const missing = await app.request(`/workflow/signals/incoming${base}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              event_time: 2_000,
+              payload_json: {
+                ok: true,
+              },
+            }),
+          })
+
+          expect(missing.status).toBe(400)
+          const missing_body = (await missing.json()) as {
+            name: string
+            data: { code: string }
+          }
+          expect(missing_body.name).toBe("RuntimeSignalIngressError")
+          expect(missing_body.data.code).toBe("signal_workspace_required")
+
+          const malformed = await app.request(`/workflow/signals/incoming${base}&workspace=wrk_signal`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              event_time: "bad",
+              payload_json: [],
+            }),
+          })
+
+          expect(malformed.status).toBe(400)
+          const rows = Database.use((db) => db.select().from(RunTable).all())
+          expect(rows).toHaveLength(0)
+        },
+      })
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODE_TEST_HOME
+      else process.env.OPENCODE_TEST_HOME = previous
+    }
+  })
+
+  test("signal ingress fans out first delivery and suppresses provider-id duplicates without new sessions", async () => {
+    await using home = await tmpdir()
+    const previous = process.env.OPENCODE_TEST_HOME
+    const origin = path.join(home.path, "Documents", "origin")
+    process.env.OPENCODE_TEST_HOME = home.path
+
+    try {
+      await write(
+        origin,
+        ".origin/workflows/a.yaml",
+        [
+          "schema_version: 1",
+          "id: incoming_a",
+          "name: Incoming A",
+          "trigger:",
+          "  type: signal",
+          "  signal: incoming",
+          "instructions: run",
+        ].join("\n"),
+      )
+      await write(
+        origin,
+        ".origin/workflows/b.yaml",
+        [
+          "schema_version: 1",
+          "id: incoming_b",
+          "name: Incoming B",
+          "trigger:",
+          "  type: signal",
+          "  signal: incoming",
+          "instructions: run",
+        ].join("\n"),
+      )
+
+      await Instance.provide({
+        directory: origin,
+        fn: async () => {
+          seed("wrk_signal", origin)
+          WorkflowManualRun.Testing.set(seams())
+          WorkflowTriggerEngine.Testing.set({
+            now: () => 1_000,
+          })
+
+          const app = Server.App()
+          const query = `?directory=${encodeURIComponent(origin)}&workspace=wrk_signal`
+          const first = await app.request(`/workflow/signals/incoming${query}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              event_time: 2_000,
+              provider_event_id: "evt_1",
+              payload_json: {
+                alpha: 1,
+              },
+            }),
+          })
+
+          expect(first.status).toBe(200)
+          const first_body = (await first.json()) as {
+            accepted: boolean
+            duplicate: boolean
+            run_ids: string[]
+          }
+          expect(first_body.accepted).toBe(true)
+          expect(first_body.duplicate).toBe(false)
+          expect(first_body.run_ids).toHaveLength(2)
+
+          await WorkspaceContext.provide({
+            workspaceID: "wrk_signal",
+            fn: async () => {
+              for (const run_id of first_body.run_ids) {
+                await WorkflowManualRun.wait({ run_id, timeout_ms: 5000 })
+              }
+            },
+          })
+
+          const sessions_before = Database.use((db) => db.select().from(SessionTable).all())
+          expect(sessions_before).toHaveLength(2)
+
+          const duplicate = await app.request(`/workflow/signals/incoming${query}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              event_time: 2_000,
+              provider_event_id: "evt_1",
+              payload_json: {
+                alpha: 2,
+              },
+            }),
+          })
+
+          expect(duplicate.status).toBe(200)
+          const duplicate_body = (await duplicate.json()) as {
+            accepted: boolean
+            duplicate: boolean
+            run_ids: string[]
+          }
+          expect(duplicate_body.accepted).toBe(true)
+          expect(duplicate_body.duplicate).toBe(true)
+          expect(duplicate_body.run_ids).toHaveLength(0)
+
+          const rows = Database.use((db) => db.select().from(RunTable).all())
+          expect(rows).toHaveLength(4)
+          const skipped = rows.filter((row) => row.reason_code === "duplicate_event")
+          expect(skipped).toHaveLength(2)
+          expect(skipped.every((row) => row.session_id === null)).toBe(true)
+
+          const sessions_after = Database.use((db) => db.select().from(SessionTable).all())
+          expect(sessions_after).toHaveLength(2)
+        },
+      })
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODE_TEST_HOME
+      else process.env.OPENCODE_TEST_HOME = previous
+    }
+  })
+
+  test("signal ingress uses fallback hash dedupe, enforces no-backfill, and returns policy/unknown outcomes deterministically", async () => {
+    await using home = await tmpdir()
+    const previous = process.env.OPENCODE_TEST_HOME
+    const origin = path.join(home.path, "Documents", "origin")
+    process.env.OPENCODE_TEST_HOME = home.path
+
+    try {
+      await write(
+        origin,
+        ".origin/workflows/incoming.yaml",
+        [
+          "schema_version: 1",
+          "id: incoming",
+          "name: Incoming",
+          "trigger:",
+          "  type: signal",
+          "  signal: incoming",
+          "instructions: run",
+        ].join("\n"),
+      )
+
+      await Instance.provide({
+        directory: origin,
+        fn: async () => {
+          seed("wrk_signal", origin)
+          WorkflowManualRun.Testing.set(seams())
+          WorkflowTriggerEngine.Testing.set({
+            now: () => 5_000,
+          })
+
+          const app = Server.App()
+          const query = `?directory=${encodeURIComponent(origin)}&workspace=wrk_signal`
+
+          const first = await app.request(`/workflow/signals/incoming${query}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              event_time: 6_000,
+              payload_json: {
+                b: 2,
+                a: 1,
+              },
+            }),
+          })
+
+          expect(first.status).toBe(200)
+          const first_body = (await first.json()) as {
+            accepted: boolean
+            duplicate: boolean
+            run_ids: string[]
+          }
+          expect(first_body.accepted).toBe(true)
+          expect(first_body.duplicate).toBe(false)
+          expect(first_body.run_ids).toHaveLength(1)
+
+          await WorkspaceContext.provide({
+            workspaceID: "wrk_signal",
+            fn: async () => {
+              await WorkflowManualRun.wait({ run_id: first_body.run_ids[0]!, timeout_ms: 5000 })
+            },
+          })
+
+          const duplicate = await app.request(`/workflow/signals/incoming${query}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              event_time: 6_000,
+              payload_json: {
+                a: 1,
+                b: 2,
+              },
+            }),
+          })
+
+          expect(duplicate.status).toBe(200)
+          const duplicate_body = (await duplicate.json()) as {
+            accepted: boolean
+            duplicate: boolean
+            run_ids: string[]
+          }
+          expect(duplicate_body.accepted).toBe(true)
+          expect(duplicate_body.duplicate).toBe(true)
+          expect(duplicate_body.run_ids).toHaveLength(0)
+
+          const boundary = await app.request(`/workflow/signals/incoming${query}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              event_time: 5_000,
+              payload_json: {
+                a: 1,
+              },
+            }),
+          })
+
+          expect(boundary.status).toBe(200)
+          expect(await boundary.json()).toEqual({
+            accepted: false,
+            duplicate: false,
+            reason: "before_enablement_boundary",
+            run_ids: [],
+          })
+
+          const unknown = await app.request(`/workflow/signals/other${query}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              event_time: 6_000,
+              payload_json: {
+                ok: true,
+              },
+            }),
+          })
+
+          expect(unknown.status).toBe(200)
+          expect(await unknown.json()).toEqual({
+            accepted: false,
+            duplicate: false,
+            reason: "signal_unregistered",
+            run_ids: [],
+          })
+        },
+      })
+
+      await using dir = await tmpdir()
+      await write(
+        dir.path,
+        ".origin/workflows/incoming.yaml",
+        [
+          "schema_version: 1",
+          "id: incoming",
+          "name: Incoming",
+          "trigger:",
+          "  type: signal",
+          "  signal: incoming",
+          "instructions: run",
+        ].join("\n"),
+      )
+
+      await Instance.provide({
+        directory: dir.path,
+        fn: async () => {
+          seed("wrk_standard", dir.path)
+          WorkflowManualRun.Testing.set(seams())
+          WorkflowTriggerEngine.Testing.set({
+            now: () => 5_000,
+          })
+
+          const app = Server.App()
+          const query = `?directory=${encodeURIComponent(dir.path)}&workspace=wrk_standard`
+          const blocked = await app.request(`/workflow/signals/incoming${query}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              event_time: 6_000,
+              payload_json: {
+                ok: true,
+              },
+            }),
+          })
+
+          expect(blocked.status).toBe(200)
+          expect(await blocked.json()).toEqual({
+            accepted: false,
+            duplicate: false,
+            reason: "workspace_policy_blocked",
+            run_ids: [],
+          })
+        },
+      })
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODE_TEST_HOME
+      else process.env.OPENCODE_TEST_HOME = previous
+    }
   })
 })

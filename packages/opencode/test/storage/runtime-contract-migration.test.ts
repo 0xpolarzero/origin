@@ -37,6 +37,8 @@ describe("runtime contract migration shape", () => {
       expect(tables).toContain("draft")
       expect(tables).toContain("integration_attempt")
       expect(tables).toContain("audit_event")
+      expect(tables).toContain("workflow_trigger")
+      expect(tables).toContain("workflow_signal_dedupe")
     })
   })
 
@@ -63,6 +65,7 @@ describe("runtime contract migration shape", () => {
         "integration_candidate_change_ids",
         "integration_candidate_changed_paths",
         "cleanup_failed",
+        "trigger_metadata_json",
       ])
 
       const idx = indexes(state.sqlite, "run")
@@ -73,6 +76,51 @@ describe("runtime contract migration shape", () => {
       expect(idx).toContain("run_workspace_trigger_created_idx")
       expect(idx).toContain("run_workspace_status_idx")
       expect(idx).toContain("run_queue_idx")
+    })
+  })
+
+  test("workflow trigger tables include state and dedupe indexes", () => {
+    with_db((state) => {
+      const trigger_cols = names(state.sqlite, "workflow_trigger")
+      expect(trigger_cols).toEqual([
+        "id",
+        "workspace_id",
+        "workflow_id",
+        "trigger_type",
+        "trigger_value",
+        "timezone",
+        "enabled_at",
+        "cursor_at",
+        "created_at",
+        "updated_at",
+      ])
+
+      const trigger_idx = indexes(state.sqlite, "workflow_trigger")
+      expect(trigger_idx).toContain("workflow_trigger_workspace_workflow_type_uq")
+      expect(trigger_idx).toContain("workflow_trigger_workspace_type_idx")
+      expect(trigger_idx).toContain("workflow_trigger_workspace_value_idx")
+
+      const dedupe_cols = names(state.sqlite, "workflow_signal_dedupe")
+      expect(dedupe_cols).toEqual([
+        "id",
+        "trigger_id",
+        "workspace_id",
+        "workflow_id",
+        "dedupe_key",
+        "provider_event_id",
+        "fallback_hash",
+        "event_time",
+        "payload_json",
+        "source_json",
+        "first_run_id",
+        "created_at",
+        "updated_at",
+      ])
+
+      const dedupe_idx = indexes(state.sqlite, "workflow_signal_dedupe")
+      expect(dedupe_idx).toContain("workflow_signal_dedupe_trigger_key_uq")
+      expect(dedupe_idx).toContain("workflow_signal_dedupe_workspace_workflow_idx")
+      expect(dedupe_idx).toContain("workflow_signal_dedupe_run_idx")
     })
   })
 

@@ -19,6 +19,7 @@ const runsRows = {
     finished_at: 301,
     operation_id: "op-main",
     operation_exists: true,
+    trigger_metadata: null,
     duplicate_event: {
       reason: false,
       failure: false,
@@ -27,7 +28,7 @@ const runsRows = {
   duplicate: {
     id: "run-dup",
     status: "skipped",
-    trigger_type: "cron",
+    trigger_type: "signal",
     workflow_id: "workflow.daily",
     workspace_id: "wrk_1",
     session_id: null,
@@ -40,8 +41,40 @@ const runsRows = {
     finished_at: 200,
     operation_id: null,
     operation_exists: false,
+    trigger_metadata: {
+      source: "signal",
+      signal: "incoming",
+      dedupe_key: "evt_1",
+    },
     duplicate_event: {
       reason: true,
+      failure: false,
+    },
+  },
+  skipped: {
+    id: "run-skip",
+    status: "skipped",
+    trigger_type: "cron",
+    workflow_id: "workflow.daily",
+    workspace_id: "wrk_1",
+    session_id: null,
+    reason_code: "cron_missed_slot",
+    failure_code: null,
+    ready_for_integration_at: null,
+    created_at: 180,
+    updated_at: 180,
+    started_at: null,
+    finished_at: 180,
+    operation_id: null,
+    operation_exists: false,
+    trigger_metadata: {
+      source: "cron",
+      slot_local: "2026-03-08T02:30[America/New_York]",
+      slot_utc: null,
+      summary: false,
+    },
+    duplicate_event: {
+      reason: false,
       failure: false,
     },
   },
@@ -61,6 +94,7 @@ const runsRows = {
     finished_at: 101,
     operation_id: null,
     operation_exists: false,
+    trigger_metadata: null,
     duplicate_event: {
       reason: false,
       failure: false,
@@ -82,6 +116,7 @@ const runsRows = {
     finished_at: 501,
     operation_id: "op-debug",
     operation_exists: true,
+    trigger_metadata: null,
     duplicate_event: {
       reason: false,
       failure: false,
@@ -184,7 +219,7 @@ test("history tabs, filtering, cross-links, duplicate events, and missing links"
           status: 200,
           contentType: "application/json",
           body: JSON.stringify({
-            items: [runsRows.duplicate, runsRows.missing],
+            items: [runsRows.duplicate, runsRows.skipped, runsRows.missing],
             next_cursor: null,
           }),
         })
@@ -256,9 +291,18 @@ test("history tabs, filtering, cross-links, duplicate events, and missing links"
       await expect(duplicate).toHaveAttribute("data-duplicate", "true")
 
       await duplicate.getByRole("button", { name: "Open Event Details" }).click()
-      await expect(duplicate).toContainText("Duplicate event row")
-      await expect(duplicate.getByRole("button", { name: "Open Operation" })).toBeDisabled()
+      await expect(duplicate).toContainText("Ignored duplicate signal.")
+      await expect(duplicate).toContainText("signal: incoming")
       await expect(duplicate.getByRole("button", { name: "Open Run Session" })).toHaveCount(0)
+      await expect(duplicate).toContainText("No operation expected")
+
+      const skipped = page.locator('[data-component="history-run-row"][data-id="run-skip"]')
+      await expect(skipped).toBeVisible()
+      await skipped.getByRole("button", { name: "Open Event Details" }).click()
+      await expect(skipped).toContainText("Missed cron slot.")
+      await expect(skipped).toContainText("slot_local: 2026-03-08T02:30[America/New_York]")
+      await expect(skipped).toContainText("No operation expected")
+
       await expect(page.locator('[data-component="history-counter-runs"]')).toHaveText("2")
       await expect(page.locator('[data-component="history-counter-duplicates"]')).toHaveText("1")
 
@@ -304,10 +348,11 @@ test("history tabs, filtering, cross-links, duplicate events, and missing links"
       await expect(rows.nth(0)).toHaveAttribute("data-id", "run-main")
       await expect(rows).toHaveCount(1)
       await page.getByRole("button", { name: "Load More" }).click()
-      await expect(rows).toHaveCount(3)
+      await expect(rows).toHaveCount(4)
       await expect(rows.nth(0)).toHaveAttribute("data-id", "run-main")
       await expect(rows.nth(1)).toHaveAttribute("data-id", "run-dup")
-      await expect(rows.nth(2)).toHaveAttribute("data-id", "run-missing")
+      await expect(rows.nth(2)).toHaveAttribute("data-id", "run-skip")
+      await expect(rows.nth(3)).toHaveAttribute("data-id", "run-missing")
     } finally {
       if (page.isClosed()) return
       await page.unroute("**/workflow/history/runs*", runs)

@@ -2,6 +2,16 @@ import { NamedError } from "@opencode-ai/util/error"
 import z from "zod"
 import { block_reason_code, validation_code } from "./contract"
 
+const trigger_failure_code = z.enum([
+  "integration_transport_error",
+  "transient_runtime_error",
+  "integration_timeout",
+  "validation_error",
+  "schema_error",
+  "policy_blocked",
+  "workspace_policy_blocked",
+])
+
 export const RuntimeIllegalTransitionError = NamedError.create(
   "RuntimeIllegalTransitionError",
   z.object({
@@ -120,6 +130,22 @@ export const RuntimeManualRunWorkspaceRequiredError = NamedError.create(
   "RuntimeManualRunWorkspaceRequiredError",
   z.object({
     code: z.literal("manual_run_workspace_required"),
+    message: z.string(),
+  }),
+)
+
+export const RuntimeTriggerFailureError = NamedError.create(
+  "RuntimeTriggerFailureError",
+  z.object({
+    code: trigger_failure_code,
+    message: z.string(),
+  }),
+)
+
+export const RuntimeSignalIngressError = NamedError.create(
+  "RuntimeSignalIngressError",
+  z.object({
+    code: z.enum(["workspace_policy_blocked", "signal_workspace_required"]),
     message: z.string(),
   }),
 )

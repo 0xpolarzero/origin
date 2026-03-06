@@ -102,6 +102,8 @@ describe("runtime migration forward-apply and backfill safety", () => {
     expect(tables).toContain("draft")
     expect(tables).toContain("integration_attempt")
     expect(tables).toContain("audit_event")
+    expect(tables).toContain("workflow_trigger")
+    expect(tables).toContain("workflow_signal_dedupe")
 
     sqlite.close()
   })

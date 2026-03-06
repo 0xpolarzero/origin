@@ -7,10 +7,16 @@ import { create_uuid_v7, uuid_v7 } from "@/runtime/uuid"
 import { Session } from "@/session"
 import { SessionPrompt } from "@/session/prompt"
 import { terminal_run_statuses } from "@/runtime/contract"
-import { RuntimeIllegalTransitionError, RuntimeManualRunDuplicateError, RuntimeManualRunWorkspaceRequiredError } from "@/runtime/error"
+import {
+  RuntimeIllegalTransitionError,
+  RuntimeManualRunDuplicateError,
+  RuntimeManualRunWorkspaceRequiredError,
+  RuntimeTriggerFailureError,
+} from "@/runtime/error"
 import { NotFoundError } from "@/storage/db"
 import { WorkspaceContext } from "@/control-plane/workspace-context"
 import { Workspace } from "@/control-plane/workspace"
+import { WorkflowTriggerFailure, type TriggerFailureCode } from "./trigger-failure"
 import { WorkflowIntegrationQueue } from "./integration-queue"
 import { WorkflowRunGate } from "./run-gate"
 import z from "zod"
@@ -18,6 +24,7 @@ import z from "zod"
 const REPAIR_MAX = 3
 const REPAIR_WINDOW_MS = 10 * 60 * 1000
 const WAIT_STEP_MS = 50
+const AUTOMATED_RETRY_MAX = 2
 
 const start_input = z
   .object({
@@ -76,6 +83,7 @@ const info = z
     ready_for_integration_at: z.number().nullable(),
     reason_code: z.string().nullable(),
     failure_code: z.string().nullable(),
+    trigger_metadata: z.record(z.string(), z.unknown()).nullable(),
     cleanup_failed: z.boolean(),
     created_at: z.number(),
     updated_at: z.number(),
@@ -87,6 +95,8 @@ const info = z
 
 type Row = ReturnType<typeof RuntimeRun.get>
 type Fingerprint = Map<string, string>
+type Mode = "manual" | "automated"
+type RunFailureCode = "manual_start_failed" | "repair_exhausted" | "workspace_policy_blocked" | TriggerFailureCode
 
 type ExecuteInput = {
   run: Row
@@ -125,6 +135,21 @@ type Seams = {
   validate?: (input: ValidateInput) => Promise<z.output<typeof validation_result>>
   classify?: (input: ClassifyInput) => Promise<z.output<typeof classification_result>>
 }
+
+const automated_input = z
+  .object({
+    workflow: z
+      .object({
+        id: z.string().min(1),
+        name: z.string().min(1),
+        instructions: z.string().min(1),
+      })
+      .strict(),
+    trigger_type: z.enum(["cron", "signal"]),
+    trigger_id: z.string().min(1),
+    trigger_metadata_json: z.record(z.string(), z.unknown()).nullable().optional(),
+  })
+  .strict()
 
 type Task = {
   key: string
@@ -191,6 +216,7 @@ function present(row: Row) {
     ready_for_integration_at: row.ready_for_integration_at,
     reason_code: row.reason_code,
     failure_code: row.failure_code,
+    trigger_metadata: row.trigger_metadata_json ?? null,
     cleanup_failed: row.cleanup_failed,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -224,7 +250,7 @@ function transition(input: z.input<typeof RuntimeRun.TransitionInput>) {
   return RuntimeRun.transition(input)
 }
 
-function fail(run_id: string, failure_code: "manual_start_failed" | "repair_exhausted" | "workspace_policy_blocked") {
+function fail(run_id: string, failure_code: RunFailureCode, reason_code?: "retry_exhausted" | "non_retryable") {
   const row = read(run_id)
   if (is_terminal(row.status)) return row
   if (row.status === "queued") {
@@ -242,11 +268,16 @@ function fail(run_id: string, failure_code: "manual_start_failed" | "repair_exha
       id: run_id,
       to: "failed",
       failure_code,
+      reason_code,
     })
   } catch (error) {
     if (error instanceof RuntimeIllegalTransitionError) return read(run_id)
     throw error
   }
+}
+
+function automated_delay(_attempt: number) {
+  return 0
 }
 
 function cancel_status(run_id: string, actor_type: "system" | "user") {
@@ -412,6 +443,7 @@ async function drive(input: {
   root_before: Fingerprint
   root_exclude: string[]
   abort: AbortSignal
+  mode: Mode
   seams: Seams
 }) {
   const execute = input.seams.execute ?? execute_default
@@ -420,10 +452,12 @@ async function drive(input: {
   const now = input.seams.now ?? Date.now
 
   try {
-    transition({
-      id: input.run_id,
-      to: "running",
-    })
+    if (read(input.run_id).status === "queued") {
+      transition({
+        id: input.run_id,
+        to: "running",
+      })
+    }
 
     await execute({
       run: read(input.run_id),
@@ -442,10 +476,12 @@ async function drive(input: {
       return
     }
 
-    transition({
-      id: input.run_id,
-      to: "validating",
-    })
+    if (read(input.run_id).status === "running") {
+      transition({
+        id: input.run_id,
+        to: "validating",
+      })
+    }
 
     let attempt = 0
     let first = 0
@@ -476,7 +512,14 @@ async function drive(input: {
       if (!first) first = mark
 
       if (attempt >= REPAIR_MAX || now() - mark >= REPAIR_WINDOW_MS) {
-        fail(input.run_id, "repair_exhausted")
+        if (input.mode === "manual") {
+          fail(input.run_id, "repair_exhausted")
+          return
+        }
+        throw new RuntimeTriggerFailureError({
+          code: "validation_error",
+          message: verdict.message ?? "workflow validation failed",
+        })
         return
       }
 
@@ -516,7 +559,14 @@ async function drive(input: {
     })
     const escaped = changed(input.root_before, root_after)
     if (escaped.length > 0) {
-      fail(input.run_id, "workspace_policy_blocked")
+      if (input.mode === "manual") {
+        fail(input.run_id, "workspace_policy_blocked")
+        return
+      }
+      throw new RuntimeTriggerFailureError({
+        code: "workspace_policy_blocked",
+        message: "workflow wrote outside the run workspace",
+      })
       return
     }
 
@@ -543,6 +593,7 @@ async function drive(input: {
     queue_touch()
   } catch (error) {
     if (error instanceof NotFoundError) return
+    if (error instanceof RuntimeTriggerFailureError) throw error
     const row = (() => {
       try {
         return read(input.run_id)
@@ -553,7 +604,14 @@ async function drive(input: {
     })()
     if (!row) return
     if (row.status === "canceled") return
-    fail(input.run_id, "manual_start_failed")
+    if (input.mode === "manual") {
+      fail(input.run_id, "manual_start_failed")
+      return
+    }
+    throw new RuntimeTriggerFailureError({
+      code: WorkflowTriggerFailure.classify(error),
+      message: error instanceof Error ? error.message : "automated workflow failed",
+    })
   }
 }
 
@@ -625,6 +683,7 @@ export namespace WorkflowManualRun {
         session_id: session.id,
         run_workspace_root: path.dirname(run_workspace_directory),
         run_workspace_directory,
+        trigger_metadata_json: null,
       })
 
       state().keys.set(key_id, { run_id: run.id })
@@ -663,6 +722,7 @@ export namespace WorkflowManualRun {
         root_before,
         root_exclude,
         abort: abort.signal,
+        mode: "manual",
         seams: all,
       }).finally(async () => {
         await finalize_cleanup({
@@ -768,6 +828,177 @@ export namespace WorkflowManualRun {
       }
 
       await Bun.sleep(WAIT_STEP_MS)
+    }
+  }
+}
+
+export namespace WorkflowAutoRun {
+  export const StartInput = automated_input
+  export const Info = info
+
+  export async function start(value: z.input<typeof StartInput>, seams?: Seams) {
+    const input = StartInput.parse(value)
+    const workspace_id = workspace_required()
+    const workspace = await Workspace.get(workspace_id)
+    if (!workspace) throw new NotFoundError({ message: `Workspace not found: ${workspace_id}` })
+    queue_start()
+
+    const key_id = key(workspace_id, input.workflow.id, input.trigger_id)
+    const lock = state().keys.get(key_id)
+    if (lock?.run_id) return present(read(lock.run_id))
+    if (lock) {
+      throw new RuntimeTriggerFailureError({
+        code: "transient_runtime_error",
+        message: `workflow already running: ${input.workflow.id}`,
+      })
+    }
+
+    state().keys.set(key_id, { run_id: null })
+
+    const all = current(seams)
+    const adapter = (all.adapter ?? ((item: { directory: string }) => JJ.create({ cwd: item.directory })))({
+      directory: Instance.directory,
+    })
+
+    let run: Row | undefined
+    let session_id: string | undefined
+    let task = false
+    const run_id = create_uuid_v7()
+    const run_workspace_directory = adapter.workspace.path(run_id)
+
+    try {
+      const session = await Session.createNext({
+        directory: run_workspace_directory,
+        title: `Workflow: ${input.workflow.name}`,
+      })
+      session_id = session.id
+
+      run = RuntimeRun.create({
+        id: run_id,
+        status: "queued",
+        trigger_type: input.trigger_type,
+        workflow_id: input.workflow.id,
+        workspace_id,
+        session_id: session.id,
+        run_workspace_root: path.dirname(run_workspace_directory),
+        run_workspace_directory,
+        trigger_metadata_json: input.trigger_metadata_json ?? null,
+      })
+
+      state().keys.set(key_id, { run_id: run.id })
+
+      const run_ref = run.id
+      const abort = new AbortController()
+      const done = (async () => {
+        for (let attempt = 0; ; attempt++) {
+          const created = await adapter.workspace.create(run_ref)
+          if (created.status !== "success") {
+            if (attempt >= AUTOMATED_RETRY_MAX) {
+              fail(run_ref, "transient_runtime_error", "retry_exhausted")
+              await finalize_cleanup({
+                run_id: run_ref,
+                adapter,
+                workspace: created,
+              }).catch(() => undefined)
+              return
+            }
+
+            await finalize_cleanup({
+              run_id: run_ref,
+              adapter,
+              workspace: created,
+            }).catch(() => undefined)
+            await Bun.sleep(automated_delay(attempt))
+            continue
+          }
+
+          const relative = path.relative(Instance.directory, created.directory)
+          const root_exclude = [relative]
+          const root_before = await files({
+            directory: Instance.directory,
+            exclude: root_exclude,
+          })
+          const before = await files({
+            directory: created.directory,
+          })
+
+          try {
+            await drive({
+              run_id: run_ref,
+              session_id: session.id,
+              instructions: input.workflow.instructions,
+              workflow_id: input.workflow.id,
+              workspace_id,
+              project_directory: Instance.directory,
+              directory: created.directory,
+              before,
+              root_before,
+              root_exclude,
+              abort: abort.signal,
+              mode: "automated",
+              seams: all,
+            })
+            await finalize_cleanup({
+              run_id: run_ref,
+              adapter,
+              workspace: created,
+            }).catch(() => undefined)
+            return
+          } catch (error) {
+            if (!(error instanceof RuntimeTriggerFailureError)) throw error
+
+            await finalize_cleanup({
+              run_id: run_ref,
+              adapter,
+              workspace: created,
+            }).catch(() => undefined)
+
+            if (!WorkflowTriggerFailure.retryable(error.data.code)) {
+              fail(run_ref, error.data.code, "non_retryable")
+              return
+            }
+
+            if (attempt >= AUTOMATED_RETRY_MAX) {
+              fail(run_ref, error.data.code, "retry_exhausted")
+              return
+            }
+
+            await Bun.sleep(automated_delay(attempt))
+          }
+        }
+      })().finally(async () => {
+        state().tasks.delete(run_ref)
+        state().keys.delete(key_id)
+      })
+
+      state().tasks.set(run_ref, {
+        key: key_id,
+        abort,
+        session_id: session.id,
+        done,
+      })
+      task = true
+
+      return present(read(run_ref))
+    } catch (error) {
+      if (run) {
+        fail(run.id, "transient_runtime_error", "retry_exhausted")
+        await finalize_cleanup({
+          run_id: run.id,
+          adapter,
+          workspace: {
+            name: adapter.workspace.name(run.id),
+            root: path.dirname(adapter.workspace.path(run.id)),
+            directory: adapter.workspace.path(run.id),
+          },
+        }).catch(() => undefined)
+      }
+      throw error
+    } finally {
+      if (!run && session_id) {
+        await Session.remove(session_id).catch(() => undefined)
+      }
+      if (!task) state().keys.delete(key_id)
     }
   }
 }

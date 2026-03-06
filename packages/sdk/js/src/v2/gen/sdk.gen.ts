@@ -202,6 +202,8 @@ import type {
   WorkflowRunStartResponses,
   WorkflowRunValidateErrors,
   WorkflowRunValidateResponses,
+  WorkflowSignalIngestErrors,
+  WorkflowSignalIngestResponses,
   WorkflowValidateResponses,
   WorktreeCreateErrors,
   WorktreeCreateInput,
@@ -2664,6 +2666,61 @@ export class Provider extends HeyApiClient {
   }
 }
 
+export class Signal extends HeyApiClient {
+  /**
+   * Ingest workflow signal
+   *
+   * Ingest a signal event for runnable signal-triggered workflows in the addressed workspace.
+   */
+  public ingest<ThrowOnError extends boolean = false>(
+    parameters: {
+      signal: string
+      directory?: string
+      workspace?: string
+      event_time?: number
+      provider_event_id?: string
+      payload_json?: {
+        [key: string]: unknown
+      }
+      source?: {
+        [key: string]: unknown
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "signal" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "event_time" },
+            { in: "body", key: "provider_event_id" },
+            { in: "body", key: "payload_json" },
+            { in: "body", key: "source" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      WorkflowSignalIngestResponses,
+      WorkflowSignalIngestErrors,
+      ThrowOnError
+    >({
+      url: "/workflow/signals/{signal}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class History extends HeyApiClient {
   /**
    * List workflow runs history
@@ -3264,6 +3321,11 @@ export class Workflow extends HeyApiClient {
       ...options,
       ...params,
     })
+  }
+
+  private _signal?: Signal
+  get signal(): Signal {
+    return (this._signal ??= new Signal({ client: this.client }))
   }
 
   private _history?: History

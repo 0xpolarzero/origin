@@ -8,6 +8,7 @@ import { WorkspaceContext } from "@/control-plane/workspace-context"
 import { validation_report, workflow_item } from "@/workflow/contract"
 import { WorkflowManualRun } from "@/workflow/manual-run"
 import { WorkflowRunGate } from "@/workflow/run-gate"
+import { WorkflowTriggerEngine } from "@/workflow/trigger-engine"
 import { WorkflowValidation } from "@/workflow/validate"
 import { lazy } from "@/util/lazy"
 import { RuntimeHistory } from "@/runtime/history"
@@ -83,6 +84,37 @@ function draft_required(draft_id: string) {
 
 export const WorkflowRoutes = lazy(() =>
   new Hono()
+    .post(
+      "/signals/:signal",
+      describeRoute({
+        summary: "Ingest workflow signal",
+        description: "Ingest a signal event for runnable signal-triggered workflows in the addressed workspace.",
+        operationId: "workflow.signal.ingest",
+        responses: {
+          200: {
+            description: "Signal ingress result",
+            content: {
+              "application/json": {
+                schema: resolver(WorkflowTriggerEngine.SignalResponse),
+              },
+            },
+          },
+          ...errors(400),
+        },
+      }),
+      validator("param", WorkflowTriggerEngine.SignalParam),
+      validator("json", WorkflowTriggerEngine.SignalBody),
+      async (c) => {
+        const params = c.req.valid("param")
+        const body = c.req.valid("json")
+        return c.json(
+          await WorkflowTriggerEngine.signal({
+            signal: params.signal,
+            body,
+          }),
+        )
+      },
+    )
     .get(
       "/history/runs",
       describeRoute({

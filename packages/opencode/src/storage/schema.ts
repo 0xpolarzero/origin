@@ -11,4 +11,6 @@ export {
   IntegrationAttemptTable,
   DispatchAttemptTable,
   AuditEventTable,
+  WorkflowTriggerTable,
+  WorkflowSignalDedupeTable,
 } from "../runtime/runtime.sql"

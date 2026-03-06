@@ -17,6 +17,7 @@ export type DebugState = {
 }
 
 type Duplicate = {
+  status: string
   duplicate_event: {
     reason: boolean
     failure: boolean
@@ -111,6 +112,13 @@ export function counters<T extends Duplicate>(items: T[]) {
         return {
           runs: acc.runs,
           duplicates: acc.duplicates + 1,
+        }
+      }
+
+      if (item.status === "skipped") {
+        return {
+          runs: acc.runs,
+          duplicates: acc.duplicates,
         }
       }
 

@@ -19,6 +19,7 @@ import {
   sendHistoryDraft,
   updateHistoryDraft,
   type HistoryDraft,
+  type HistoryRun,
 } from "./history-data"
 import {
   createDraftEditor,
@@ -54,6 +55,50 @@ const message = (error: unknown) => {
 const stamp = (value: number) => new Date(value).toLocaleString()
 const humanize = (value: string) => value.replace(/_/g, " ")
 const prettyJson = (value: Record<string, unknown>) => JSON.stringify(value, null, 2)
+const text = (value: unknown) => (typeof value === "string" && value.trim() ? value : undefined)
+const number = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? value : undefined)
+
+function outcome(item: HistoryRun) {
+  if (item.status !== "skipped") return
+  if (item.reason_code === "duplicate_event") {
+    const meta = item.trigger_metadata ?? {}
+    return {
+      title: "Ignored duplicate signal.",
+      lines: [
+        text(meta.signal) ? `signal: ${text(meta.signal)}` : undefined,
+        number(meta.event_time) !== undefined ? `event_time: ${number(meta.event_time)}` : undefined,
+        text(meta.provider_event_id) ? `provider_event_id: ${text(meta.provider_event_id)}` : undefined,
+        text(meta.dedupe_key) ? `dedupe_key: ${text(meta.dedupe_key)}` : undefined,
+      ].filter((item): item is string => !!item),
+    }
+  }
+
+  if (item.trigger_type === "cron") {
+    const meta = item.trigger_metadata ?? {}
+    if (meta.summary === true) {
+      return {
+        title: `Skipped ${number(meta.skipped_count) ?? 0} additional missed cron slots.`,
+        lines: [
+          text(meta.first_slot_local) ? `first_slot_local: ${text(meta.first_slot_local)}` : undefined,
+          text(meta.last_slot_local) ? `last_slot_local: ${text(meta.last_slot_local)}` : undefined,
+        ].filter((item): item is string => !!item),
+      }
+    }
+
+    return {
+      title: item.reason_code === "dst_gap_skipped" ? "Skipped cron slot during DST forward jump." : "Missed cron slot.",
+      lines: [
+        text(meta.slot_local) ? `slot_local: ${text(meta.slot_local)}` : undefined,
+        meta.slot_utc === null ? "slot_utc: -" : number(meta.slot_utc) !== undefined ? `slot_utc: ${number(meta.slot_utc)}` : undefined,
+      ].filter((item): item is string => !!item),
+    }
+  }
+
+  return {
+    title: "Skipped trigger outcome.",
+    lines: [],
+  }
+}
 
 const tone = (value: string) => {
   if (value === "blocked" || value === "failed") {
@@ -1133,18 +1178,21 @@ export default function History() {
                   <For each={runsState.items}>
                     {(item) => {
                       const isDuplicate = () => duplicate(item)
+                      const isSkipped = () => item.status === "skipped"
                       const focused = () => focus()?.tab === "runs" && focus()?.id === item.id
+                      const detail = () => outcome(item)
 
                       return (
                         <section
                           data-component="history-run-row"
                           data-id={item.id}
                           data-duplicate={isDuplicate() ? "true" : "false"}
+                          data-skipped={isSkipped() ? "true" : "false"}
                           data-focused={focused() ? "true" : "false"}
                           class="rounded-lg border border-border-weak-base bg-background-base p-4 space-y-3"
                           classList={{
                             "ring-1 ring-icon-info-base": focused(),
-                            "bg-surface-warning-base/10": isDuplicate(),
+                            "bg-surface-warning-base/10": isSkipped(),
                           }}
                         >
                           <div class="flex items-start justify-between gap-3">
@@ -1162,7 +1210,7 @@ export default function History() {
                           </div>
 
                           <div class="flex flex-wrap items-center gap-2">
-                            <Show when={isDuplicate()}>
+                            <Show when={isSkipped()}>
                               <Button
                                 variant="ghost"
                                 onClick={() => {
@@ -1178,7 +1226,7 @@ export default function History() {
                               </Button>
                             </Show>
 
-                            <Show when={!isDuplicate() && item.session_id}>
+                            <Show when={!isSkipped() && item.session_id}>
                               {(session_id) => (
                                 <Button
                                   variant="ghost"
@@ -1191,30 +1239,44 @@ export default function History() {
                               )}
                             </Show>
 
-                            <Button
-                              variant="ghost"
-                              data-component="history-open-operation"
-                              disabled={!item.operation_exists || !item.operation_id}
-                              onClick={() => {
-                                if (!item.operation_id) return
-                                openOperation(item.operation_id)
-                              }}
+                            <Show
+                              when={!isSkipped()}
+                              fallback={
+                                <span class="text-12-regular text-text-weak rounded-md border border-border-weak-base px-2 py-1">
+                                  No operation expected
+                                </span>
+                              }
                             >
-                              Open Operation
-                            </Button>
-                            <Show when={!item.operation_exists || !item.operation_id}>
-                              <span
-                                data-component="history-link-missing"
-                                class="text-12-regular text-text-weak rounded-md border border-border-weak-base px-2 py-1"
-                              >
-                                Operation link missing
-                              </span>
+                              <>
+                                <Button
+                                  variant="ghost"
+                                  data-component="history-open-operation"
+                                  disabled={!item.operation_exists || !item.operation_id}
+                                  onClick={() => {
+                                    if (!item.operation_id) return
+                                    openOperation(item.operation_id)
+                                  }}
+                                >
+                                  Open Operation
+                                </Button>
+                                <Show when={!item.operation_exists || !item.operation_id}>
+                                  <span
+                                    data-component="history-link-missing"
+                                    class="text-12-regular text-text-weak rounded-md border border-border-weak-base px-2 py-1"
+                                  >
+                                    Operation link missing
+                                  </span>
+                                </Show>
+                              </>
                             </Show>
                           </div>
 
-                          <Show when={isDuplicate() && eventDetail() === item.id}>
+                          <Show when={isSkipped() && eventDetail() === item.id}>
                             <div class="rounded-md border border-border-weak-base bg-background-base p-3 text-12-regular text-text-strong">
-                              <p>Duplicate event row (non-execution).</p>
+                              <p>{detail()?.title}</p>
+                              <For each={detail()?.lines ?? []}>
+                                {(line) => <p class="text-text-weak">{line}</p>}
+                              </For>
                               <p class="text-text-weak">reason_code: {item.reason_code ?? "-"}</p>
                               <p class="text-text-weak">failure_code: {item.failure_code ?? "-"}</p>
                             </div>

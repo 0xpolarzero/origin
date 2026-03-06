@@ -10,7 +10,7 @@ import { useSettings } from "@/context/settings"
 import { Binary } from "@opencode-ai/util/binary"
 import { base64Encode } from "@opencode-ai/util/encode"
 import { decode64 } from "@/utils/base64"
-import { EventSessionError } from "@opencode-ai/sdk/v2"
+import { EventSessionError, EventWorkflowTriggerOutcome } from "@opencode-ai/sdk/v2"
 import { Persist, persisted } from "@/utils/persist"
 import { playSound, soundSrc } from "@/utils/sound"
 
@@ -31,7 +31,41 @@ type ErrorNotification = NotificationBase & {
   error: EventSessionError["properties"]["error"]
 }
 
-export type Notification = TurnCompleteNotification | ErrorNotification
+type TriggerOutcomeNotification = NotificationBase & {
+  type: "trigger-outcome"
+  trigger_type: EventWorkflowTriggerOutcome["properties"]["trigger_type"]
+  outcome: EventWorkflowTriggerOutcome["properties"]["outcome"]
+  workflow_id: string
+  reason_code: string | null
+  count: number
+  run_ids: string[]
+  message: string
+}
+
+export type Notification = TurnCompleteNotification | ErrorNotification | TriggerOutcomeNotification
+
+export function triggerOutcomeNotification(input: {
+  directory: string
+  currentDirectory?: string
+  event: EventWorkflowTriggerOutcome
+  time: number
+}): TriggerOutcomeNotification | undefined {
+  if (input.event.properties.outcome === "run_started") return
+
+  return {
+    directory: input.directory,
+    time: input.time,
+    viewed: input.currentDirectory === input.directory,
+    type: "trigger-outcome",
+    trigger_type: input.event.properties.trigger_type,
+    outcome: input.event.properties.outcome,
+    workflow_id: input.event.properties.workflow_id,
+    reason_code: input.event.properties.reason_code ?? null,
+    count: input.event.properties.count ?? 1,
+    run_ids: input.event.properties.run_ids ?? [],
+    message: input.event.properties.message,
+  }
+}
 
 type NotificationIndex = {
   session: {
@@ -226,6 +260,12 @@ export const { use: useNotification, provider: NotificationProvider } = createSi
       return sessionID === activeSession
     }
 
+    const viewedInCurrentProject = (directory: string) => {
+      const activeDirectory = currentDirectory()
+      if (!activeDirectory) return false
+      return directory === activeDirectory
+    }
+
     const handleSessionIdle = (directory: string, event: { properties: { sessionID?: string } }, time: number) => {
       const sessionID = event.properties.sessionID
       void lookup(directory, sessionID).then((session) => {
@@ -285,17 +325,32 @@ export const { use: useNotification, provider: NotificationProvider } = createSi
       })
     }
 
+    const handleTriggerOutcome = (directory: string, event: EventWorkflowTriggerOutcome, time: number) => {
+      const notification = triggerOutcomeNotification({
+        directory,
+        currentDirectory: viewedInCurrentProject(directory) ? directory : undefined,
+        event,
+        time,
+      })
+      if (!notification) return
+      append(notification)
+    }
+
     const unsub = globalSDK.event.listen((e) => {
       const event = e.details
-      if (event.type !== "session.idle" && event.type !== "session.error") return
-
       const directory = e.name
       const time = Date.now()
       if (event.type === "session.idle") {
         handleSessionIdle(directory, event, time)
         return
       }
-      handleSessionError(directory, event, time)
+      if (event.type === "session.error") {
+        handleSessionError(directory, event, time)
+        return
+      }
+      if (event.type === "workflow.trigger.outcome") {
+        handleTriggerOutcome(directory, event, time)
+      }
     })
     onCleanup(() => {
       meta.disposed = true

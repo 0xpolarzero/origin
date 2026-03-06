@@ -8,9 +8,11 @@ import { Instance } from "../../src/project/instance"
 import { RuntimeManualRunDuplicateError } from "../../src/runtime/error"
 import { AuditEventTable, OperationTable, RunTable } from "../../src/runtime/runtime.sql"
 import { Session } from "../../src/session"
+import { SessionTable } from "../../src/session/session.sql"
 import { Database, eq } from "../../src/storage/db"
 import { WorkflowIntegrationQueue } from "../../src/workflow/integration-queue"
-import { WorkflowManualRun } from "../../src/workflow/manual-run"
+import { WorkflowAutoRun, WorkflowManualRun } from "../../src/workflow/manual-run"
+import { RuntimeTriggerFailureError } from "../../src/runtime/error"
 import { resetDatabase } from "../fixture/db"
 import { tmpdir } from "../fixture/fixture"
 
@@ -627,6 +629,117 @@ describe("workflow manual run orchestration", () => {
             const run_workspace_directory = done.run_workspace_directory
             if (!run_workspace_directory) throw new Error("missing run workspace directory")
             expect(await exists(run_workspace_directory)).toBe(false)
+          },
+        })
+      },
+    })
+  })
+})
+
+describe("workflow automated run orchestration", () => {
+  test("retryable automated failures exhaust after three attempts with canonical persistence", async () => {
+    await using dir = await tmpdir({ git: true })
+
+    let attempts = 0
+
+    await Instance.provide({
+      directory: dir.path,
+      fn: async () => {
+        seed("wrk_auto", dir.path)
+
+        await WorkspaceContext.provide({
+          workspaceID: "wrk_auto",
+          fn: async () => {
+            WorkflowManualRun.Testing.set({
+              ...seams(),
+              execute: async () => {
+                attempts += 1
+                throw new Error("boom")
+              },
+            })
+
+            const run = await WorkflowAutoRun.start({
+              workflow: {
+                id: "auto_retryable",
+                name: "Auto Retryable",
+                instructions: "run",
+              },
+              trigger_type: "signal",
+              trigger_id: "signal:retryable",
+              trigger_metadata_json: {
+                source: "signal",
+                signal: "incoming",
+              },
+            })
+            const done = await WorkflowManualRun.wait({ run_id: run.id, timeout_ms: 5000 })
+
+            expect(done.status).toBe("failed")
+            expect(done.failure_code).toBe("transient_runtime_error")
+            expect(done.reason_code).toBe("retry_exhausted")
+            expect(done.trigger_metadata).toEqual({
+              source: "signal",
+              signal: "incoming",
+            })
+            expect(attempts).toBe(3)
+
+            const sessions = Database.use((db) => db.select().from(SessionTable).all())
+            expect(sessions).toHaveLength(1)
+            expect(done.session_id).toBe(sessions[0]?.id ?? null)
+          },
+        })
+      },
+    })
+  })
+
+  test("non-retryable automated failures do not retry and persist non_retryable reason", async () => {
+    await using dir = await tmpdir({ git: true })
+
+    let attempts = 0
+
+    await Instance.provide({
+      directory: dir.path,
+      fn: async () => {
+        seed("wrk_auto", dir.path)
+
+        await WorkspaceContext.provide({
+          workspaceID: "wrk_auto",
+          fn: async () => {
+            WorkflowManualRun.Testing.set({
+              ...seams(),
+              execute: async () => {
+                attempts += 1
+              },
+              validate: async () => {
+                throw new RuntimeTriggerFailureError({
+                  code: "validation_error",
+                  message: "bad output",
+                })
+              },
+            })
+
+            const run = await WorkflowAutoRun.start({
+              workflow: {
+                id: "auto_non_retryable",
+                name: "Auto Non Retryable",
+                instructions: "run",
+              },
+              trigger_type: "cron",
+              trigger_id: "cron:1",
+              trigger_metadata_json: {
+                source: "cron",
+                slot_utc: 1,
+              },
+            })
+            const done = await WorkflowManualRun.wait({ run_id: run.id, timeout_ms: 5000 })
+
+            expect(done.status).toBe("failed")
+            expect(done.failure_code).toBe("validation_error")
+            expect(done.reason_code).toBe("non_retryable")
+            expect(done.trigger_metadata).toEqual({
+              source: "cron",
+              slot_utc: 1,
+            })
+            expect(attempts).toBe(1)
           },
         })
       },

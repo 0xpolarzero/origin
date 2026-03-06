@@ -34,6 +34,10 @@ const run = (id: string): HistoryRun => ({
   finished_at: 11,
   operation_id: "op_1",
   operation_exists: true,
+  trigger_metadata: {
+    source: "cron",
+    slot_local: "2026-03-08T02:30[America/New_York]",
+  },
   duplicate_event: {
     reason: false,
     failure: false,
@@ -94,6 +98,10 @@ describe("history-data", () => {
     })
 
     expect(value.items.map((item) => item.id)).toEqual(["run_1"])
+    expect(value.items[0]?.trigger_metadata).toEqual({
+      source: "cron",
+      slot_local: "2026-03-08T02:30[America/New_York]",
+    })
     expect(value.next_cursor).toBe("10:run_1")
   })
 

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { buildNotificationIndex } from "./notification-index"
 
 type Notification = {
-  type: "turn-complete" | "error"
+  type: "turn-complete" | "error" | "trigger-outcome"
   session: string
   directory: string
   viewed: boolean
@@ -25,11 +25,20 @@ const error = (session: string, directory: string, viewed = false): Notification
   time: 1,
 })
 
+const trigger = (session: string, directory: string, viewed = false): Notification => ({
+  type: "trigger-outcome",
+  session,
+  directory,
+  viewed,
+  time: 1,
+})
+
 describe("buildNotificationIndex", () => {
   test("builds unseen counts and unseen error flags", () => {
     const list = [
       turn("s1", "d1", false),
       error("s1", "d1", false),
+      trigger("s1", "d1", false),
       turn("s1", "d1", true),
       turn("s2", "d1", false),
       error("s3", "d2", true),
@@ -37,9 +46,9 @@ describe("buildNotificationIndex", () => {
 
     const index = buildNotificationIndex(list)
 
-    expect(index.session.all.get("s1")?.length).toBe(3)
-    expect(index.session.unseen.get("s1")?.length).toBe(2)
-    expect(index.session.unseenCount.get("s1")).toBe(2)
+    expect(index.session.all.get("s1")?.length).toBe(4)
+    expect(index.session.unseen.get("s1")?.length).toBe(3)
+    expect(index.session.unseenCount.get("s1")).toBe(3)
     expect(index.session.unseenHasError.get("s1")).toBe(true)
 
     expect(index.session.unseenCount.get("s2")).toBe(1)
@@ -47,7 +56,7 @@ describe("buildNotificationIndex", () => {
     expect(index.session.unseenCount.get("s3") ?? 0).toBe(0)
     expect(index.session.unseenHasError.get("s3") ?? false).toBe(false)
 
-    expect(index.project.unseenCount.get("d1")).toBe(3)
+    expect(index.project.unseenCount.get("d1")).toBe(4)
     expect(index.project.unseenHasError.get("d1")).toBe(true)
     expect(index.project.unseenCount.get("d2") ?? 0).toBe(0)
     expect(index.project.unseenHasError.get("d2") ?? false).toBe(false)

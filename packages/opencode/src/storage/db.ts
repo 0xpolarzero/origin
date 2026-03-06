@@ -78,10 +78,14 @@ export namespace Database {
       { type: "table", name: "integration_attempt" },
       { type: "table", name: "dispatch_attempt" },
       { type: "table", name: "audit_event" },
+      { type: "table", name: "workflow_trigger" },
+      { type: "table", name: "workflow_signal_dedupe" },
       { type: "index", name: "dispatch_attempt_draft_uq" },
       { type: "index", name: "integration_attempt_run_id_id_uq" },
       { type: "index", name: "run_queue_idx" },
       { type: "index", name: "audit_event_policy_lineage_idx" },
+      { type: "index", name: "workflow_trigger_workspace_workflow_type_uq" },
+      { type: "index", name: "workflow_signal_dedupe_trigger_key_uq" },
       { type: "trigger", name: "run_ready_for_integration_at_immutable" },
     ] as const
 

@@ -16,6 +16,7 @@ export type HistoryRun = {
   finished_at: number | null
   operation_id: string | null
   operation_exists: boolean
+  trigger_metadata: Record<string, unknown> | null
   duplicate_event: {
     reason: boolean
     failure: boolean
@@ -202,6 +203,7 @@ const runFrom = (value: unknown) => {
     finished_at: asNullableNumber(row.finished_at),
     operation_id: asNullableText(row.operation_id),
     operation_exists: asBool(row.operation_exists) ?? false,
+    trigger_metadata: asJsonRecord(row.trigger_metadata) ?? null,
     duplicate_event: duplicate(row.duplicate_event),
   } satisfies HistoryRun
 }

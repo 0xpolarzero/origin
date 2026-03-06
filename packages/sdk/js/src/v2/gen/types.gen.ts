@@ -957,6 +957,20 @@ export type EventPtyDeleted = {
   }
 }
 
+export type EventWorkflowTriggerOutcome = {
+  type: "workflow.trigger.outcome"
+  properties: {
+    workspace_id: string
+    workflow_id: string
+    trigger_type: "cron" | "signal"
+    outcome: "run_started" | "skipped" | "duplicate"
+    reason_code?: string | null
+    message: string
+    count?: number
+    run_ids?: Array<string>
+  }
+}
+
 export type EventLibraryKnowledgeImported = {
   type: "library.knowledge.imported"
   properties: {
@@ -1021,6 +1035,7 @@ export type Event =
   | EventPtyUpdated
   | EventPtyExited
   | EventPtyDeleted
+  | EventWorkflowTriggerOutcome
   | EventLibraryKnowledgeImported
 
 export type GlobalEvent = {
@@ -4142,6 +4157,50 @@ export type ProviderOauthCallbackResponses = {
 
 export type ProviderOauthCallbackResponse = ProviderOauthCallbackResponses[keyof ProviderOauthCallbackResponses]
 
+export type WorkflowSignalIngestData = {
+  body?: {
+    event_time: number
+    provider_event_id?: string
+    payload_json: {
+      [key: string]: unknown
+    }
+    source?: {
+      [key: string]: unknown
+    }
+  }
+  path: {
+    signal: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/signals/{signal}"
+}
+
+export type WorkflowSignalIngestErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type WorkflowSignalIngestError = WorkflowSignalIngestErrors[keyof WorkflowSignalIngestErrors]
+
+export type WorkflowSignalIngestResponses = {
+  /**
+   * Signal ingress result
+   */
+  200: {
+    accepted: boolean
+    duplicate?: boolean
+    reason?: "signal_unregistered" | "before_enablement_boundary" | "workspace_policy_blocked" | null
+    run_ids?: Array<string>
+  }
+}
+
+export type WorkflowSignalIngestResponse = WorkflowSignalIngestResponses[keyof WorkflowSignalIngestResponses]
+
 export type WorkflowHistoryRunsData = {
   body?: never
   path?: never
@@ -4169,6 +4228,9 @@ export type WorkflowHistoryRunsResponses = {
       session_id: string | null
       reason_code: string | null
       failure_code: string | null
+      trigger_metadata: {
+        [key: string]: unknown
+      } | null
       ready_for_integration_at: number | null
       created_at: number
       updated_at: number
@@ -4966,6 +5028,9 @@ export type WorkflowRunStartResponses = {
     ready_for_integration_at: number | null
     reason_code: string | null
     failure_code: string | null
+    trigger_metadata: {
+      [key: string]: unknown
+    } | null
     cleanup_failed: boolean
     created_at: number
     updated_at: number
@@ -5022,6 +5087,9 @@ export type WorkflowRunGetResponses = {
     ready_for_integration_at: number | null
     reason_code: string | null
     failure_code: string | null
+    trigger_metadata: {
+      [key: string]: unknown
+    } | null
     cleanup_failed: boolean
     created_at: number
     updated_at: number
@@ -5078,6 +5146,9 @@ export type WorkflowRunCancelResponses = {
     ready_for_integration_at: number | null
     reason_code: string | null
     failure_code: string | null
+    trigger_metadata: {
+      [key: string]: unknown
+    } | null
     cleanup_failed: boolean
     created_at: number
     updated_at: number

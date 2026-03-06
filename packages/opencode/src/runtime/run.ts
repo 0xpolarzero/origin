@@ -19,6 +19,7 @@ const create_input = z.object({
   run_workspace_directory: z.string().nullable().optional(),
   reason_code: reason_code.nullable().optional(),
   failure_code: failure_code.nullable().optional(),
+  trigger_metadata_json: z.record(z.string(), z.unknown()).nullable().optional(),
   integration_candidate_base_change_id: z.string().nullable().optional(),
   integration_candidate_change_ids: z.array(z.string()).nullable().optional(),
   integration_candidate_changed_paths: z.array(z.string()).nullable().optional(),
@@ -83,6 +84,7 @@ function create_row(input: z.infer<typeof create_input>) {
     ready_for_integration_at: null,
     reason_code: input.reason_code ?? null,
     failure_code: input.failure_code ?? null,
+    trigger_metadata_json: input.trigger_metadata_json ?? null,
     integration_candidate_base_change_id: input.integration_candidate_base_change_id ?? null,
     integration_candidate_change_ids: input.integration_candidate_change_ids ?? null,
     integration_candidate_changed_paths: input.integration_candidate_changed_paths ?? null,
@@ -155,9 +157,9 @@ export namespace RuntimeRun {
   export const CandidateInput = candidate_input
   export const CleanupInput = cleanup_input
 
-  export function create(input: z.input<typeof CreateInput>) {
+  export function create(input: z.input<typeof CreateInput>, tx?: Database.TxOrDb) {
     const parsed = CreateInput.parse(input)
-    return Database.transaction((db) => {
+    const write = (db: Database.TxOrDb) => {
       const row = create_row(parsed)
       db.insert(RunTable).values(row).run()
       RuntimeAudit.write(
@@ -175,7 +177,9 @@ export namespace RuntimeRun {
         db,
       )
       return row
-    })
+    }
+    if (tx) return write(tx)
+    return Database.transaction(write)
   }
 
   export function transition(input: z.input<typeof TransitionInput>) {

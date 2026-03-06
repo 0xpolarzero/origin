@@ -1,6 +1,7 @@
 import { Database } from "@/storage/db"
 import z from "zod"
 import { AuditEventTable } from "./runtime.sql"
+import { WorkflowTriggerEvent } from "@/workflow/trigger-event"
 import {
   actor_type,
   draft_status,
@@ -95,6 +96,7 @@ const payload_schema = {
   "dispatch.attempt": dispatch_attempt_payload,
   "dispatch.result": dispatch_result_payload,
   "security.setting_changed": security_setting_changed_payload,
+  "workflow.trigger.outcome": WorkflowTriggerEvent.Outcome.properties,
 } satisfies Record<EventType, z.ZodType>
 
 const policy_events = new Set<string>(policy_event_types)

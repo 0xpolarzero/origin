@@ -52,6 +52,7 @@ import {
   RuntimeManualRunWorkspaceRequiredError,
   RuntimeManagedEndpointError,
   RuntimeOutboundValidationError,
+  RuntimeSignalIngressError,
   RuntimeWorkspaceMismatchError,
   RuntimeWorkflowValidationError,
 } from "@/runtime/error"
@@ -85,6 +86,7 @@ export namespace Server {
             else if (err instanceof RuntimeWorkflowValidationError) status = 400
             else if (err instanceof RuntimeManualRunWorkspaceRequiredError) status = 400
             else if (err instanceof RuntimeManualRunDuplicateError) status = 409
+            else if (err instanceof RuntimeSignalIngressError) status = 400
             else if (err instanceof RuntimeIllegalTransitionError) status = 409
             else if (err instanceof RuntimeWorkspaceMismatchError) status = 409
             else if (err instanceof RuntimeOutboundValidationError) status = 400

@@ -84,18 +84,28 @@ describe("history-state", () => {
   test("duplicate and counters exclude duplicate rows from execution totals", () => {
     const rows = [
       {
+        status: "completed",
         duplicate_event: {
           reason: false,
           failure: false,
         },
       },
       {
+        status: "skipped",
         duplicate_event: {
           reason: true,
           failure: false,
         },
       },
       {
+        status: "skipped",
+        duplicate_event: {
+          reason: false,
+          failure: false,
+        },
+      },
+      {
+        status: "skipped",
         duplicate_event: {
           reason: false,
           failure: true,
