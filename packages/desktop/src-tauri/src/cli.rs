@@ -577,13 +577,16 @@ pub fn serve(
             .for_each(move |event| {
                 match event {
                     CommandEvent::Stdout(line) => {
-                        tracing::info!("{line}");
+                        let safe = crate::logging::redact(&line);
+                        tracing::info!("{safe}");
                     }
                     CommandEvent::Stderr(line) => {
-                        tracing::info!("{line}");
+                        let safe = crate::logging::redact(&line);
+                        tracing::info!("{safe}");
                     }
                     CommandEvent::Error(err) => {
-                        tracing::error!("{err}");
+                        let safe = crate::logging::redact(&err);
+                        tracing::error!("{safe}");
                     }
                     CommandEvent::Terminated(payload) => {
                         tracing::info!(

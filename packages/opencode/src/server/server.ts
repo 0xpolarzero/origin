@@ -45,6 +45,7 @@ import { GlobalRoutes } from "./routes/global"
 import { MDNS } from "./mdns"
 import { WorkflowRoutes } from "./routes/workflow"
 import { LibraryRoutes } from "./routes/library"
+import { Redaction } from "@/util/redaction"
 import {
   RuntimeIllegalTransitionError,
   RuntimeImmutableFieldError,
@@ -94,13 +95,20 @@ export namespace Server {
             else if (err instanceof RuntimeImmutableFieldError) status = 400
             else if (err.name.startsWith("Worktree")) status = 400
             else status = 500
-            return c.json(err.toObject(), { status })
+            return c.json(Redaction.value(err.toObject()), { status })
           }
           if (err instanceof HTTPException) return err.getResponse()
           const message = err instanceof Error && err.stack ? err.stack : err.toString()
-          return c.json(new NamedError.Unknown({ message }).toObject(), {
-            status: 500,
-          })
+          return c.json(
+            Redaction.value(
+              new NamedError.Unknown({
+                message: Redaction.text(message),
+              }).toObject(),
+            ),
+            {
+              status: 500,
+            },
+          )
         })
         .use((c, next) => {
           // Allow CORS preflight requests to succeed without auth.

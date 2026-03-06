@@ -38,6 +38,7 @@ import { NamedError } from "@opencode-ai/util/error"
 import { fn } from "@/util/fn"
 import { SessionProcessor } from "./processor"
 import { TaskTool } from "@/tool/task"
+import { Redaction } from "@/util/redaction"
 import { Tool } from "@/tool/tool"
 import { PermissionNext } from "@/permission/next"
 import { SessionStatus } from "./status"
@@ -423,12 +424,13 @@ export namespace SessionPrompt {
           extra: { bypassAgentCheck: true },
           messages: msgs,
           async metadata(input) {
+            const value = Redaction.value(input)
             await Session.updatePart({
               ...part,
               type: "tool",
               state: {
                 ...part.state,
-                ...input,
+                ...value,
               },
             } satisfies MessageV2.ToolPart)
           },
@@ -754,13 +756,14 @@ export namespace SessionPrompt {
       agent: input.agent.name,
       messages: input.messages,
       metadata: async (val: { title?: string; metadata?: any }) => {
+        const safe = Redaction.value(val)
         const match = input.processor.partFromToolCall(options.toolCallId)
         if (match && match.state.status === "running") {
           await Session.updatePart({
             ...match,
             state: {
-              title: val.title,
-              metadata: val.metadata,
+              title: safe.title,
+              metadata: safe.metadata,
               status: "running",
               input: args,
               time: {
@@ -857,6 +860,25 @@ export namespace SessionPrompt {
         })
 
         const result = await execute(args, opts)
+        const content = result.content.map((item: (typeof result.content)[number]) => {
+          if (item.type === "text") {
+            return {
+              ...item,
+              text: Redaction.text(item.text),
+            }
+          }
+          if (item.type === "resource" && item.resource.text) {
+            return {
+              ...item,
+              resource: {
+                ...item.resource,
+                text: Redaction.text(item.resource.text),
+              },
+            }
+          }
+          return item
+        })
+        const metadata = Redaction.value(result.metadata ?? {})
 
         await Plugin.trigger(
           "tool.execute.after",
@@ -866,13 +888,17 @@ export namespace SessionPrompt {
             callID: opts.toolCallId,
             args,
           },
-          result,
+          {
+            ...result,
+            content,
+            metadata,
+          },
         )
 
         const textParts: string[] = []
         const attachments: Omit<MessageV2.FilePart, "id" | "sessionID" | "messageID">[] = []
 
-        for (const contentItem of result.content) {
+        for (const contentItem of content) {
           if (contentItem.type === "text") {
             textParts.push(contentItem.text)
           } else if (contentItem.type === "image") {
@@ -898,23 +924,24 @@ export namespace SessionPrompt {
         }
 
         const truncated = await Truncate.output(textParts.join("\n\n"), {}, input.agent)
-        const metadata = {
-          ...(result.metadata ?? {}),
+        const output = Redaction.text(truncated.content)
+        const safe = {
+          ...metadata,
           truncated: truncated.truncated,
           ...(truncated.truncated && { outputPath: truncated.outputPath }),
         }
 
         return {
           title: "",
-          metadata,
-          output: truncated.content,
+          metadata: safe,
+          output,
           attachments: attachments.map((attachment) => ({
             ...attachment,
             id: Identifier.ascending("part"),
             sessionID: ctx.sessionID,
             messageID: input.processor.message.id,
           })),
-          content: result.content, // directly return content to preserve ordering when outputting to model
+          content, // directly return content to preserve ordering when outputting to model
         }
       }
       tools[key] = item
@@ -1641,8 +1668,9 @@ NOTE: At any point in time through this workflow you should feel free to ask the
     proc.stdout?.on("data", (chunk) => {
       output += chunk.toString()
       if (part.state.status === "running") {
+        const value = Redaction.text(output)
         part.state.metadata = {
-          output: output,
+          output: value,
           description: "",
         }
         Session.updatePart(part)
@@ -1652,8 +1680,9 @@ NOTE: At any point in time through this workflow you should feel free to ask the
     proc.stderr?.on("data", (chunk) => {
       output += chunk.toString()
       if (part.state.status === "running") {
+        const value = Redaction.text(output)
         part.state.metadata = {
-          output: output,
+          output: value,
           description: "",
         }
         Session.updatePart(part)
@@ -1688,6 +1717,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
     if (aborted) {
       output += "\n\n" + ["<metadata>", "User aborted the command", "</metadata>"].join("\n")
     }
+    output = Redaction.text(output)
     msg.time.completed = Date.now()
     await Session.updateMessage(msg)
     if (part.state.status === "running") {

@@ -6,6 +6,20 @@ import {
   formatTranscript,
 } from "../../../src/cli/cmd/tui/util/transcript"
 import type { AssistantMessage, Part, UserMessage } from "@opencode-ai/sdk/v2"
+import { Redaction } from "../../../src/util/redaction"
+
+async function with_secret<T>(fn: (value: string) => Promise<T> | T) {
+  const key = "OPENCODE_TEST_SECRET"
+  const value = "phase13-transcript-canary-1d7b9c30"
+  const prior = process.env[key]
+  process.env[key] = value
+  try {
+    return await fn(value)
+  } finally {
+    if (prior === undefined) delete process.env[key]
+    else process.env[key] = prior
+  }
+}
 
 describe("transcript", () => {
   describe("formatAssistantHeader", () => {
@@ -193,6 +207,30 @@ describe("transcript", () => {
       expect(result).toContain("**Error:**")
       expect(result).toContain("Command failed")
     })
+
+    test("redacts tool details and text content", async () => {
+      await with_secret((secret) => {
+        const part: Part = {
+          id: "part_1",
+          sessionID: "ses_123",
+          messageID: "msg_123",
+          type: "tool",
+          callID: "call_1",
+          tool: "bash",
+          state: {
+            status: "completed",
+            input: { apiKey: secret },
+            output: `value ${secret}`,
+            title: "Bash",
+            metadata: {},
+            time: { start: 1000, end: 1100 },
+          },
+        }
+        const result = formatPart(part, options)
+        expect(result).not.toContain(secret)
+        expect(result).toContain(Redaction.MASK)
+      })
+    })
   })
 
   describe("formatMessage", () => {
@@ -317,6 +355,38 @@ describe("transcript", () => {
       expect(result).toContain("## Assistant\n\n")
       expect(result).not.toContain("Build")
       expect(result).not.toContain("claude-sonnet-4-20250514")
+    })
+
+    test("redacts secrets from transcript text", async () => {
+      await with_secret((secret) => {
+        const session = {
+          id: "ses_secret",
+          title: `Secret ${secret}`,
+          time: { created: 1000000000000, updated: 1000000001000 },
+        }
+        const messages = [
+          {
+            info: {
+              id: "msg_1",
+              sessionID: "ses_secret",
+              role: "user" as const,
+              agent: "build",
+              model: { providerID: "anthropic", modelID: "claude-sonnet-4-20250514" },
+              time: { created: 1000000000000 },
+            },
+            parts: [{ id: "p1", sessionID: "ses_secret", messageID: "msg_1", type: "text" as const, text: secret }],
+          },
+        ]
+
+        const result = formatTranscript(session, messages, {
+          thinking: false,
+          toolDetails: false,
+          assistantMetadata: false,
+        })
+
+        expect(result).not.toContain(secret)
+        expect(result).toContain(Redaction.MASK)
+      })
     })
   })
 })

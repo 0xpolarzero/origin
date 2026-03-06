@@ -15,6 +15,7 @@ import { Config } from "@/config/config"
 import { SessionCompaction } from "./compaction"
 import { PermissionNext } from "@/permission/next"
 import { Question } from "@/question"
+import { Redaction } from "@/util/redaction"
 
 export namespace SessionProcessor {
   const DOOM_LOOP_THRESHOLD = 3
@@ -185,9 +186,9 @@ export namespace SessionProcessor {
                       state: {
                         status: "completed",
                         input: value.input ?? match.state.input,
-                        output: value.output.output,
-                        metadata: value.output.metadata,
-                        title: value.output.title,
+                        output: Redaction.text(value.output.output),
+                        metadata: Redaction.value(value.output.metadata),
+                        title: Redaction.text(value.output.title),
                         time: {
                           start: match.state.time.start,
                           end: Date.now(),
@@ -209,7 +210,7 @@ export namespace SessionProcessor {
                       state: {
                         status: "error",
                         input: value.input ?? match.state.input,
-                        error: (value.error as any).toString(),
+                        error: Redaction.text((value.error as any).toString()),
                         time: {
                           start: match.state.time.start,
                           end: Date.now(),

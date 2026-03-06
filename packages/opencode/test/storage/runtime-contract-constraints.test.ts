@@ -3,9 +3,16 @@ import { eq } from "drizzle-orm"
 import { WorkspaceTable } from "../../src/control-plane/workspace.sql"
 import { ProjectTable } from "../../src/project/project.sql"
 import { RuntimeAudit } from "../../src/runtime/audit"
+import { RuntimeDispatchAttempt } from "../../src/runtime/dispatch-attempt"
 import { RuntimeDraft } from "../../src/runtime/draft"
 import { RuntimeIntegrationAttempt } from "../../src/runtime/integration-attempt"
-import { RuntimeAuditPayloadError, RuntimeIllegalTransitionError, RuntimePolicyLineageError, RuntimeWorkspaceMismatchError } from "../../src/runtime/error"
+import {
+  RuntimeAuditPayloadError,
+  RuntimeDispatchProvenanceError,
+  RuntimeIllegalTransitionError,
+  RuntimePolicyLineageError,
+  RuntimeWorkspaceMismatchError,
+} from "../../src/runtime/error"
 import { RunTable, AuditEventTable } from "../../src/runtime/runtime.sql"
 import { RuntimeOperation } from "../../src/runtime/operation"
 import { RuntimeRun } from "../../src/runtime/run"
@@ -196,6 +203,43 @@ describe("runtime contract constraints", () => {
     expect(count()).toBe(before)
   })
 
+  test("dispatch events require full dispatch provenance fields", () => {
+    const before = count()
+    expect(() =>
+      RuntimeAudit.write({
+        event_type: "dispatch.attempt",
+        actor_type: "system",
+        workspace_id,
+        policy_id: "policy/default",
+        policy_version: "1",
+        decision_id: "decision/1",
+        decision_reason_code: "policy_allow",
+        event_payload: {
+          action: "message.send",
+          destination: "channel://general",
+          idempotency_key: "key-1",
+        },
+      }),
+    ).toThrow(RuntimeDispatchProvenanceError)
+
+    expect(() =>
+      RuntimeAudit.write({
+        event_type: "dispatch.result",
+        actor_type: "system",
+        workspace_id,
+        policy_id: "policy/default",
+        policy_version: "1",
+        decision_id: "decision/1",
+        decision_reason_code: "policy_allow",
+        event_payload: {
+          outcome: "blocked",
+          failure_code: "policy_blocked",
+        },
+      }),
+    ).toThrow(RuntimeDispatchProvenanceError)
+    expect(count()).toBe(before)
+  })
+
   test("policy/dispatch events with lineage fields are accepted", () => {
     const before = count()
     RuntimeAudit.write({
@@ -212,6 +256,37 @@ describe("runtime contract constraints", () => {
       },
     })
     expect(count()).toBe(before + 1)
+  })
+
+  test("dispatch events with provenance fields are accepted", () => {
+    const before = count()
+    const draft = RuntimeDraft.create(draft_input())
+    const attempt = RuntimeDispatchAttempt.create({
+      draft_id: draft.id,
+      workspace_id,
+      integration_id: draft.integration_id,
+      idempotency_key: "key-1",
+    })
+    RuntimeAudit.write({
+      event_type: "dispatch.attempt",
+      actor_type: "system",
+      workspace_id,
+      draft_id: draft.id,
+      adapter_id: draft.adapter_id,
+      integration_id: draft.integration_id,
+      action_id: draft.action_id,
+      dispatch_attempt_id: attempt.id,
+      policy_id: "policy/default",
+      policy_version: "1",
+      decision_id: "decision/1",
+      decision_reason_code: "policy_allow",
+      event_payload: {
+        action: draft.action_id,
+        destination: draft.target,
+        idempotency_key: attempt.idempotency_key,
+      },
+    })
+    expect(count()).toBe(before + 2)
   })
 
   test("secret-like payload fields are rejected", () => {

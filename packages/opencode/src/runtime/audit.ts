@@ -12,7 +12,7 @@ import {
   run_status,
   type EventType,
 } from "./contract"
-import { RuntimeAuditPayloadError, RuntimePolicyLineageError } from "./error"
+import { RuntimeAuditPayloadError, RuntimeDispatchProvenanceError, RuntimePolicyLineageError } from "./error"
 import { create_uuid_v7, uuid_v7 } from "./uuid"
 
 const run_transition_payload = z
@@ -100,6 +100,7 @@ const payload_schema = {
 } satisfies Record<EventType, z.ZodType>
 
 const policy_events = new Set<string>(policy_event_types)
+const dispatch_events = new Set<EventType>(["dispatch.attempt", "dispatch.result"])
 
 const write_input = z.object({
   id: uuid_v7.optional(),
@@ -111,7 +112,9 @@ const write_input = z.object({
   run_id: uuid_v7.nullable().optional(),
   operation_id: uuid_v7.nullable().optional(),
   draft_id: uuid_v7.nullable().optional(),
+  adapter_id: z.string().min(1).nullable().optional(),
   integration_id: z.string().nullable().optional(),
+  action_id: z.string().min(1).nullable().optional(),
   dispatch_attempt_id: uuid_v7.nullable().optional(),
   integration_attempt_id: uuid_v7.nullable().optional(),
   policy_id: z.string().nullable().optional(),
@@ -170,8 +173,21 @@ function validate_policy_lineage(input: z.infer<typeof write_input>) {
   }
 }
 
+function validate_dispatch_provenance(input: z.infer<typeof write_input>) {
+  if (!dispatch_events.has(input.event_type)) return
+  for (const field of ["draft_id", "dispatch_attempt_id", "adapter_id", "integration_id", "action_id"] as const) {
+    if (input[field]) continue
+    throw new RuntimeDispatchProvenanceError({
+      event_type: input.event_type,
+      field,
+      code: "dispatch_provenance_required",
+    })
+  }
+}
+
 function insert(db: Database.TxOrDb, input: z.infer<typeof write_input>) {
   validate_policy_lineage(input)
+  validate_dispatch_provenance(input)
   const event_payload = parse_payload(input)
   return db
     .insert(AuditEventTable)
@@ -185,7 +201,9 @@ function insert(db: Database.TxOrDb, input: z.infer<typeof write_input>) {
       run_id: input.run_id ?? null,
       operation_id: input.operation_id ?? null,
       draft_id: input.draft_id ?? null,
+      adapter_id: input.adapter_id ?? null,
       integration_id: input.integration_id ?? null,
+      action_id: input.action_id ?? null,
       dispatch_attempt_id: input.dispatch_attempt_id ?? null,
       integration_attempt_id: input.integration_attempt_id ?? null,
       policy_id: input.policy_id ?? null,

@@ -66,7 +66,7 @@ export namespace RuntimeOutboundIntegration {
           allowed_targets: parsed.allowed_targets,
           updated_at: now,
         })
-        .where(eq(OutboundIntegrationTable.id, parsed.id))
+        .where(and(eq(OutboundIntegrationTable.workspace_id, parsed.workspace_id), eq(OutboundIntegrationTable.id, parsed.id)))
         .returning()
         .get()
       if (!updated) throw new Error(`Outbound integration not found: ${parsed.id}`)

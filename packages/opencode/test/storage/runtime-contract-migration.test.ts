@@ -193,7 +193,9 @@ describe("runtime contract migration shape", () => {
       expect(cols).toContain("run_id")
       expect(cols).toContain("operation_id")
       expect(cols).toContain("draft_id")
+      expect(cols).toContain("adapter_id")
       expect(cols).toContain("integration_attempt_id")
+      expect(cols).toContain("action_id")
       expect(cols).toContain("policy_id")
       expect(cols).toContain("policy_version")
       expect(cols).toContain("decision_id")
@@ -201,6 +203,7 @@ describe("runtime contract migration shape", () => {
       expect(cols).toContain("event_payload")
 
       const idx = indexes(state.sqlite, "audit_event")
+      expect(idx).toContain("audit_event_dispatch_provenance_idx")
       expect(idx).toContain("audit_event_policy_lineage_idx")
       expect(idx).toContain("audit_event_type_occurred_idx")
       expect(idx).toContain("audit_event_workspace_occurred_idx")

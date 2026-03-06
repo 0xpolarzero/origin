@@ -8,11 +8,13 @@ import { RuntimeRun } from "@/runtime/run"
 import { uuid_v7 } from "@/runtime/uuid"
 import { Session } from "@/session"
 import { formatTranscript } from "@/cli/cmd/tui/util/transcript"
+import { Redaction } from "@/util/redaction"
 
 const max_prompt_length = 12_000
 const max_file_count = 10
 const max_file_length = 4_000
 const targets = ["system://developers"] as const
+const payload_fields = ["report_type", "metadata", "prompt", "files"] as const
 
 const field_id = z.enum(["metadata", "prompt", "files"])
 
@@ -70,7 +72,7 @@ function validate_target(target: string) {
 }
 
 function metadata(row: ReturnType<typeof RuntimeRun.get>) {
-  return {
+  return Redaction.value({
     report_type: "debug_reconciliation" as const,
     metadata: {
       generated_at: Date.now(),
@@ -96,21 +98,41 @@ function metadata(row: ReturnType<typeof RuntimeRun.get>) {
         changed_paths: row.integration_candidate_changed_paths ?? [],
       },
     },
-  }
+  })
 }
 
 function truncate(value: string, limit: number) {
-  if (value.length <= limit) {
+  const text = Redaction.text(value)
+  if (text.length <= limit) {
     return {
-      text: value,
+      text,
       truncated: false,
     }
   }
 
   return {
-    text: `${value.slice(0, limit)}\n\n...[truncated]`,
+    text: `${text.slice(0, limit)}\n\n...[truncated]`,
     truncated: true,
   }
+}
+
+function build_payload(input: Record<string, unknown>) {
+  if (!("metadata" in input)) {
+    throw new RuntimeOutboundValidationError({
+      code: "schema_invalid",
+      message: "report payload must include metadata",
+      field: "metadata",
+    })
+  }
+  const blocked = Object.keys(input).find((key) => !payload_fields.includes(key as (typeof payload_fields)[number]))
+  if (blocked) {
+    throw new RuntimeOutboundValidationError({
+      code: "schema_invalid",
+      message: `report field is not allowlisted: ${blocked}`,
+      field: blocked,
+    })
+  }
+  return Redaction.value(input)
 }
 
 function stop(run_id: string) {
@@ -265,7 +287,7 @@ async function fields(row: ReturnType<typeof RuntimeRun.get>) {
       title: "Changed files",
       required: false,
       selected: false,
-      preview: JSON.stringify(file_field, null, 2),
+      preview: JSON.stringify(Redaction.value(file_field), null, 2),
     },
   ] satisfies z.output<typeof preview_field>[]
 }
@@ -298,11 +320,11 @@ export namespace WorkflowDebugReport {
     const prompt_value = value.include_prompt ? await prompt(row) : undefined
     const file_value = value.include_files ? await files(row) : undefined
     const canceled = stop(row.id)
-    const payload_json = {
+    const payload_json = build_payload({
       ...metadata(canceled),
       ...(prompt_value ? { prompt: prompt_value } : {}),
       ...(file_value ? { files: file_value } : {}),
-    }
+    })
 
     const draft = await RuntimeOutbound.create({
       run_id: row.id,
@@ -321,5 +343,11 @@ export namespace WorkflowDebugReport {
       run_status: canceled.status,
       draft,
     })
+  }
+
+  export namespace Testing {
+    export function payload(input: Record<string, unknown>) {
+      return Redaction.value(build_payload(input))
+    }
   }
 }

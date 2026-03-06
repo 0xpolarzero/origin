@@ -83,6 +83,7 @@ export namespace Database {
       { type: "index", name: "dispatch_attempt_draft_uq" },
       { type: "index", name: "integration_attempt_run_id_id_uq" },
       { type: "index", name: "run_queue_idx" },
+      { type: "index", name: "audit_event_dispatch_provenance_idx" },
       { type: "index", name: "audit_event_policy_lineage_idx" },
       { type: "index", name: "workflow_trigger_workspace_workflow_type_uq" },
       { type: "index", name: "workflow_signal_dedupe_trigger_key_uq" },

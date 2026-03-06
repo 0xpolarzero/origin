@@ -55,6 +55,15 @@ export const RuntimePolicyLineageError = NamedError.create(
   }),
 )
 
+export const RuntimeDispatchProvenanceError = NamedError.create(
+  "RuntimeDispatchProvenanceError",
+  z.object({
+    event_type: z.string(),
+    field: z.string(),
+    code: z.literal("dispatch_provenance_required"),
+  }),
+)
+
 export const RuntimeAuditPayloadError = NamedError.create(
   "RuntimeAuditPayloadError",
   z.object({

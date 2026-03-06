@@ -3,7 +3,13 @@ import { Lock } from "@/util/lock"
 import { RuntimeAudit } from "./audit"
 import { RuntimeDispatchAttempt } from "./dispatch-attempt"
 import { RuntimeDraft } from "./draft"
-import { RuntimeManagedEndpointError, RuntimeOutboundValidationError } from "./error"
+import {
+  RuntimeAuditPayloadError,
+  RuntimeDispatchProvenanceError,
+  RuntimeManagedEndpointError,
+  RuntimeOutboundValidationError,
+  RuntimePolicyLineageError,
+} from "./error"
 import { RuntimeOutboundIntegration } from "./outbound-integration"
 import { RuntimeWorkspaceType } from "./workspace-type"
 import {
@@ -131,6 +137,7 @@ const control_input = z.object({
 const test_send_input = z.object({
   workspace_id: z.string().min(1),
   integration_id: z.string().min(1),
+  adapter_id: z.string().min(1).optional(),
   draft_id: uuid_v7.optional(),
   dispatch_attempt_id: uuid_v7.optional(),
   action_id: z.string().min(1),
@@ -213,6 +220,8 @@ type TestWrite = {
 type Seams = {
   fail_policy_action?: string
   crash_after_remote_accepted?: boolean
+  drop_policy_lineage_for?: ("policy.decision" | "dispatch.attempt" | "dispatch.result")[]
+  drop_dispatch_provenance_for?: ("dispatch.attempt" | "dispatch.result")[]
 }
 
 const actions = [
@@ -456,7 +465,10 @@ async function integration_for(input: { workspace_id: string; integration_id: st
     workspace_id: input.workspace_id,
     id: input.integration_id,
   })
-  if (current) return current
+  if (current) {
+    if (current.adapter_id === input.adapter_id) return current
+    return
+  }
 
   if (input.adapter_id === "test" && input.integration_id === "test/default") {
     return RuntimeOutboundIntegration.put({
@@ -524,23 +536,29 @@ function present(id: string) {
 }
 
 function audit_policy(input: {
-  draft_id: string
+  draft_id?: string
   workspace_id: string
-  integration_id: string
+  adapter_id?: string
+  integration_id?: string
+  action_id?: string
   actor_type: ActorType
   decision: PolicyDecision
   destination?: string
 }) {
+  const event_type = "policy.decision" as const
+  const drop = seams().drop_policy_lineage_for?.includes(event_type) ?? false
   RuntimeAudit.write({
-    event_type: "policy.decision",
+    event_type,
     actor_type: input.actor_type,
     workspace_id: input.workspace_id,
-    draft_id: input.draft_id,
-    integration_id: input.integration_id,
-    policy_id: input.decision.policy_id,
-    policy_version: input.decision.policy_version,
-    decision_id: input.decision.decision_id,
-    decision_reason_code: input.decision.reason_code,
+    draft_id: input.draft_id ?? null,
+    adapter_id: input.adapter_id ?? null,
+    integration_id: input.integration_id ?? null,
+    action_id: input.action_id ?? null,
+    policy_id: drop ? null : input.decision.policy_id,
+    policy_version: drop ? null : input.decision.policy_version,
+    decision_id: drop ? null : input.decision.decision_id,
+    decision_reason_code: drop ? null : input.decision.reason_code,
     event_payload: {
       outcome: input.decision.outcome,
       action: input.decision.action,
@@ -552,7 +570,9 @@ function audit_policy(input: {
 function audit_dispatch_attempt(input: {
   draft_id: string
   workspace_id: string
+  adapter_id: string
   integration_id: string
+  action_id: string
   dispatch_attempt_id: string
   idempotency_key: string
   actor_type: ActorType
@@ -560,17 +580,22 @@ function audit_dispatch_attempt(input: {
   destination: string
   decision: PolicyDecision
 }) {
+  const event_type = "dispatch.attempt" as const
+  const drop_lineage = seams().drop_policy_lineage_for?.includes(event_type) ?? false
+  const drop_provenance = seams().drop_dispatch_provenance_for?.includes(event_type) ?? false
   RuntimeAudit.write({
-    event_type: "dispatch.attempt",
+    event_type,
     actor_type: input.actor_type,
     workspace_id: input.workspace_id,
-    draft_id: input.draft_id,
-    integration_id: input.integration_id,
-    dispatch_attempt_id: input.dispatch_attempt_id,
-    policy_id: input.decision.policy_id,
-    policy_version: input.decision.policy_version,
-    decision_id: input.decision.decision_id,
-    decision_reason_code: input.decision.reason_code,
+    draft_id: drop_provenance ? null : input.draft_id,
+    adapter_id: drop_provenance ? null : input.adapter_id,
+    integration_id: drop_provenance ? null : input.integration_id,
+    action_id: drop_provenance ? null : input.action_id,
+    dispatch_attempt_id: drop_provenance ? null : input.dispatch_attempt_id,
+    policy_id: drop_lineage ? null : input.decision.policy_id,
+    policy_version: drop_lineage ? null : input.decision.policy_version,
+    decision_id: drop_lineage ? null : input.decision.decision_id,
+    decision_reason_code: drop_lineage ? null : input.decision.reason_code,
     event_payload: {
       action: input.action,
       destination: input.destination,
@@ -580,27 +605,34 @@ function audit_dispatch_attempt(input: {
 }
 
 function audit_dispatch_result(input: {
-  draft_id?: string
+  draft_id: string
   workspace_id: string
-  integration_id?: string
-  dispatch_attempt_id?: string
+  adapter_id: string
+  integration_id: string
+  action_id: string
+  dispatch_attempt_id: string
   actor_type: ActorType
   outcome: "sent" | "failed" | "blocked"
   remote_reference?: string
   failure_code?: string
   decision: PolicyDecision
 }) {
+  const event_type = "dispatch.result" as const
+  const drop_lineage = seams().drop_policy_lineage_for?.includes(event_type) ?? false
+  const drop_provenance = seams().drop_dispatch_provenance_for?.includes(event_type) ?? false
   RuntimeAudit.write({
-    event_type: "dispatch.result",
+    event_type,
     actor_type: input.actor_type,
     workspace_id: input.workspace_id,
-    draft_id: input.draft_id ?? null,
-    integration_id: input.integration_id ?? null,
-    dispatch_attempt_id: input.dispatch_attempt_id ?? null,
-    policy_id: input.decision.policy_id,
-    policy_version: input.decision.policy_version,
-    decision_id: input.decision.decision_id,
-    decision_reason_code: input.decision.reason_code,
+    draft_id: drop_provenance ? null : input.draft_id,
+    adapter_id: drop_provenance ? null : input.adapter_id,
+    integration_id: drop_provenance ? null : input.integration_id,
+    action_id: drop_provenance ? null : input.action_id,
+    dispatch_attempt_id: drop_provenance ? null : input.dispatch_attempt_id,
+    policy_id: drop_lineage ? null : input.decision.policy_id,
+    policy_version: drop_lineage ? null : input.decision.policy_version,
+    decision_id: drop_lineage ? null : input.decision.decision_id,
+    decision_reason_code: drop_lineage ? null : input.decision.reason_code,
     event_payload: {
       outcome: input.outcome,
       remote_reference: input.remote_reference,
@@ -609,18 +641,10 @@ function audit_dispatch_result(input: {
   })
 }
 
-function security_decision(reason_code: "managed_endpoint_rejected" | "dispatch_context_mismatch") {
-  return {
-    ...lineage(reason_code),
-    action: "draft.dispatch",
-    outcome: "blocked",
-    reason_code,
-  } satisfies PolicyDecision
-}
-
 function managed_guard(input: {
   workspace_id: string
   integration_id: string
+  adapter_id?: string
   draft_id?: string
   dispatch_attempt_id?: string
   action_id?: string
@@ -672,6 +696,46 @@ function managed_guard(input: {
       workspace_id: input.workspace_id,
     })
   }
+  if (attempt.workspace_id !== draft.workspace_id || attempt.workspace_id !== input.workspace_id) {
+    throw new RuntimeManagedEndpointError({
+      code: "dispatch_context_mismatch",
+      message: "dispatch attempt workspace binding mismatch",
+      draft_id: input.draft_id,
+      dispatch_attempt_id: input.dispatch_attempt_id,
+      integration_id: input.integration_id,
+      workspace_id: input.workspace_id,
+    })
+  }
+  if (attempt.integration_id !== draft.integration_id) {
+    throw new RuntimeManagedEndpointError({
+      code: "dispatch_context_mismatch",
+      message: "dispatch attempt integration binding mismatch",
+      draft_id: input.draft_id,
+      dispatch_attempt_id: input.dispatch_attempt_id,
+      integration_id: input.integration_id,
+      workspace_id: input.workspace_id,
+    })
+  }
+  if (draft.status !== "approved" && draft.status !== "auto_approved") {
+    throw new RuntimeManagedEndpointError({
+      code: "dispatch_context_mismatch",
+      message: "draft is not approved for dispatch",
+      draft_id: input.draft_id,
+      dispatch_attempt_id: input.dispatch_attempt_id,
+      integration_id: input.integration_id,
+      workspace_id: input.workspace_id,
+    })
+  }
+  if (input.adapter_id && draft.adapter_id !== input.adapter_id) {
+    throw new RuntimeManagedEndpointError({
+      code: "dispatch_context_mismatch",
+      message: "adapter binding mismatch",
+      draft_id: input.draft_id,
+      dispatch_attempt_id: input.dispatch_attempt_id,
+      integration_id: input.integration_id,
+      workspace_id: input.workspace_id,
+    })
+  }
   if (input.action_id && draft.action_id !== input.action_id) {
     throw new RuntimeManagedEndpointError({
       code: "dispatch_context_mismatch",
@@ -692,7 +756,23 @@ function managed_guard(input: {
       workspace_id: input.workspace_id,
     })
   }
-  if (input.payload_json && stable(draft.payload_json) !== stable(input.payload_json)) {
+  const prepared = prepare({
+    source_kind: draft.source_kind,
+    adapter_id: draft.adapter_id,
+    integration_id: draft.integration_id,
+    action_id: draft.action_id,
+    target: draft.target,
+    payload_json: draft.payload_json,
+    payload_schema_version: draft.payload_schema_version,
+  })
+  if (!prepared.action.targets.some((target) => target === draft.target)) {
+    throw new RuntimeOutboundValidationError({
+      code: "target_not_allowed",
+      message: `target ${draft.target} is outside the managed endpoint inventory`,
+      field: "target",
+    })
+  }
+  if (input.payload_json && stable(prepared.payload_json) !== stable(input.payload_json)) {
     throw new RuntimeManagedEndpointError({
       code: "dispatch_context_mismatch",
       message: "payload binding mismatch",
@@ -712,39 +792,60 @@ function managed_guard(input: {
       workspace_id: input.workspace_id,
     })
   }
-  return { draft, attempt }
+  return { draft, attempt, prepared }
 }
 
-function test_send(input: z.infer<typeof test_send_input>) {
+function audit_block_reason(error: unknown) {
+  if (error instanceof RuntimePolicyLineageError) return error.data.code
+  if (error instanceof RuntimeDispatchProvenanceError) return error.data.code
+  if (error instanceof RuntimeAuditPayloadError) return error.data.code
+}
+
+async function test_send(input: z.infer<typeof test_send_input>, options: { audit: boolean } = { audit: true }) {
   const parsed = test_send_input.parse(input)
-  let draft_id = parsed.draft_id
-  let dispatch_attempt_id = parsed.dispatch_attempt_id
+  let guarded: ReturnType<typeof managed_guard> | undefined
 
   try {
-    const guarded = managed_guard({
+    guarded = managed_guard({
       workspace_id: parsed.workspace_id,
       integration_id: parsed.integration_id,
-      draft_id,
-      dispatch_attempt_id,
+      adapter_id: parsed.adapter_id,
+      draft_id: parsed.draft_id,
+      dispatch_attempt_id: parsed.dispatch_attempt_id,
       action_id: parsed.action_id,
       target: parsed.target,
       payload_json: parsed.payload_json,
     })
-    draft_id = guarded.draft.id
-    dispatch_attempt_id = guarded.attempt.id
-  } catch (error) {
-    if (!(error instanceof RuntimeManagedEndpointError)) throw error
-    const decision = security_decision(error.data.code)
-    audit_dispatch_result({
-      workspace_id: parsed.workspace_id,
-      integration_id: parsed.integration_id,
-      draft_id,
-      dispatch_attempt_id,
-      actor_type: "system",
-      outcome: "blocked",
-      failure_code: error.data.code,
-      decision,
+    const gate_reason = await gate({
+      workspace_id: guarded.draft.workspace_id,
+      integration_id: guarded.draft.integration_id,
+      adapter_id: guarded.draft.adapter_id,
+      target: guarded.draft.target,
+      action: guarded.prepared.action,
     })
+    if (gate_reason) {
+      throw new RuntimeOutboundValidationError({
+        code: gate_reason,
+        message: `managed outbound call blocked by ${gate_reason}`,
+        field: gate_reason === "target_not_allowed" ? "target" : "integration_id",
+      })
+    }
+  } catch (error) {
+    if (!(error instanceof RuntimeManagedEndpointError) && !(error instanceof RuntimeOutboundValidationError)) throw error
+    if (options.audit) {
+      const reason_code = error.data.code
+      const decision = blocked_decision("draft.dispatch", reason_code)
+      audit_policy({
+        draft_id: guarded?.draft.id ?? parsed.draft_id,
+        workspace_id: parsed.workspace_id,
+        adapter_id: guarded?.draft.adapter_id ?? parsed.adapter_id,
+        integration_id: guarded?.draft.integration_id ?? parsed.integration_id,
+        action_id: guarded?.draft.action_id ?? parsed.action_id,
+        actor_type: "system",
+        decision,
+        destination: parsed.target,
+      })
+    }
     throw error
   }
 
@@ -756,21 +857,18 @@ function test_send(input: z.infer<typeof test_send_input>) {
     }
   }
 
-  const endpoint =
-    parsed.action_id === "message.send"
-      ? "test.message"
-      : parsed.action_id === "issue.create"
-        ? "test.issue"
-        : "system.report"
+  const draft = guarded!.draft
+  const attempt = guarded!.attempt
+  const prepared = guarded!.prepared
   const next: TestWrite = {
-    endpoint,
-    action_id: parsed.action_id,
-    target: parsed.target,
-    payload_json: parsed.payload_json,
+    endpoint: prepared.action.endpoint,
+    action_id: draft.action_id,
+    target: draft.target,
+    payload_json: prepared.payload_json,
     idempotency_key: parsed.idempotency_key,
-    draft_id: draft_id!,
-    dispatch_attempt_id: dispatch_attempt_id!,
-    remote_reference: `${endpoint}:${state().writes.length + 1}`,
+    draft_id: draft.id,
+    dispatch_attempt_id: attempt.id,
+    remote_reference: `${prepared.action.endpoint}:${state().writes.length + 1}`,
   }
   state().writes.push(next)
   state().accepted.set(parsed.idempotency_key, next)
@@ -909,7 +1007,9 @@ export namespace RuntimeOutbound {
     audit_policy({
       draft_id: draft.id,
       workspace_id: draft.workspace_id,
+      adapter_id: draft.adapter_id,
       integration_id: draft.integration_id,
+      action_id: draft.action_id,
       actor_type: parsed.actor_type,
       decision,
       destination: draft.target,
@@ -1062,7 +1162,9 @@ export namespace RuntimeOutbound {
     audit_policy({
       draft_id: current.id,
       workspace_id: current.workspace_id,
+      adapter_id: current.adapter_id,
       integration_id: current.integration_id,
+      action_id: current.action_id,
       actor_type: parsed.actor_type,
       decision,
       destination: current.target,
@@ -1166,7 +1268,9 @@ export namespace RuntimeOutbound {
       audit_dispatch_result({
         draft_id: current.id,
         workspace_id: current.workspace_id,
+        adapter_id: current.adapter_id,
         integration_id: current.integration_id,
+        action_id: current.action_id,
         dispatch_attempt_id: existing.id,
         actor_type: parsed.actor_type,
         outcome: "sent",
@@ -1227,7 +1331,9 @@ export namespace RuntimeOutbound {
       audit_dispatch_result({
         draft_id: current.id,
         workspace_id: current.workspace_id,
+        adapter_id: current.adapter_id,
         integration_id: current.integration_id,
+        action_id: current.action_id,
         dispatch_attempt_id: attempt.id,
         actor_type: parsed.actor_type,
         outcome: "blocked",
@@ -1261,7 +1367,9 @@ export namespace RuntimeOutbound {
       audit_dispatch_result({
         draft_id: current.id,
         workspace_id: current.workspace_id,
+        adapter_id: current.adapter_id,
         integration_id: current.integration_id,
+        action_id: current.action_id,
         dispatch_attempt_id: attempt.id,
         actor_type: parsed.actor_type,
         outcome: "blocked",
@@ -1287,14 +1395,36 @@ export namespace RuntimeOutbound {
       }
     }
 
-    audit_policy({
-      draft_id: current.id,
-      workspace_id: current.workspace_id,
-      integration_id: current.integration_id,
-      actor_type: parsed.actor_type,
-      decision,
-      destination: current.target,
-    })
+    try {
+      audit_policy({
+        draft_id: current.id,
+        workspace_id: current.workspace_id,
+        adapter_id: current.adapter_id,
+        integration_id: current.integration_id,
+        action_id: current.action_id,
+        actor_type: parsed.actor_type,
+        decision,
+        destination: current.target,
+      })
+    } catch (error) {
+      const reason_code = audit_block_reason(error)
+      if (!reason_code) throw error
+      if (attempt.state === "created" || attempt.state === "dispatching") {
+        RuntimeDispatchAttempt.transition({
+          id: attempt.id,
+          to: "blocked",
+          block_reason_code: reason_code,
+        })
+      }
+      const blocked = blocked_decision("draft.dispatch", reason_code)
+      block({
+        id: current.id,
+        actor_type: parsed.actor_type,
+        reason_code,
+        policy: blocked,
+      })
+      return present(current.id)
+    }
 
     if (decision.outcome !== "allow") {
       if (attempt.state === "created" || attempt.state === "dispatching") {
@@ -1313,7 +1443,9 @@ export namespace RuntimeOutbound {
       audit_dispatch_result({
         draft_id: current.id,
         workspace_id: current.workspace_id,
+        adapter_id: current.adapter_id,
         integration_id: current.integration_id,
+        action_id: current.action_id,
         dispatch_attempt_id: attempt.id,
         actor_type: parsed.actor_type,
         outcome: "blocked",
@@ -1333,30 +1465,54 @@ export namespace RuntimeOutbound {
         : attempt
 
     if (attempt.state === "created") {
-      audit_dispatch_attempt({
-        draft_id: current.id,
-        workspace_id: current.workspace_id,
-        integration_id: current.integration_id,
-        dispatch_attempt_id: attempt.id,
-        idempotency_key: attempt.idempotency_key,
-        actor_type: parsed.actor_type,
-        action: current.action_id,
-        destination: current.target,
-        decision,
-      })
+      try {
+        audit_dispatch_attempt({
+          draft_id: current.id,
+          workspace_id: current.workspace_id,
+          adapter_id: current.adapter_id,
+          integration_id: current.integration_id,
+          action_id: current.action_id,
+          dispatch_attempt_id: attempt.id,
+          idempotency_key: attempt.idempotency_key,
+          actor_type: parsed.actor_type,
+          action: current.action_id,
+          destination: current.target,
+          decision,
+        })
+      } catch (error) {
+        const reason_code = audit_block_reason(error)
+        if (!reason_code) throw error
+        RuntimeDispatchAttempt.transition({
+          id: attempt.id,
+          to: "blocked",
+          block_reason_code: reason_code,
+        })
+        const blocked = blocked_decision("draft.dispatch", reason_code)
+        block({
+          id: current.id,
+          actor_type: parsed.actor_type,
+          reason_code,
+          policy: blocked,
+        })
+        return present(current.id)
+      }
     }
 
     try {
-      const result = test_send({
-        workspace_id: current.workspace_id,
-        integration_id: current.integration_id,
-        draft_id: current.id,
-        dispatch_attempt_id: dispatching.id,
-        action_id: current.action_id,
-        target: current.target,
-        payload_json: current.payload_json,
-        idempotency_key: attempt.idempotency_key,
-      })
+      const result = await test_send(
+        {
+          workspace_id: current.workspace_id,
+          integration_id: current.integration_id,
+          adapter_id: current.adapter_id,
+          draft_id: current.id,
+          dispatch_attempt_id: dispatching.id,
+          action_id: current.action_id,
+          target: current.target,
+          payload_json: current.payload_json,
+          idempotency_key: attempt.idempotency_key,
+        },
+        { audit: false },
+      )
       const accepted = RuntimeDispatchAttempt.transition({
         id: attempt.id,
         to: "remote_accepted",
@@ -1385,7 +1541,9 @@ export namespace RuntimeOutbound {
       audit_dispatch_result({
         draft_id: current.id,
         workspace_id: current.workspace_id,
+        adapter_id: current.adapter_id,
         integration_id: current.integration_id,
+        action_id: current.action_id,
         dispatch_attempt_id: attempt.id,
         actor_type: parsed.actor_type,
         outcome: "sent",
@@ -1393,27 +1551,31 @@ export namespace RuntimeOutbound {
         decision,
       })
     } catch (error) {
-      if (error instanceof RuntimeManagedEndpointError) {
+      if (error instanceof RuntimeManagedEndpointError || error instanceof RuntimeOutboundValidationError) {
+        const reason_code = error.data.code
+        const blocked = blocked_decision("draft.dispatch", reason_code)
         RuntimeDispatchAttempt.transition({
           id: attempt.id,
           to: "blocked",
-          block_reason_code: error.data.code,
+          block_reason_code: reason_code,
         })
         block({
           id: current.id,
           actor_type: parsed.actor_type,
-          reason_code: error.data.code,
-          policy: decision,
+          reason_code,
+          policy: blocked,
         })
         audit_dispatch_result({
           draft_id: current.id,
           workspace_id: current.workspace_id,
+          adapter_id: current.adapter_id,
           integration_id: current.integration_id,
+          action_id: current.action_id,
           dispatch_attempt_id: attempt.id,
           actor_type: parsed.actor_type,
           outcome: "blocked",
-          failure_code: error.data.code,
-          decision,
+          failure_code: reason_code,
+          decision: blocked,
         })
         return present(current.id)
       }
@@ -1434,7 +1596,9 @@ export namespace RuntimeOutbound {
       audit_dispatch_result({
         draft_id: current.id,
         workspace_id: current.workspace_id,
+        adapter_id: current.adapter_id,
         integration_id: current.integration_id,
+        action_id: current.action_id,
         dispatch_attempt_id: attempt.id,
         actor_type: parsed.actor_type,
         outcome: "failed",
@@ -1466,7 +1630,7 @@ export namespace RuntimeOutbound {
     }
 
     export function send(input: z.input<typeof test_send_input>) {
-      return test_send(test_send_input.parse(input))
+      return test_send(test_send_input.parse(input), { audit: true })
     }
   }
 }

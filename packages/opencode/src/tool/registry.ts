@@ -26,6 +26,7 @@ import { Flag } from "@/flag/flag"
 import { Log } from "@/util/log"
 import { LspTool } from "./lsp"
 import { Truncate } from "./truncation"
+import { Redaction } from "@/util/redaction"
 
 import { ApplyPatchTool } from "./apply_patch"
 import { Glob } from "../util/glob"
@@ -74,10 +75,11 @@ export namespace ToolRegistry {
             worktree: Instance.worktree,
           } as unknown as PluginToolContext
           const result = await def.execute(args as any, pluginCtx)
-          const out = await Truncate.output(result, {}, initCtx?.agent)
+          const output = Redaction.text(result)
+          const out = await Truncate.output(output, {}, initCtx?.agent)
           return {
             title: "",
-            output: out.truncated ? out.content : result,
+            output: out.truncated ? out.content : output,
             metadata: { truncated: out.truncated, outputPath: out.truncated ? out.outputPath : undefined },
           }
         },

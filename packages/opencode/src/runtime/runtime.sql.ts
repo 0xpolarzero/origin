@@ -279,7 +279,9 @@ export const AuditEventTable = sqliteTable(
     run_id: text().references(() => RunTable.id, { onDelete: "set null" }),
     operation_id: text().references(() => OperationTable.id, { onDelete: "set null" }),
     draft_id: text().references(() => DraftTable.id, { onDelete: "set null" }),
+    adapter_id: text(),
     integration_id: text(),
+    action_id: text(),
     dispatch_attempt_id: text().references(() => DispatchAttemptTable.id, { onDelete: "set null" }),
     integration_attempt_id: text().references(() => IntegrationAttemptTable.id, { onDelete: "set null" }),
     policy_id: text(),
@@ -298,6 +300,12 @@ export const AuditEventTable = sqliteTable(
     index("audit_event_dispatch_attempt_occurred_idx").on(table.dispatch_attempt_id, table.occurred_at),
     index("audit_event_attempt_occurred_idx").on(table.integration_attempt_id, table.occurred_at),
     index("audit_event_type_occurred_idx").on(table.event_type, table.occurred_at),
+    index("audit_event_dispatch_provenance_idx").on(
+      table.dispatch_attempt_id,
+      table.adapter_id,
+      table.integration_id,
+      table.action_id,
+    ),
     index("audit_event_policy_lineage_idx").on(
       table.policy_id,
       table.policy_version,

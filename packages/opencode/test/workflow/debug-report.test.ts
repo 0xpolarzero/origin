@@ -8,7 +8,11 @@ import { RuntimeOutboundValidationError } from "../../src/runtime/error"
 import { RuntimeOutbound } from "../../src/runtime/outbound"
 import { RuntimeRun } from "../../src/runtime/run"
 import { DraftTable, IntegrationAttemptTable } from "../../src/runtime/runtime.sql"
+import { Identifier } from "../../src/id/id"
+import { Session } from "../../src/session"
+import { MessageV2 } from "../../src/session/message-v2"
 import { Database } from "../../src/storage/db"
+import { Redaction } from "../../src/util/redaction"
 import { WorkflowDebugReport } from "../../src/workflow/debug-report"
 import { resetDatabase } from "../fixture/db"
 import { tmpdir } from "../fixture/fixture"
@@ -81,6 +85,19 @@ function integrating(directory: string) {
   RuntimeRun.transition({ id: run.id, to: "validating" })
   RuntimeRun.transition({ id: run.id, to: "ready_for_integration" })
   return RuntimeRun.transition({ id: run.id, to: "integrating" })
+}
+
+async function with_secret<T>(fn: (value: string) => Promise<T> | T) {
+  const key = "OPENCODE_TEST_SECRET"
+  const value = "phase13-report-canary-8a1b2c3d"
+  const prior = process.env[key]
+  process.env[key] = value
+  try {
+    return await fn(value)
+  } finally {
+    if (prior === undefined) delete process.env[key]
+    else process.env[key] = prior
+  }
 }
 
 function code(error: unknown) {
@@ -167,5 +184,86 @@ describe("workflow debug report", () => {
       expect(Database.use((db) => db.select().from(DraftTable).all())).toHaveLength(0)
       expect(RuntimeOutbound.Testing.writes()).toEqual([])
     })
+  })
+
+  test("redacts prompt and file content in preview and created payloads", async () => {
+    await with_secret(async (secret) => {
+      await origin(async ({ directory }) => {
+        const session = await Session.create({ title: "Debug secret report" })
+        const user = await Session.updateMessage({
+          id: Identifier.ascending("message"),
+          sessionID: session.id,
+          role: "user",
+          time: { created: Date.now() },
+          agent: "build",
+          model: { providerID: "test", modelID: "test" },
+          tools: {},
+          mode: "",
+        } as unknown as MessageV2.User)
+        await Session.updatePart({
+          id: Identifier.ascending("part"),
+          messageID: user.id,
+          sessionID: session.id,
+          type: "text",
+          text: `secret ${secret}`,
+        })
+
+        const run_workspace_directory = path.join(directory, ".origin", "runs", "run-debug")
+        await mkdir(path.join(run_workspace_directory, "src"), { recursive: true })
+        await Bun.write(path.join(run_workspace_directory, "src", "debug.txt"), `const apiKey = "${secret}"\n`)
+
+        const run = RuntimeRun.create({
+          workspace_id,
+          trigger_type: "manual",
+          session_id: session.id,
+          run_workspace_root: path.dirname(run_workspace_directory),
+          run_workspace_directory,
+          integration_candidate_changed_paths: ["src/debug.txt"],
+        })
+        RuntimeRun.transition({ id: run.id, to: "running" })
+        RuntimeRun.transition({ id: run.id, to: "validating" })
+        RuntimeRun.transition({ id: run.id, to: "ready_for_integration" })
+        RuntimeRun.transition({ id: run.id, to: "integrating" })
+
+        const preview = await WorkflowDebugReport.preview(run.id)
+        expect(JSON.stringify(preview)).not.toContain(secret)
+        expect(JSON.stringify(preview)).toContain(Redaction.MASK)
+
+        const created = await WorkflowDebugReport.create(run.id, {
+          consent: true,
+          include_prompt: true,
+          include_files: true,
+        })
+        const payload = JSON.stringify(created.draft.payload_json)
+        expect(payload).not.toContain(secret)
+        expect(payload).toContain(Redaction.MASK)
+      })
+    })
+  })
+
+  test("blocks non-allowlisted payload fields deterministically", async () => {
+    try {
+      WorkflowDebugReport.Testing.payload({
+        metadata: {},
+        prompt: {},
+        secret: "value",
+      })
+      throw new Error("expected payload allowlist to fail")
+    } catch (error) {
+      expect(error).toBeInstanceOf(RuntimeOutboundValidationError)
+      expect(code(error)).toBe("schema_invalid")
+    }
+  })
+
+  test("requires metadata in report payloads", async () => {
+    try {
+      WorkflowDebugReport.Testing.payload({
+        prompt: {},
+      })
+      throw new Error("expected payload metadata requirement to fail")
+    } catch (error) {
+      expect(error).toBeInstanceOf(RuntimeOutboundValidationError)
+      expect(code(error)).toBe("schema_invalid")
+    }
   })
 })

@@ -3,6 +3,7 @@ import type { MessageV2 } from "../session/message-v2"
 import type { Agent } from "../agent/agent"
 import type { PermissionNext } from "../permission/next"
 import { Truncate } from "./truncation"
+import { Redaction } from "@/util/redaction"
 
 export namespace Tool {
   interface Metadata {
@@ -66,7 +67,17 @@ export namespace Tool {
               { cause: error },
             )
           }
-          const result = await execute(args, ctx)
+          const raw = await execute(args, ctx)
+          const result = {
+            ...raw,
+            title: Redaction.text(raw.title),
+            output: Redaction.text(raw.output),
+            metadata: Redaction.value(raw.metadata),
+            attachments: raw.attachments?.map((attachment) => ({
+              ...attachment,
+              filename: attachment.filename ? Redaction.text(attachment.filename) : undefined,
+            })),
+          }
           // skip truncation for tools that handle it themselves
           if (result.metadata.truncated !== undefined) {
             return result

@@ -4,6 +4,7 @@ import { createWriteStream } from "fs"
 import { Global } from "../global"
 import z from "zod"
 import { Glob } from "./glob"
+import { Redaction } from "./redaction"
 
 export namespace Log {
   export const Level = z.enum(["DEBUG", "INFO", "WARN", "ERROR"]).meta({ ref: "LogLevel", description: "Log level" })
@@ -116,15 +117,18 @@ export namespace Log {
         .filter(([_, value]) => value !== undefined && value !== null)
         .map(([key, value]) => {
           const prefix = `${key}=`
-          if (value instanceof Error) return prefix + formatError(value)
-          if (typeof value === "object") return prefix + JSON.stringify(value)
-          return prefix + value
+          if (value instanceof Error) return prefix + Redaction.text(formatError(value))
+          if (typeof value === "object") return prefix + JSON.stringify(Redaction.value(value))
+          return prefix + Redaction.text(String(value))
         })
         .join(" ")
       const next = new Date()
       const diff = next.getTime() - last
       last = next.getTime()
-      return [next.toISOString().split(".")[0], "+" + diff + "ms", prefix, message].filter(Boolean).join(" ") + "\n"
+      const value = [next.toISOString().split(".")[0], "+" + diff + "ms", prefix, message]
+        .filter(Boolean)
+        .join(" ")
+      return Redaction.text(value) + "\n"
     }
     const result: Logger = {
       debug(message?: any, extra?: Record<string, any>) {

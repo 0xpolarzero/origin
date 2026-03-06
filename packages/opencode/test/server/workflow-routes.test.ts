@@ -843,6 +843,35 @@ describe("workflow/library routes", () => {
           })
           expect(rejected.status).toBe(400)
           expect(Database.use((db) => db.select().from(DraftTable).all())).toHaveLength(0)
+          expect(RuntimeOutbound.Testing.writes()).toEqual([])
+
+          const rejectedField = await app.request(`/workflow/debug/run/${run.id}/report${query}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              consent: true,
+              leak: true,
+            }),
+          })
+          expect(rejectedField.status).toBe(400)
+          expect(Database.use((db) => db.select().from(DraftTable).all())).toHaveLength(0)
+          expect(RuntimeOutbound.Testing.writes()).toEqual([])
+
+          const rejectedTarget = await app.request(`/workflow/debug/run/${run.id}/report${query}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              consent: true,
+              target: "system://elsewhere",
+            }),
+          })
+          expect(rejectedTarget.status).toBe(400)
+          expect(Database.use((db) => db.select().from(DraftTable).all())).toHaveLength(0)
+          expect(RuntimeOutbound.Testing.writes()).toEqual([])
 
           const preview = await app.request(`/workflow/debug/run/${run.id}/report-preview${query}`, {
             method: "GET",

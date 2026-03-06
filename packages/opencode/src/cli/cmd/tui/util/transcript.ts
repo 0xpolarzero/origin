@@ -1,5 +1,6 @@
 import type { AssistantMessage, Part, UserMessage } from "@opencode-ai/sdk/v2"
 import { Locale } from "@/util/locale"
+import { Redaction } from "@/util/redaction"
 
 export type TranscriptOptions = {
   thinking: boolean
@@ -26,7 +27,7 @@ export function formatTranscript(
   messages: MessageWithParts[],
   options: TranscriptOptions,
 ): string {
-  let transcript = `# ${session.title}\n\n`
+  let transcript = `# ${Redaction.text(session.title)}\n\n`
   transcript += `**Session ID:** ${session.id}\n`
   transcript += `**Created:** ${new Date(session.time.created).toLocaleString()}\n`
   transcript += `**Updated:** ${new Date(session.time.updated).toLocaleString()}\n\n`
@@ -69,12 +70,12 @@ export function formatAssistantHeader(msg: AssistantMessage, includeMetadata: bo
 
 export function formatPart(part: Part, options: TranscriptOptions): string {
   if (part.type === "text" && !part.synthetic) {
-    return `${part.text}\n\n`
+    return `${Redaction.text(part.text)}\n\n`
   }
 
   if (part.type === "reasoning") {
     if (options.thinking) {
-      return `_Thinking:_\n\n${part.text}\n\n`
+      return `_Thinking:_\n\n${Redaction.text(part.text)}\n\n`
     }
     return ""
   }
@@ -82,13 +83,13 @@ export function formatPart(part: Part, options: TranscriptOptions): string {
   if (part.type === "tool") {
     let result = `**Tool: ${part.tool}**\n`
     if (options.toolDetails && part.state.input) {
-      result += `\n**Input:**\n\`\`\`json\n${JSON.stringify(part.state.input, null, 2)}\n\`\`\`\n`
+      result += `\n**Input:**\n\`\`\`json\n${JSON.stringify(Redaction.value(part.state.input), null, 2)}\n\`\`\`\n`
     }
     if (options.toolDetails && part.state.status === "completed" && part.state.output) {
-      result += `\n**Output:**\n\`\`\`\n${part.state.output}\n\`\`\`\n`
+      result += `\n**Output:**\n\`\`\`\n${Redaction.text(part.state.output)}\n\`\`\`\n`
     }
     if (options.toolDetails && part.state.status === "error" && part.state.error) {
-      result += `\n**Error:**\n\`\`\`\n${part.state.error}\n\`\`\`\n`
+      result += `\n**Error:**\n\`\`\`\n${Redaction.text(part.state.error)}\n\`\`\`\n`
     }
     result += `\n`
     return result

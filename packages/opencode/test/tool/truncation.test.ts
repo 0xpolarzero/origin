@@ -2,10 +2,24 @@ import { describe, test, expect, afterAll } from "bun:test"
 import { Truncate } from "../../src/tool/truncation"
 import { Identifier } from "../../src/id/id"
 import { Filesystem } from "../../src/util/filesystem"
+import { Redaction } from "../../src/util/redaction"
 import fs from "fs/promises"
 import path from "path"
 
 const FIXTURES_DIR = path.join(import.meta.dir, "fixtures")
+
+async function with_secret<T>(fn: (value: string) => Promise<T> | T) {
+  const key = "OPENCODE_TEST_SECRET"
+  const value = "phase13-truncation-canary-24e18dbf"
+  const prior = process.env[key]
+  process.env[key] = value
+  try {
+    return await fn(value)
+  } finally {
+    if (prior === undefined) delete process.env[key]
+    else process.env[key] = prior
+  }
+}
 
 describe("Truncate", () => {
   describe("output", () => {
@@ -91,6 +105,22 @@ describe("Truncate", () => {
 
       const written = await Filesystem.readText(result.outputPath!)
       expect(written).toBe(lines)
+    })
+
+    test("redacts secrets from truncated previews and persisted output files", async () => {
+      await with_secret(async (secret) => {
+        const content = Array.from({ length: 100 }, (_, i) => `line${i} ${secret}`).join("\n")
+        const result = await Truncate.output(content, { maxLines: 10 })
+
+        expect(result.truncated).toBe(true)
+        expect(result.content).not.toContain(secret)
+        expect(result.content).toContain(Redaction.MASK)
+        if (!result.truncated) throw new Error("expected truncated")
+
+        const written = await Filesystem.readText(result.outputPath)
+        expect(written).not.toContain(secret)
+        expect(written).toContain(Redaction.MASK)
+      })
     })
 
     test("suggests Task tool when agent has task permission", async () => {

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { APICallError } from "ai"
 import { MessageV2 } from "../../src/session/message-v2"
 import type { Provider } from "../../src/provider/provider"
+import { Redaction } from "../../src/util/redaction"
 
 const sessionID = "session"
 const model: Provider.Model = {
@@ -100,6 +101,19 @@ function basePart(messageID: string, id: string) {
     id,
     sessionID,
     messageID,
+  }
+}
+
+async function with_secret<T>(fn: (value: string) => Promise<T> | T) {
+  const key = "OPENCODE_TEST_SECRET"
+  const value = "phase13-model-canary-2a3c4d5e"
+  const prior = process.env[key]
+  process.env[key] = value
+  try {
+    return await fn(value)
+  } finally {
+    if (prior === undefined) delete process.env[key]
+    else process.env[key] = prior
   }
 }
 
@@ -353,6 +367,71 @@ describe("session.message-v2.toModelMessage", () => {
         ],
       },
     ])
+  })
+
+  test("redacts tool inputs and outputs before model conversion", async () => {
+    await with_secret((secret) => {
+      const userID = "m-user"
+      const assistantID = "m-assistant"
+
+      const input: MessageV2.WithParts[] = [
+        {
+          info: userInfo(userID),
+          parts: [
+            {
+              ...basePart(userID, "u1"),
+              type: "text",
+              text: "run tool",
+            },
+          ] as MessageV2.Part[],
+        },
+        {
+          info: assistantInfo(assistantID, userID),
+          parts: [
+            {
+              ...basePart(assistantID, "a1"),
+              type: "tool",
+              callID: "call-1",
+              tool: "bash",
+              state: {
+                status: "completed",
+                input: { apiKey: secret, note: secret },
+                output: secret,
+                title: "Bash",
+                metadata: {},
+                time: { start: 0, end: 1 },
+              },
+            },
+          ] as MessageV2.Part[],
+        },
+      ]
+
+      const result = MessageV2.toModelMessages(input, model)
+
+      expect(result[1]).toStrictEqual({
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "call-1",
+            toolName: "bash",
+            input: { apiKey: Redaction.MASK, note: Redaction.MASK },
+            providerExecuted: undefined,
+          },
+        ],
+      })
+      expect(result[2]).toStrictEqual({
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "call-1",
+            toolName: "bash",
+            output: { type: "text", value: Redaction.MASK },
+          },
+        ],
+      })
+    })
   })
 
   test("omits provider metadata when assistant model differs", () => {
