@@ -1,26 +1,34 @@
 # origin Design Overview
 
-origin is a native desktop app for turning AI into a personal operations system for local work. It gives one place to capture requests, build reusable workflows, run them safely against real files, review what changed, and control any action that would leave the machine. The goal is to make AI automation feel as understandable and inspectable as good engineering tooling, not like an opaque chat transcript.
+origin is a native desktop app for turning AI into a personal operations system for local work. Its center of gravity is not just automation, but a main `origin` workspace where a quick thought can become the right kind of action: a task, a calendar item, an integration-backed flow, a note, or a reusable workflow. The goal is to make AI feel like an understandable local operator, not an opaque chat box.
+
+## What origin Is
+
+origin has two product modes that should feel like one system.
+
+The first is the main `origin` workspace, stored in `~/Documents/origin` by default. This is the personal control surface: quick entry, tasks, calendar, integrations, recurring jobs, signals, notes, reusable resources, and activity history. A user should be able to drop in a thought like "remind me to answer this tomorrow", "watch GitHub issues with this label", or "every morning summarize my agenda", and the app should determine what to create or update.
+
+The second is any other local workspace the user opens. Those workspaces are for acting on real files and projects with the same agent/runtime foundation: sessions, reusable scripts and prompts, workflows, runs, changes, and history. In that sense, the `origin` workspace is the personal operations hub, while other workspaces are focused execution environments.
 
 ## What Makes origin Different
 
-- Workflow-first automation. The final product centers workflows, not single chat threads. Users should be able to describe a workflow in plain language, let an agent build it, then inspect and refine it as a graph of scripts, agent steps, conditions, parallel branches, loops, validation, and outbound actions.
+- Entry-first interaction. The fastest path starts with a quick entry, not with choosing a feature first. The agent should interpret a thought and route it into the right system surface: task, calendar, workflow, note, or integration action.
+- A real personal workspace. The main `origin` workspace is meant to be a first-class product surface, not just a hidden default folder. It is where tasks, calendar views, recurring jobs, signals, integrations, and agent-authored personal operations live together.
+- Workflow-first automation where structure matters. When work becomes repeatable or multi-step, origin turns it into a reusable workflow that can be inspected, edited, and eventually operated as a graph instead of buried inside a chat.
 - Real local source of truth. Workflows and supporting resources live on disk in the workspace. AI edits, direct graph edits, and manual file edits all converge on the same files instead of creating hidden app-only state.
-- Protected home workspace. origin always has a stable global workspace (`~/Documents/origin` by default) that works like an inbox and launch point, while still supporting other local workspaces and projects.
-- Reusable knowledge and resources. A workflow can use workflow-local resources or shared library items, so prompts, scripts, and queries can graduate from one-off helpers into reusable building blocks.
-- Deterministic execution. Every run should execute an immutable snapshot of the workflow and its resources, making old runs explainable even after the workflow changes later.
-- Safe change application. Runs happen in isolated workspaces, their changes are tracked, and integration back into the main workspace is queued and recovery-aware rather than optimistic and invisible.
-- Outbound actions by draft, not by surprise. If an agent wants to send a message, create an issue, or perform another external write, origin turns that action into a draft that can be reviewed, edited, approved, and sent through policy checks.
-- Clear history and escalation. Runs, operations, and drafts are first-class history objects. Debug and reconciliation activity stays hidden by default, but can be surfaced when needed and escalated into structured system reports.
+- Reusable knowledge and resources. Scripts, prompts, queries, and library items can move from one-off helpers into reusable building blocks that power both personal operations and project work.
+- Safe local execution. Runs happen in isolated workspaces, changes are tracked, and integration back into the main workspace is queued and recovery-aware rather than optimistic and invisible.
+- Outbound actions by draft. If an agent wants to send a message, create an issue, or perform another external write, origin turns that action into a reviewable draft with policy checks and explicit send control.
+- Clear history and reversibility. Runs, operations, drafts, and activity are visible objects. Debug and reconciliation stay hidden by default, but when needed they can be surfaced, inspected, and escalated through structured system reports.
 
 ## Core Experience
 
-The intended experience is simple: start from a thought, not from infrastructure. A user can capture work quickly in the global workspace, refine it into a reusable workflow, run it manually or, in origin workspaces, automatically, and inspect exactly what happened at each stage. Sessions still matter, but as linked artifacts inside the larger system: builder chats, node-level edit sessions, execution transcripts, and follow-up conversations attached to real workflows and real runs.
+The intended experience starts from capture. A user enters something once, in plain language, and origin figures out the right level of structure. Some entries should stay simple and become tasks, calendar items, or notes. Some should connect to integrations or signals. Some should become recurring jobs. Some should grow into reusable workflows.
 
-In the finished app, workflows are graph-first and AI-first at the same time. The graph is the main surface; chat is there to help author and refine it, not to hide it. That gives origin a clear product position: a local desktop control plane for trustworthy AI work.
+That is why workflows matter, but they are not the whole product. They are the structured automation layer inside a broader personal operations app. In the finished system, the `origin` workspace gives users a daily control plane for what they need to track, react to, and delegate, while other workspaces let the same runtime operate directly on local projects and files.
 
 ## Current Product Baseline
 
-Today's app already exposes the protected global-workspace model, session-based agent work, provider and model settings, explicit OpenCode import for provider auth and model visibility, separate `Workflows` and `Library` views for validation status, and a `History` surface for runs, operations, and outbound drafts. Manual runs, queued integration, draft review/send controls, cron and signal-triggered execution, debug reporting, and the security/governance guardrails are part of the implemented platform foundation. Full automation capabilities remain intentionally scoped to origin workspaces; standard workspaces stay narrower.
+Today's app already exposes the protected global-workspace model and the global entry session flow, plus session-based agent work, provider and model settings, explicit OpenCode import for provider auth and model visibility, separate `Workflows` and `Library` views for validation status, and a `History` surface for runs, operations, and outbound drafts. Manual runs, queued integration, draft review/send controls, cron and signal-triggered execution, debug reporting, and the security/governance guardrails are part of the implemented platform foundation.
 
-The biggest approved next step is to move workflows from a validation-and-runtime foundation into the full graph-first product model: dedicated workflow pages, dedicated run pages, immutable run snapshots, richer reusable resources, AI-first workflow building, and rerun-from-here execution. That shift should change the app from "a chat tool with automation features" into "a desktop app for building, operating, and supervising AI workflows."
+The larger personal-operations surface for the main `origin` workspace, especially tasks, calendar, richer integration views, and a more opinionated quick-entry experience that routes thoughts into those systems, is part of the intended product direction but not yet fully expressed in the current app shell. The biggest workflow-specific next step is to move automation from a validation-and-runtime foundation into the full graph-first model: dedicated workflow pages, dedicated run pages, immutable run snapshots, richer reusable resources, AI-first workflow building, and rerun-from-here execution.
