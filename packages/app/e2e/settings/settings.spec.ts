@@ -99,16 +99,23 @@ test("changing theme persists in localStorage", async ({ page, gotoSession }) =>
   const select = dialog.locator(settingsThemeSelector)
   await expect(select).toBeVisible()
 
+  const currentThemeId = await page.evaluate(() => {
+    return document.documentElement.getAttribute("data-theme")
+  })
+  const currentTheme = (await select.locator('[data-slot="select-select-trigger-value"]').textContent())?.trim() ?? ""
+
   await select.locator('[data-slot="select-select-trigger"]').click()
 
   const items = page.locator('[data-slot="select-select-item"]')
   const count = await items.count()
   expect(count).toBeGreaterThan(1)
 
-  const firstTheme = await items.nth(1).locator('[data-slot="select-select-item-label"]').textContent()
-  expect(firstTheme).toBeTruthy()
+  const nextTheme = (await items.locator('[data-slot="select-select-item-label"]').allTextContents())
+    .map((x) => x.trim())
+    .find((x) => x && x !== currentTheme)
+  expect(nextTheme).toBeTruthy()
 
-  await items.nth(1).click()
+  await items.filter({ hasText: nextTheme! }).first().click()
 
   await page.keyboard.press("Escape")
 
@@ -117,7 +124,7 @@ test("changing theme persists in localStorage", async ({ page, gotoSession }) =>
   })
 
   expect(storedThemeId).not.toBeNull()
-  expect(storedThemeId).not.toBe("oc-1")
+  expect(storedThemeId).not.toBe(currentThemeId)
 
   const dataTheme = await page.evaluate(() => {
     return document.documentElement.getAttribute("data-theme")
@@ -139,7 +146,7 @@ test("does not hydrate theme from OpenCode legacy keys", async ({ page, gotoSess
     .poll(async () => {
       return await page.evaluate(() => document.documentElement.getAttribute("data-theme"))
     })
-    .toBe("oc-1")
+    .toBe("oc-2")
 
   const themeId = await page.evaluate(() => localStorage.getItem("origin-theme-id"))
   expect(themeId).toBeNull()

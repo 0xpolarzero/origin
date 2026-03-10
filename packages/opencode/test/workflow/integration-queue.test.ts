@@ -40,10 +40,8 @@ async function seed(workspace_ids: string[]) {
             id,
             project_id: Instance.project.id,
             branch: "main",
-            config: {
-              type: "worktree",
-              directory,
-            },
+            type: "worktree",
+            directory,
           })
           .onConflictDoNothing()
           .run()

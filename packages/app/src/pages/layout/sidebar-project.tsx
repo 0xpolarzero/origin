@@ -5,8 +5,6 @@ import { Button } from "@opencode-ai/ui/button"
 import { ContextMenu } from "@opencode-ai/ui/context-menu"
 import { HoverCard } from "@opencode-ai/ui/hover-card"
 import { Icon } from "@opencode-ai/ui/icon"
-import { IconButton } from "@opencode-ai/ui/icon-button"
-import { Tooltip } from "@opencode-ai/ui/tooltip"
 import { createSortable } from "@thisbeyond/solid-dnd"
 import { useLayout, type LocalProject } from "@/context/layout"
 import { useGlobalSync } from "@/context/global-sync"
@@ -95,6 +93,7 @@ const ProjectTile = (props: {
       modal={!props.sidebarHovering()}
       onOpenChange={(value) => {
         props.setMenu(value)
+        props.setSuppressHover(value)
         if (value) props.setOpen(false)
       }}
     >
@@ -110,6 +109,12 @@ const ProjectTile = (props: {
           "bg-transparent border border-transparent hover:bg-surface-base-hover hover:border-border-weak-base":
             !props.selected() && !props.active(),
           "bg-surface-base-hover border border-border-weak-base": !props.selected() && props.active(),
+        }}
+        onPointerDown={(event) => {
+          if (!props.overlay()) return
+          if (event.button !== 2 && !(event.button === 0 && event.ctrlKey)) return
+          props.setSuppressHover(true)
+          event.preventDefault()
         }}
         onMouseEnter={(event: MouseEvent) => {
           if (!props.overlay()) return
@@ -139,7 +144,7 @@ const ProjectTile = (props: {
       >
         <ProjectIcon project={props.project} notify />
       </ContextMenu.Trigger>
-      <ContextMenu.Portal mount={!props.mobile ? props.nav() : undefined}>
+      <ContextMenu.Portal>
         <ContextMenu.Content>
           <ContextMenu.Item onSelect={() => props.showEditProjectDialog(props.project)}>
             <ContextMenu.ItemLabel>{props.language.t("common.edit")}</ContextMenu.ItemLabel>

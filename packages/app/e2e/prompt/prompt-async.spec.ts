@@ -1,6 +1,8 @@
 import { test, expect } from "../fixtures"
-import { promptSelector } from "../selectors"
 import { sessionIDFromUrl, withSession } from "../actions"
+import { promptSelector } from "../selectors"
+
+const text = (value: string | null) => (value ?? "").replace(/\u200B/g, "").trim()
 
 // Regression test for Issue #12453: the synchronous POST /message endpoint holds
 // the connection open while the agent works, causing "Failed to fetch" over
@@ -8,7 +10,6 @@ import { sessionIDFromUrl, withSession } from "../actions"
 test("prompt succeeds when sync message endpoint is unreachable", async ({ page, sdk, gotoSession }) => {
   test.setTimeout(120_000)
 
-  // Simulate Tailscale/VPN killing the long-lived sync connection
   await page.route("**/session/*/message", (route) => route.abort("connectionfailed"))
 
   const token = `E2E_ASYNC_${Date.now()}`
@@ -23,7 +24,6 @@ test("prompt succeeds when sync message endpoint is unreachable", async ({ page,
     await expect(page).toHaveURL(new RegExp(`/session/${session.id}(?:[/?#]|$)`), { timeout: 30_000 })
     const sessionID = sessionIDFromUrl(page.url())!
 
-    // Agent response arrives via SSE despite sync endpoint being dead
     await expect
       .poll(
         async () => {
@@ -38,5 +38,36 @@ test("prompt succeeds when sync message endpoint is unreachable", async ({ page,
         { timeout: 90_000 },
       )
       .toContain(token)
+  })
+})
+
+test("failed prompt send restores the composer input", async ({ page, sdk, gotoSession }) => {
+  await withSession(sdk, `e2e prompt failure ${Date.now()}`, async (session) => {
+    const prompt = page.locator(promptSelector)
+    const value = `restore ${Date.now()}`
+
+    await page.route(`**/session/${session.id}/prompt_async`, (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ message: "e2e prompt failure" }),
+      }),
+    )
+
+    await gotoSession(session.id)
+    await prompt.click()
+    await page.keyboard.type(value)
+    await page.keyboard.press("Enter")
+
+    await expect.poll(async () => text(await prompt.textContent())).toBe(value)
+    await expect
+      .poll(
+        async () => {
+          const messages = await sdk.session.messages({ sessionID: session.id, limit: 50 }).then((r) => r.data ?? [])
+          return messages.length
+        },
+        { timeout: 15_000 },
+      )
+      .toBe(0)
   })
 })

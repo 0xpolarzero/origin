@@ -91,10 +91,8 @@ function seed() {
         id: workspace_id,
         project_id,
         branch: "main",
-        config: {
-          type: "worktree",
-          directory: "/tmp/graph-runtime",
-        },
+        type: "worktree",
+        directory: "/tmp/graph-runtime",
       })
       .run()
 

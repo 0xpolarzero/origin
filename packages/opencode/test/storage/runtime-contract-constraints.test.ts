@@ -86,10 +86,8 @@ function seed() {
         id: workspace_id,
         project_id,
         branch: "main",
-        config: {
-          type: "worktree",
-          directory: "/tmp/storage",
-        },
+        type: "worktree",
+        directory: "/tmp/storage",
       })
       .run()
   })
@@ -313,10 +311,8 @@ describe("runtime contract constraints", () => {
           id: workspace_other_id,
           project_id,
           branch: "other",
-          config: {
-            type: "worktree",
-            directory: "/tmp/storage-other",
-          },
+          type: "worktree",
+          directory: "/tmp/storage-other",
         })
         .run(),
     )

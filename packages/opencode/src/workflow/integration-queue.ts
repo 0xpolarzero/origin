@@ -435,7 +435,7 @@ async function process_run(run_id: string, workspace_id: string) {
     })
     return
   }
-  if (workspace.config.type !== "worktree") {
+  if (workspace.type !== "worktree") {
     settle({
       id: run_id,
       to: "failed",
@@ -445,7 +445,16 @@ async function process_run(run_id: string, workspace_id: string) {
     return
   }
 
-  const directory = workspace.config.directory
+  const directory = workspace.directory
+  if (!directory) {
+    settle({
+      id: run_id,
+      to: "failed",
+      failure_code: "reconciliation_failed",
+      race: true,
+    })
+    return
+  }
   const adapter = JJ.create({ cwd: directory })
 
   while (true) {

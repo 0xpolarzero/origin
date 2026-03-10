@@ -77,10 +77,8 @@ function seed() {
         id: workspace_id,
         project_id,
         branch: "main",
-        config: {
-          type: "worktree",
-          directory: "/tmp/runtime",
-        },
+        type: "worktree",
+        directory: "/tmp/runtime",
       })
       .run()
   })

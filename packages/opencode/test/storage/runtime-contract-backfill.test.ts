@@ -15,6 +15,7 @@ function migrations() {
   return readdirSync(dir, { withFileTypes: true })
     .filter((item) => item.isDirectory())
     .map((item) => ({
+      name: item.name,
       timestamp: Number(item.name.split("_")[0]),
       sql: readFileSync(path.join(dir, item.name, "migration.sql"), "utf-8"),
     }))
@@ -51,10 +52,8 @@ describe("runtime migration forward-apply and backfill safety", () => {
         id: "wrk_forward",
         project_id: "proj_forward",
         branch: "main",
-        config: {
-          type: "worktree",
-          directory: "/tmp/forward",
-        },
+        type: "worktree",
+        directory: "/tmp/forward",
       })
       .run()
 
@@ -130,10 +129,8 @@ describe("runtime migration forward-apply and backfill safety", () => {
         id: "wrk_backfill",
         project_id: "proj_backfill",
         branch: "main",
-        config: {
-          type: "worktree",
-          directory: "/tmp/backfill",
-        },
+        type: "worktree",
+        directory: "/tmp/backfill",
       })
       .run()
 

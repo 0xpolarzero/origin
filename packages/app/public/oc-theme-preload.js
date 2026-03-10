@@ -1,6 +1,13 @@
 ;(function () {
-  var themeId = localStorage.getItem("origin-theme-id")
-  if (!themeId) return
+  var key = "origin-theme-id"
+  var themeId = localStorage.getItem(key) || "oc-2"
+
+  if (themeId === "oc-1") {
+    themeId = "oc-2"
+    localStorage.setItem(key, themeId)
+    localStorage.removeItem("origin-theme-css-light")
+    localStorage.removeItem("origin-theme-css-dark")
+  }
 
   var scheme = localStorage.getItem("origin-color-scheme") || "system"
   var isDark = scheme === "dark" || (scheme === "system" && matchMedia("(prefers-color-scheme: dark)").matches)
@@ -9,7 +16,7 @@
   document.documentElement.dataset.theme = themeId
   document.documentElement.dataset.colorScheme = mode
 
-  if (themeId === "oc-1") return
+  if (themeId === "oc-2") return
 
   var css = localStorage.getItem("origin-theme-css-" + mode)
   if (css) {

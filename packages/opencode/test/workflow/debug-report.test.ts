@@ -34,10 +34,8 @@ function seed(workspace: string, directory: string) {
         id: workspace,
         project_id: Instance.project.id,
         branch: "main",
-        config: {
-          type: "worktree",
-          directory,
-        },
+        type: "worktree",
+        directory,
       })
       .onConflictDoNothing()
       .run()

@@ -4,6 +4,7 @@ import path from "node:path"
 import { base64Decode } from "@opencode-ai/util/encode"
 import { openPalette } from "../actions"
 import { test, expect, settingsKey } from "../fixtures"
+import { serverNamePattern } from "../utils"
 
 test("startup from root lands in default global workspace session context", async ({ page }) => {
   await page.goto("/")
@@ -73,8 +74,21 @@ test("ensure-directory failure falls back to home", async ({ page }) => {
   await page.goto("/")
 
   await expect(page.getByRole("button", { name: "Open project" }).first()).toBeVisible()
+  await expect(page.getByRole("button", { name: serverNamePattern })).toBeVisible()
   await expect(page).toHaveURL("/")
 
   const palette = await openPalette(page)
   await expect(palette.getByRole("textbox").first()).toBeVisible()
+})
+
+test("server picker dialog opens from home", async ({ page }) => {
+  await page.goto("/")
+
+  const trigger = page.getByRole("button", { name: serverNamePattern })
+  await expect(trigger).toBeVisible()
+  await trigger.click()
+
+  const dialog = page.getByRole("dialog")
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByRole("textbox").first()).toBeVisible()
 })

@@ -270,6 +270,7 @@ export namespace Session {
         parentID: Identifier.schema("session").optional(),
         title: z.string().optional(),
         permission: Info.shape.permission,
+        workspaceID: Identifier.schema("workspace").optional(),
       })
       .optional(),
     async (input) => {
@@ -278,6 +279,7 @@ export namespace Session {
         directory: Instance.directory,
         title: input?.title,
         permission: input?.permission,
+        workspaceID: input?.workspaceID,
       })
     },
   )
@@ -326,6 +328,7 @@ export namespace Session {
       const title = getForkedTitle(original.title)
       const session = await createNext({
         directory: Instance.directory,
+        workspaceID: original.workspaceID,
         title,
       })
       const msgs = await messages({ sessionID: input.sessionID })
@@ -376,6 +379,7 @@ export namespace Session {
     id?: string
     title?: string
     parentID?: string
+    workspaceID?: string
     directory: string
     permission?: PermissionNext.Ruleset
   }) {
@@ -385,7 +389,7 @@ export namespace Session {
       version: Installation.VERSION,
       projectID: Instance.project.id,
       directory: input.directory,
-      workspaceID: WorkspaceContext.workspaceID,
+      workspaceID: input.workspaceID,
       parentID: input.parentID,
       title: input.title ?? createDefaultTitle(!!input.parentID),
       permission: input.permission,

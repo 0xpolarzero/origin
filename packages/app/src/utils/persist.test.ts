@@ -111,4 +111,12 @@ describe("persist localStorage resilience", () => {
     const result = persistTesting.normalize({ value: "ok" }, '{"value":"\\x"}')
     expect(result).toBeUndefined()
   })
+
+  test("workspace storage sanitizes Windows filename characters", () => {
+    const result = persistTesting.workspaceStorage("C:\\Users\\foo")
+
+    expect(result).toStartWith("origin.workspace.")
+    expect(result.endsWith(".dat")).toBeTrue()
+    expect(/[:\\/]/.test(result)).toBeFalse()
+  })
 })
