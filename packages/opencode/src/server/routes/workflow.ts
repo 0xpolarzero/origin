@@ -5,7 +5,7 @@ import z from "zod"
 import { errors } from "../error"
 import { Instance } from "@/project/instance"
 import { WorkspaceContext } from "@/control-plane/workspace-context"
-import { validation_report, workflow_item } from "@/workflow/contract"
+import { validation_report_view, workflow_item_view } from "@/workflow/contract"
 import { WorkflowManualRun } from "@/workflow/manual-run"
 import { WorkflowRunGate } from "@/workflow/run-gate"
 import { WorkflowTriggerEngine } from "@/workflow/trigger-engine"
@@ -15,11 +15,32 @@ import { RuntimeHistory } from "@/runtime/history"
 import { RuntimeOutbound } from "@/runtime/outbound"
 import { RuntimeReconciliation } from "@/runtime/reconciliation"
 import { RuntimeRun } from "@/runtime/run"
+import { RuntimeSessionLink } from "@/runtime/session-link"
+import { WorkflowDetail } from "@/workflow/detail"
 import { WorkflowDebugReport } from "@/workflow/debug-report"
+import { Session } from "@/session"
 
 const run_validate = z
   .object({
     workflow_id: z.string().min(1),
+  })
+  .strict()
+
+const workflow_detail_param = z
+  .object({
+    workflow_id: z.string().min(1),
+  })
+  .strict()
+
+const run_detail_param = z
+  .object({
+    run_id: z.string().min(1),
+  })
+  .strict()
+
+const session_link_param = z
+  .object({
+    session_id: z.string().min(1),
   })
   .strict()
 
@@ -521,6 +542,110 @@ export const WorkflowRoutes = lazy(() =>
       },
     )
     .get(
+      "/workflows/:workflow_id/detail",
+      describeRoute({
+        summary: "Get workflow detail",
+        description: "Return the graph-first workflow detail payload, including current revision, resources, and recent runs.",
+        operationId: "workflow.detail.get",
+        responses: {
+          200: {
+            description: "Workflow detail",
+            content: {
+              "application/json": {
+                schema: resolver(WorkflowDetail.WorkflowView),
+              },
+            },
+          },
+          ...errors(404, 409),
+        },
+      }),
+      validator("param", workflow_detail_param),
+      validator("query", z.object({})),
+      async (c) => {
+        const params = c.req.valid("param")
+        const report = await WorkflowValidation.validate({
+          directory: Instance.directory,
+        })
+        const matches = report.workflows.filter((item) => item.id === params.workflow_id)
+        if (matches.length === 0) {
+          throw new HTTPException(404, {
+            message: `Workflow not found: ${params.workflow_id}`,
+          })
+        }
+        if (matches.length > 1) {
+          throw new HTTPException(409, {
+            message: `Workflow id is ambiguous: ${params.workflow_id}`,
+          })
+        }
+        return c.json(
+          await WorkflowDetail.workflow({
+            directory: Instance.directory,
+            item: matches[0],
+          }),
+        )
+      },
+    )
+    .get(
+      "/runs/:run_id/detail",
+      describeRoute({
+        summary: "Get workflow run detail",
+        description:
+          "Return the graph-first run detail payload, including immutable snapshot data, run nodes, attempts, events, and linked sessions.",
+        operationId: "workflow.run.detail.get",
+        responses: {
+          200: {
+            description: "Workflow run detail",
+            content: {
+              "application/json": {
+                schema: resolver(WorkflowDetail.RunView),
+              },
+            },
+          },
+          ...errors(404),
+        },
+      }),
+      validator("param", run_detail_param),
+      validator("query", z.object({})),
+      async (c) => {
+        const params = c.req.valid("param")
+        return c.json(
+          await WorkflowDetail.run({
+            run_id: params.run_id,
+          }),
+        )
+      },
+    )
+    .get(
+      "/session-link/:session_id",
+      describeRoute({
+        summary: "Get workflow session link",
+        description: "Return the workflow runtime session link for a session when one exists.",
+        operationId: "workflow.session_link.get",
+        responses: {
+          200: {
+            description: "Session link detail",
+            content: {
+              "application/json": {
+                schema: resolver(RuntimeSessionLink.View.nullable()),
+              },
+            },
+          },
+        },
+      }),
+      validator("param", session_link_param),
+      validator("query", z.object({})),
+      async (c) => {
+        const params = c.req.valid("param")
+        const session = await Promise.resolve(params.session_id)
+          .then((value) => Session.get(value))
+          .catch(() => null)
+        if (!session) return c.json(null)
+        if (session.projectID !== Instance.project.id) return c.json(null)
+        if (WorkspaceContext.workspaceID && session.workspaceID !== WorkspaceContext.workspaceID) return c.json(null)
+        return c.json(RuntimeSessionLink.maybe(params.session_id))
+      },
+    )
+    .get(
       "/",
       describeRoute({
         summary: "Validate workflows and library",
@@ -531,7 +656,7 @@ export const WorkflowRoutes = lazy(() =>
             description: "Validation report",
             content: {
               "application/json": {
-                schema: resolver(validation_report),
+                schema: resolver(validation_report_view),
               },
             },
           },
@@ -559,7 +684,7 @@ export const WorkflowRoutes = lazy(() =>
             description: "Workflow validation",
             content: {
               "application/json": {
-                schema: resolver(workflow_item.nullable()),
+                schema: resolver(workflow_item_view.nullable()),
               },
             },
           },
@@ -580,7 +705,13 @@ export const WorkflowRoutes = lazy(() =>
         const report = await WorkflowValidation.validate({
           directory: Instance.directory,
         })
-        return c.json(WorkflowValidation.workflow(report, params.id) ?? null)
+        const matches = report.workflows.filter((item) => item.id === params.id)
+        if (matches.length > 1) {
+          throw new HTTPException(409, {
+            message: `Workflow id is ambiguous: ${params.id}`,
+          })
+        }
+        return c.json(matches[0] ?? null)
       },
     )
     .post(
@@ -589,6 +720,14 @@ export const WorkflowRoutes = lazy(() =>
         summary: "Validate workflow run entrypoint",
         description: "Reject non-runnable workflows deterministically before run creation starts.",
         operationId: "workflow.run.validate",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: resolver(run_validate) as never,
+            },
+          },
+        },
         responses: {
           200: {
             description: "Workflow is runnable",
@@ -627,6 +766,14 @@ export const WorkflowRoutes = lazy(() =>
         summary: "Start manual workflow run",
         description: "Create and start a manual workflow run with linked session and run workspace.",
         operationId: "workflow.run.start",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: resolver(WorkflowManualRun.StartInput) as never,
+            },
+          },
+        },
         responses: {
           200: {
             description: "Manual run started",

@@ -32,8 +32,10 @@ import { ErrorPage } from "./pages/error"
 const Home = lazy(() => import("@/pages/home"))
 const Session = lazy(() => import("@/pages/session"))
 const Workflows = lazy(() => import("@/pages/workflows"))
+const WorkflowDetail = lazy(() => import("@/pages/workflow-detail"))
 const Library = lazy(() => import("@/pages/library"))
 const History = lazy(() => import("@/pages/history"))
+const RunDetail = lazy(() => import("@/pages/run-detail"))
 const Loading = () => <div class="size-full" />
 
 const HomeRoute = () => (
@@ -56,6 +58,12 @@ const WorkflowsRoute = () => (
   </Suspense>
 )
 
+const WorkflowDetailRoute = () => (
+  <Suspense fallback={<Loading />}>
+    <WorkflowDetail />
+  </Suspense>
+)
+
 const LibraryRoute = () => (
   <Suspense fallback={<Loading />}>
     <Library />
@@ -65,6 +73,12 @@ const LibraryRoute = () => (
 const HistoryRoute = () => (
   <Suspense fallback={<Loading />}>
     <History />
+  </Suspense>
+)
+
+const RunDetailRoute = () => (
+  <Suspense fallback={<Loading />}>
+    <RunDetail />
   </Suspense>
 )
 
@@ -179,6 +193,8 @@ export function AppInterface(props: {
                 <Route path="/" component={SessionIndexRoute} />
                 <Route path="/session/:id?" component={SessionRoute} />
                 <Route path="/workflows" component={WorkflowsRoute} />
+                <Route path="/workflows/:workflowId" component={WorkflowDetailRoute} />
+                <Route path="/runs/:runId" component={RunDetailRoute} />
                 <Route path="/library" component={LibraryRoute} />
                 <Route path="/history" component={HistoryRoute} />
               </Route>

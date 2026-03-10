@@ -43,6 +43,7 @@ export namespace WorkflowRunGate {
     if (workflow.workflow && workflow.runnable) {
       return {
         workflow: workflow.workflow,
+        item: workflow,
         report,
       }
     }

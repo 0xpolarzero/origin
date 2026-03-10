@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { type Session } from "@opencode-ai/sdk/v2/client"
+import { base64Encode } from "@opencode-ai/util/encode"
 import { collectOpenProjectDeepLinks, drainPendingDeepLinks, parseDeepLink } from "./deep-links"
 import {
   displayName,
@@ -24,7 +25,9 @@ const session = (input: Partial<Session> & Pick<Session, "id" | "directory">) =>
 
 describe("layout deep links", () => {
   test("parses open-project deep links", () => {
-    expect(parseDeepLink("origin://open-project?directory=/tmp/demo")).toBe("/tmp/demo")
+    expect(parseDeepLink("origin://open-project?directory=/tmp/demo")).toEqual({
+      directory: "/tmp/demo",
+    })
   })
 
   test("ignores non-project deep links", () => {
@@ -42,11 +45,25 @@ describe("layout deep links", () => {
     const original = Object.getOwnPropertyDescriptor(URL, "canParse")
     Object.defineProperty(URL, "canParse", { configurable: true, value: undefined })
     try {
-      expect(parseDeepLink("origin://open-project?directory=/tmp/demo")).toBe("/tmp/demo")
+      expect(parseDeepLink("origin://open-project?directory=/tmp/demo")).toEqual({
+        directory: "/tmp/demo",
+      })
     } finally {
       if (original) Object.defineProperty(URL, "canParse", original)
       if (!original) Reflect.deleteProperty(URL, "canParse")
     }
+  })
+
+  test("parses workflow and run deep links into project hrefs", () => {
+    const slug = base64Encode("/tmp/demo")
+    expect(parseDeepLink("origin://open-project?directory=/tmp/demo&target=workflow&workflow_id=ship-it")).toEqual({
+      directory: "/tmp/demo",
+      href: `/${slug}/workflows/ship-it`,
+    })
+    expect(parseDeepLink("origin://open-project?directory=/tmp/demo&target=run&run_id=run-123")).toEqual({
+      directory: "/tmp/demo",
+      href: `/${slug}/runs/run-123`,
+    })
   })
 
   test("ignores open-project deep links without directory", () => {
@@ -60,7 +77,7 @@ describe("layout deep links", () => {
       "origin://other?directory=/b",
       "origin://open-project?directory=/c",
     ])
-    expect(result).toEqual(["/a", "/c"])
+    expect(result).toEqual([{ directory: "/a" }, { directory: "/c" }])
   })
 
   test("drains global deep links once", () => {

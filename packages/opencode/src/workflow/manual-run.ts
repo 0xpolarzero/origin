@@ -1,8 +1,13 @@
 import { stat } from "node:fs/promises"
 import path from "node:path"
+import { Bus } from "@/bus"
 import { JJ } from "@/project/jj"
 import { Instance } from "@/project/instance"
+import { RuntimeAudit } from "@/runtime/audit"
 import { RuntimeRun } from "@/runtime/run"
+import { RuntimeRunNode } from "@/runtime/run-node"
+import { RuntimeRunSnapshot } from "@/runtime/run-snapshot"
+import { RuntimeSessionLink } from "@/runtime/session-link"
 import { create_uuid_v7, uuid_v7 } from "@/runtime/uuid"
 import { Session } from "@/session"
 import { SessionPrompt } from "@/session/prompt"
@@ -12,13 +17,17 @@ import {
   RuntimeManualRunDuplicateError,
   RuntimeManualRunWorkspaceRequiredError,
   RuntimeTriggerFailureError,
+  RuntimeWorkflowValidationError,
 } from "@/runtime/error"
 import { NotFoundError } from "@/storage/db"
 import { WorkspaceContext } from "@/control-plane/workspace-context"
 import { Workspace } from "@/control-plane/workspace"
 import { WorkflowTriggerFailure, type TriggerFailureCode } from "./trigger-failure"
+import { WorkflowGraphRun } from "./graph-run"
 import { WorkflowIntegrationQueue } from "./integration-queue"
+import { WorkflowRunEvent } from "./run-event"
 import { WorkflowRunGate } from "./run-gate"
+import { workflow_schema } from "./contract"
 import z from "zod"
 
 const REPAIR_MAX = 3
@@ -30,6 +39,7 @@ const start_input = z
   .object({
     workflow_id: z.string().min(1),
     trigger_id: z.string().min(1).optional(),
+    inputs: z.record(z.string(), z.unknown()).optional(),
   })
   .strict()
 
@@ -96,7 +106,13 @@ const info = z
 type Row = ReturnType<typeof RuntimeRun.get>
 type Fingerprint = Map<string, string>
 type Mode = "manual" | "automated"
-type RunFailureCode = "manual_start_failed" | "repair_exhausted" | "workspace_policy_blocked" | TriggerFailureCode
+type RunFailureCode =
+  | "manual_start_failed"
+  | "repair_exhausted"
+  | "workspace_policy_blocked"
+  | "workflow_failed"
+  | "node_execution_failed"
+  | TriggerFailureCode
 
 type ExecuteInput = {
   run: Row
@@ -132,19 +148,32 @@ type Seams = {
   now?: () => number
   adapter?: (input: { directory: string }) => JJ.Adapter
   execute?: (input: ExecuteInput) => Promise<void>
+  prepare?: (input: {
+    directory: string
+    workflow_id: string
+    inputs?: Record<string, unknown>
+    material_root: string
+  }) => Promise<Awaited<ReturnType<typeof WorkflowGraphRun.prepare>>>
+  agent?: WorkflowGraphRun.AgentSeam
+  script?: WorkflowGraphRun.ScriptSeam
   validate?: (input: ValidateInput) => Promise<z.output<typeof validation_result>>
   classify?: (input: ClassifyInput) => Promise<z.output<typeof classification_result>>
 }
 
+type GraphAgentInput = Parameters<NonNullable<WorkflowGraphRun.AgentSeam>>[0]
+
 const automated_input = z
   .object({
-    workflow: z
-      .object({
-        id: z.string().min(1),
-        name: z.string().min(1),
-        instructions: z.string().min(1),
-      })
-      .strict(),
+    workflow: z.union([
+      workflow_schema,
+      z
+        .object({
+          id: z.string().min(1),
+          name: z.string().min(1),
+          instructions: z.string().min(1),
+        })
+        .strict(),
+    ]),
     trigger_type: z.enum(["cron", "signal"]),
     trigger_id: z.string().min(1),
     trigger_metadata_json: z.record(z.string(), z.unknown()).nullable().optional(),
@@ -154,7 +183,7 @@ const automated_input = z
 type Task = {
   key: string
   abort: AbortController
-  session_id: string
+  session_id: string | null
   done: Promise<void>
 }
 
@@ -250,6 +279,57 @@ function transition(input: z.input<typeof RuntimeRun.TransitionInput>) {
   return RuntimeRun.transition(input)
 }
 
+function graph_outcome(row: Row) {
+  if (row.status === "completed_no_change" || row.status === "ready_for_integration") return "completed" as const
+  if (row.status === "failed") return "failed" as const
+  if (row.status === "canceled") return "canceled" as const
+}
+
+function snapshot_exists(run_id: string) {
+  try {
+    RuntimeRunSnapshot.byRun({ run_id })
+    return true
+  } catch (error) {
+    if (error instanceof NotFoundError) return false
+    throw error
+  }
+}
+
+function publish_outcome(run_id: string) {
+  const row = read(run_id)
+  const outcome = graph_outcome(row)
+  if (!outcome) return row
+  if (!row.workflow_id) return row
+  if (!snapshot_exists(run_id)) return row
+
+  RuntimeAudit.write({
+    event_type: "workflow.run.outcome",
+    actor_type: "system",
+    workspace_id: row.workspace_id,
+    session_id: row.session_id,
+    run_id: row.id,
+    event_payload: {
+      workspace_id: row.workspace_id,
+      workflow_id: row.workflow_id,
+      run_id: row.id,
+      outcome,
+      status: row.status,
+      reason_code: row.reason_code ?? null,
+      failure_code: row.failure_code ?? null,
+    },
+  })
+  Bus.publish(WorkflowRunEvent.Outcome, {
+    workspace_id: row.workspace_id,
+    workflow_id: row.workflow_id,
+    run_id: row.id,
+    outcome,
+    status: row.status,
+    reason_code: row.reason_code ?? null,
+    failure_code: row.failure_code ?? null,
+  })
+  return row
+}
+
 function fail(run_id: string, failure_code: RunFailureCode, reason_code?: "retry_exhausted" | "non_retryable") {
   const row = read(run_id)
   if (is_terminal(row.status)) return row
@@ -264,12 +344,14 @@ function fail(run_id: string, failure_code: RunFailureCode, reason_code?: "retry
     }
   }
   try {
-    return transition({
+    const failed = transition({
       id: run_id,
       to: "failed",
       failure_code,
       reason_code,
     })
+    publish_outcome(failed.id)
+    return failed
   } catch (error) {
     if (error instanceof RuntimeIllegalTransitionError) return read(run_id)
     throw error
@@ -289,12 +371,14 @@ function cancel_status(run_id: string, actor_type: "system" | "user") {
     const reason_code = to === "cancel_requested" ? "cancel_requested_after_integration_started" : undefined
 
     try {
-      return transition({
+      const next = transition({
         id: run_id,
         to,
         reason_code,
         actor_type,
       })
+      publish_outcome(next.id)
+      return next
     } catch (error) {
       if (!(error instanceof RuntimeIllegalTransitionError)) throw error
       const next = read(run_id)
@@ -349,6 +433,14 @@ function changed(before: Fingerprint, after: Fingerprint) {
   }
 
   return out.toSorted((a, b) => a.localeCompare(b))
+}
+
+function prompt(workflow: z.output<typeof automated_input>["workflow"]) {
+  if ("instructions" in workflow) return workflow.instructions
+  throw new RuntimeTriggerFailureError({
+    code: "validation_error",
+    message: `graph workflow execution is not wired to the legacy session runner: ${workflow.id}`,
+  })
 }
 
 async function execute_default(input: ExecuteInput) {
@@ -571,17 +663,19 @@ async function drive(input: {
     }
 
     if (!result.changed_paths.length) {
-      transition({
+      const done = transition({
         id: input.run_id,
         to: "completed_no_change",
       })
+      publish_outcome(done.id)
       return
     }
 
-    transition({
+    const queued = transition({
       id: input.run_id,
       to: "ready_for_integration",
     })
+    publish_outcome(queued.id)
 
     RuntimeRun.candidate({
       id: input.run_id,
@@ -666,11 +760,19 @@ export namespace WorkflowManualRun {
     let session_id: string | undefined
     let task = false
     const run_workspace_directory = adapter.workspace.path(run_id)
+    const material_root = path.join(path.dirname(run_workspace_directory), "materials", run_id)
+    let prepared: Awaited<ReturnType<typeof WorkflowGraphRun.prepare>> | undefined
 
     try {
+      prepared = await (all.prepare ?? WorkflowGraphRun.prepare)({
+        directory: Instance.directory,
+        workflow_id: gate.workflow.id,
+        inputs: input.inputs,
+        material_root,
+      })
       const session = await Session.createNext({
-        directory: run_workspace_directory,
-        title: `Workflow: ${gate.workflow.name}`,
+        directory: Instance.directory,
+        title: `Workflow: ${prepared.workflow.name}`,
       })
       session_id = session.id
 
@@ -678,68 +780,207 @@ export namespace WorkflowManualRun {
         id: run_id,
         status: "queued",
         trigger_type: "manual",
-        workflow_id: gate.workflow.id,
+        workflow_id: prepared.workflow.id,
         workspace_id,
         session_id: session.id,
         run_workspace_root: path.dirname(run_workspace_directory),
         run_workspace_directory,
         trigger_metadata_json: null,
       })
+      RuntimeSessionLink.upsert({
+        session_id: session.id,
+        role: "run_followup",
+        run_id: run.id,
+      })
+      const snapshot = RuntimeRunSnapshot.create({
+        run_id: run.id,
+        workflow_id: prepared.workflow.id,
+        workflow_revision_id: prepared.workflow_revision_id,
+        workflow_hash: prepared.workflow_hash,
+        workflow_text: prepared.workflow_text,
+        graph_json: prepared.workflow,
+        input_json: prepared.input_json,
+        input_store_json: prepared.input_store_json,
+        trigger_metadata_json: {},
+        resource_materials_json: prepared.resource_materials_json,
+        material_root: prepared.material_root,
+      })
+      const nodes = WorkflowGraphRun.create_nodes({
+        run_id: run.id,
+        snapshot_id: snapshot.id,
+        workflow: prepared.workflow,
+      })
 
       state().keys.set(key_id, { run_id: run.id })
 
-      const workspace = await adapter.workspace.create(run.id)
-      if (workspace.status !== "success") {
+      const created = await adapter.workspace.create(run.id)
+      if (created.status !== "success") {
+        nodes.forEach((node) => {
+          RuntimeRunNode.transition({
+            id: node.id,
+            to: "canceled",
+          })
+        })
         fail(run.id, "manual_start_failed")
         await finalize_cleanup({
           run_id: run.id,
           adapter,
-          workspace,
+          workspace: created,
         })
         return present(read(run.id))
       }
 
-      const relative = path.relative(Instance.directory, workspace.directory)
-      const root_exclude = [relative]
+      const relative = path.relative(Instance.directory, created.directory)
+      const material_relative = path.relative(Instance.directory, prepared.material_root)
+      const root_exclude = [relative, material_relative].filter((item) => item && item !== "." && !item.startsWith(".."))
       const root_before = await files({
         directory: Instance.directory,
         exclude: root_exclude,
       })
       const before = await files({
-        directory: workspace.directory,
+        directory: created.directory,
       })
       const abort = new AbortController()
       const run_ref = run.id
-      const done = drive({
-        run_id: run_ref,
-        session_id: session.id,
-        instructions: gate.workflow.instructions,
-        workflow_id: gate.workflow.id,
-        workspace_id,
-        project_directory: Instance.directory,
-        directory: workspace.directory,
-        before,
-        root_before,
-        root_exclude,
-        abort: abort.signal,
-        mode: "manual",
-        seams: all,
-      }).finally(async () => {
+      const entry: Task = {
+        key: key_id,
+        abort,
+        session_id: null,
+        done: Promise.resolve(),
+      }
+      const graph_seams: {
+        agent?: WorkflowGraphRun.AgentSeam
+        script?: WorkflowGraphRun.ScriptSeam
+      } = {
+        agent:
+          all.agent ??
+          (all.execute
+            ? async (value: GraphAgentInput) => {
+                await all.execute?.({
+                  run: read(run_ref),
+                  workflow_id: value.workflow_id,
+                  session_id: value.session_id,
+                  workspace_id: value.workspace_id,
+                  directory: value.directory,
+                  phase: "initial",
+                  attempt: 0,
+                  prompt: value.prompt,
+                  abort: value.abort,
+                })
+                return {
+                  structured: null,
+                }
+              }
+            : undefined),
+        script: all.script,
+      }
+      state().tasks.set(run_ref, entry)
+      const done = (async () => {
+        try {
+          if (read(run_ref).status === "queued") {
+            transition({
+              id: run_ref,
+              to: "running",
+            })
+          }
+
+          const result = await WorkflowGraphRun.execute({
+            run_id: run_ref,
+            workflow: prepared.workflow,
+            directory: created.directory,
+            workspace_id,
+            nodes,
+            prepared,
+            abort: abort.signal,
+            seams: graph_seams,
+            on_session: (value) => {
+              entry.session_id = value
+            },
+          })
+
+          if (abort.signal.aborted || read(run_ref).status === "canceled") return
+
+          if (read(run_ref).status === "running") {
+            transition({
+              id: run_ref,
+              to: "validating",
+            })
+          }
+
+          if (result.outcome === "failure") {
+            fail(run_ref, "workflow_failed")
+            return
+          }
+
+          if (result.outcome === "node_failed") {
+            fail(run_ref, "node_execution_failed")
+            return
+          }
+
+          const classify = all.classify ?? classify_default
+          const result_value = classification_result.parse(
+            await classify({
+              run: read(run_ref),
+              workflow_id: prepared.workflow.id,
+              session_id: session.id,
+              workspace_id,
+              directory: created.directory,
+              before,
+            }),
+          )
+
+          const root_after = await files({
+            directory: Instance.directory,
+            exclude: root_exclude,
+          })
+          const escaped = changed(root_before, root_after)
+          if (escaped.length > 0) {
+            fail(run_ref, "workspace_policy_blocked")
+            return
+          }
+
+          if (!result_value.changed_paths.length) {
+            const done = transition({
+              id: run_ref,
+              to: "completed_no_change",
+            })
+            publish_outcome(done.id)
+            return
+          }
+
+          const done = transition({
+            id: run_ref,
+            to: "ready_for_integration",
+          })
+
+          RuntimeRun.candidate({
+            id: run_ref,
+            integration_candidate_base_change_id: result_value.base_change_id ?? null,
+            integration_candidate_change_ids: result_value.change_ids ?? [],
+            integration_candidate_changed_paths: result_value.changed_paths,
+          })
+
+          queue_touch()
+          publish_outcome(done.id)
+        } catch (error) {
+          if (error instanceof NotFoundError) return
+          if (abort.signal.aborted || read(run_ref).status === "canceled") return
+          if (error instanceof RuntimeWorkflowValidationError) {
+            fail(run_ref, "validation_error")
+            return
+          }
+          fail(run_ref, "manual_start_failed")
+        }
+      })().finally(async () => {
         await finalize_cleanup({
           run_id: run_ref,
           adapter,
-          workspace,
+          workspace: created,
         }).catch(() => undefined)
         state().tasks.delete(run_ref)
         state().keys.delete(key_id)
       })
-
-      state().tasks.set(run_ref, {
-        key: key_id,
-        abort,
-        session_id: session.id,
-        done,
-      })
+      entry.done = done
       task = true
 
       return present(read(run_ref))
@@ -761,6 +1002,9 @@ export namespace WorkflowManualRun {
       if (!run && session_id) {
         await Session.remove(session_id).catch(() => undefined)
       }
+      if (!run && prepared) {
+        await WorkflowGraphRun.cleanup_materials(prepared.material_root).catch(() => undefined)
+      }
       if (!task) state().keys.delete(key_id)
     }
   }
@@ -778,11 +1022,12 @@ export namespace WorkflowManualRun {
     if (row.status === "queued" || row.status === "running" || row.status === "validating" || row.status === "ready_for_integration") {
       const task = state().tasks.get(input.run_id)
       task?.abort.abort()
-      if (row.session_id) {
+      const session_id = task?.session_id ?? row.session_id
+      if (session_id) {
         void Instance.provide({
           directory: row.run_workspace_directory ?? Instance.directory,
           fn: async () => {
-            SessionPrompt.cancel(row.session_id!)
+            SessionPrompt.cancel(session_id)
           },
         }).catch(() => undefined)
       }
@@ -926,7 +1171,7 @@ export namespace WorkflowAutoRun {
             await drive({
               run_id: run_ref,
               session_id: session.id,
-              instructions: input.workflow.instructions,
+              instructions: prompt(input.workflow),
               workflow_id: input.workflow.id,
               workspace_id,
               project_directory: Instance.directory,

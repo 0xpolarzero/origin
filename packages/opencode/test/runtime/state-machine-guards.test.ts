@@ -4,15 +4,26 @@ import {
   dispatch_attempt_state_values,
   failure_code_values,
   operation_status_values,
+  run_attempt_status_values,
+  run_node_skip_reason_code_values,
+  run_node_status_values,
   reason_code_values,
   run_status_values,
+  session_link_role_values,
+  session_link_visibility_values,
 } from "../../src/runtime/contract"
 import { RuntimeIllegalTransitionError, RuntimeMissingFailureCodeError, RuntimeMissingReasonCodeError } from "../../src/runtime/error"
 import {
   draft_legal_edges,
   dispatch_attempt_legal_edges,
   operation_legal_edges,
+  run_attempt_legal_edges,
+  run_node_legal_edges,
   run_legal_edges,
+  validate_run_attempt_create,
+  validate_run_attempt_transition,
+  validate_run_node_create,
+  validate_run_node_transition,
   validate_dispatch_attempt_create,
   validate_dispatch_attempt_transition,
   validate_draft_create,
@@ -22,7 +33,7 @@ import {
   validate_run_create,
   validate_run_transition,
 } from "../../src/runtime/state"
-import { DispatchAttemptTable, DraftTable, OperationTable, RunTable } from "../../src/runtime/runtime.sql"
+import { DispatchAttemptTable, DraftTable, OperationTable, RunAttemptTable, RunNodeTable, RunTable, SessionLinkTable } from "../../src/runtime/runtime.sql"
 
 const expected_run_legal_edges = [
   { from: "queued", to: "running" },
@@ -79,6 +90,26 @@ const expected_dispatch_attempt_legal_edges = [
   { from: "remote_accepted", to: "finalized" },
 ] as const
 
+const expected_run_node_legal_edges = [
+  { from: "pending", to: "ready" },
+  { from: "pending", to: "skipped" },
+  { from: "pending", to: "canceled" },
+  { from: "ready", to: "running" },
+  { from: "ready", to: "skipped" },
+  { from: "ready", to: "canceled" },
+  { from: "running", to: "succeeded" },
+  { from: "running", to: "failed" },
+  { from: "running", to: "canceled" },
+  { from: "running", to: "ready" },
+] as const
+
+const expected_run_attempt_legal_edges = [
+  { from: "created", to: "running" },
+  { from: "running", to: "succeeded" },
+  { from: "running", to: "failed" },
+  { from: "running", to: "canceled" },
+] as const
+
 function key(from: string, to: string) {
   return `${from}->${to}`
 }
@@ -94,6 +125,14 @@ describe("runtime.contract.schema-enum-consistency", () => {
     expect(OperationTable.status.enumValues).toEqual([...operation_status_values])
     expect(DraftTable.status.enumValues).toEqual([...draft_status_values])
     expect(DispatchAttemptTable.state.enumValues).toEqual([...dispatch_attempt_state_values])
+  })
+
+  test("graph runtime tables reuse canonical node, attempt, and session-link enums", () => {
+    expect(RunNodeTable.status.enumValues).toEqual([...run_node_status_values])
+    expect(RunNodeTable.skip_reason_code.enumValues).toEqual([...run_node_skip_reason_code_values])
+    expect(RunAttemptTable.status.enumValues).toEqual([...run_attempt_status_values])
+    expect(SessionLinkTable.role.enumValues).toEqual([...session_link_role_values])
+    expect(SessionLinkTable.visibility.enumValues).toEqual([...session_link_visibility_values])
   })
 })
 
@@ -270,6 +309,56 @@ describe("runtime.state.dispatch-attempt-transition-matrix", () => {
       dispatch_attempt_state_values.forEach((to) => {
         if (legal.has(key(from, to))) return
         expect(() => validate_dispatch_attempt_transition({ from, to })).toThrow(RuntimeIllegalTransitionError)
+      })
+    })
+  })
+})
+
+describe("runtime.state.run-node-transition-matrix", () => {
+  test("run node matrix matches phase spec", () => {
+    expect(run_node_legal_edges).toEqual(expected_run_node_legal_edges)
+  })
+
+  test("run node create rules are enforced", () => {
+    expect(() => validate_run_node_create("pending")).not.toThrow()
+    expect(() => validate_run_node_create("ready")).toThrow(RuntimeIllegalTransitionError)
+  })
+
+  test("all legal run node edges are accepted and illegal edges are rejected", () => {
+    expected_run_node_legal_edges.forEach((item) => {
+      expect(() => validate_run_node_transition(item)).not.toThrow()
+    })
+
+    const legal = new Set(expected_run_node_legal_edges.map((item) => key(item.from, item.to)))
+    run_node_status_values.forEach((from) => {
+      run_node_status_values.forEach((to) => {
+        if (legal.has(key(from, to))) return
+        expect(() => validate_run_node_transition({ from, to })).toThrow(RuntimeIllegalTransitionError)
+      })
+    })
+  })
+})
+
+describe("runtime.state.run-attempt-transition-matrix", () => {
+  test("run attempt matrix matches phase spec", () => {
+    expect(run_attempt_legal_edges).toEqual(expected_run_attempt_legal_edges)
+  })
+
+  test("run attempt create rules are enforced", () => {
+    expect(() => validate_run_attempt_create("created")).not.toThrow()
+    expect(() => validate_run_attempt_create("running")).toThrow(RuntimeIllegalTransitionError)
+  })
+
+  test("all legal run attempt edges are accepted and illegal edges are rejected", () => {
+    expected_run_attempt_legal_edges.forEach((item) => {
+      expect(() => validate_run_attempt_transition(item)).not.toThrow()
+    })
+
+    const legal = new Set(expected_run_attempt_legal_edges.map((item) => key(item.from, item.to)))
+    run_attempt_status_values.forEach((from) => {
+      run_attempt_status_values.forEach((to) => {
+        if (legal.has(key(from, to))) return
+        expect(() => validate_run_attempt_transition({ from, to })).toThrow(RuntimeIllegalTransitionError)
       })
     })
   })

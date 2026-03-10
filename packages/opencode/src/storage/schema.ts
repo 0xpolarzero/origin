@@ -5,6 +5,12 @@ export { ProjectTable } from "../project/project.sql"
 export { WorkspaceTable } from "../control-plane/workspace.sql"
 export {
   RunTable,
+  WorkflowRevisionTable,
+  RunSnapshotTable,
+  RunNodeTable,
+  RunAttemptTable,
+  RunEventTable,
+  SessionLinkTable,
   OperationTable,
   DraftTable,
   OutboundIntegrationTable,

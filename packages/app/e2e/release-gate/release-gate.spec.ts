@@ -44,6 +44,58 @@ const operation = {
   provenance: "app",
 } as const
 
+const runDetail = {
+  run: {
+    id: run.id,
+    status: "completed_no_change",
+    workflow_id: run.workflow_id,
+    workspace_id: workspace,
+    session_id: run.session_id,
+    reason_code: null,
+    failure_code: null,
+    created_at: 500,
+    started_at: 500,
+    finished_at: 501,
+    integration_candidate: null,
+  },
+  snapshot: {
+    id: "snap-release-gate",
+    workflow_id: run.workflow_id,
+    workflow_revision_id: "rev-release-gate",
+    workflow_hash: "hash-release-gate",
+    workflow_text: "schema_version: 2",
+    graph_json: {
+      id: run.workflow_id,
+      name: "Release workflow",
+      description: "Release gate history target",
+      steps: [
+        {
+          id: "done",
+          kind: "end",
+          title: "Done",
+          result: "success",
+        },
+      ],
+    },
+    input_json: {},
+    input_store_json: {},
+    resource_materials_json: {},
+  },
+  revision: {
+    id: "rev-release-gate",
+    workflow_id: run.workflow_id,
+    content_hash: "hash-release-gate",
+    created_at: 500,
+  },
+  live: {
+    current_revision_id: "rev-release-gate",
+    has_newer_revision: false,
+  },
+  nodes: [],
+  events: [],
+  followup: null,
+} as const
+
 function item(
   id: string,
   status: string,
@@ -260,9 +312,14 @@ test("JJ history deep links remain stable across reload recovery", async ({ page
       })
     }
 
+    const detail = async (route: Route) => {
+      await respond(route, runDetail)
+    }
+
     await page.route("**/workflow/debug/reminders", reminders)
     await page.route("**/workflow/history/runs*", runs)
     await page.route("**/workflow/history/operations*", operations)
+    await page.route(`**/workflow/runs/${run.id}/detail`, detail)
 
     try {
       await page.goto(
@@ -279,19 +336,18 @@ test("JJ history deep links remain stable across reload recovery", async ({ page
       await expect(row).toHaveAttribute("data-focused", "true")
 
       await row.getByRole("button", { name: "Open Run" }).click()
-      await expect.poll(() => new URL(page.url()).searchParams.get("tab")).toBe("runs")
-      await expect.poll(() => new URL(page.url()).searchParams.get("run_id")).toBe(run.id)
-      await expect.poll(() => new URL(page.url()).searchParams.get("workspace")).toBe(workspace)
+      await expect(page).toHaveURL(new RegExp(`/runs/${run.id}$`))
+      await expect(page.locator('[data-page="run-detail"]')).toBeVisible()
 
       await page.reload()
-      const linked = page.locator(`[data-component="history-run-row"][data-id="${run.id}"]`)
-      await expect(linked).toBeVisible()
-      await expect(linked).toHaveAttribute("data-focused", "true")
+      await expect(page).toHaveURL(new RegExp(`/runs/${run.id}$`))
+      await expect(page.locator('[data-page="run-detail"]')).toBeVisible()
     } finally {
       if (page.isClosed()) return
       await page.unroute("**/workflow/debug/reminders", reminders)
       await page.unroute("**/workflow/history/runs*", runs)
       await page.unroute("**/workflow/history/operations*", operations)
+      await page.unroute(`**/workflow/runs/${run.id}/detail`, detail)
     }
   })
 })

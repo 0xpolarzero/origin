@@ -39,6 +39,8 @@ export const outbound_auth_state_values = ["healthy", "missing", "expired"] as c
 export const failure_code_values = [
   "manual_start_failed",
   "repair_exhausted",
+  "workflow_failed",
+  "node_execution_failed",
   "integration_transport_error",
   "transient_runtime_error",
   "integration_timeout",
@@ -96,6 +98,7 @@ export const event_type_values = [
   "integration_attempt.transitioned",
   "reconciliation.watchdog",
   "workflow.trigger.outcome",
+  "workflow.run.outcome",
   "draft.transitioned",
   "policy.decision",
   "dispatch.attempt",
@@ -108,8 +111,17 @@ export const validation_code_values = [
   "schema_invalid",
   "schema_version_unsupported",
   "workspace_capability_blocked",
+  "node_kind_unsupported",
+  "node_id_duplicate",
+  "input_shape_invalid",
+  "input_key_duplicate",
+  "input_ref_invalid",
   "resource_missing",
+  "resource_kind_unsupported",
   "resource_kind_mismatch",
+  "local_resource_missing",
+  "local_resource_outside_workflow",
+  "condition_ref_invalid",
   "reference_broken_link",
   "resource_not_runnable",
   "resource_id_duplicate",
@@ -117,6 +129,25 @@ export const validation_code_values = [
   "workflow_missing",
   "workflow_not_runnable",
 ] as const
+
+export const run_node_status_values = [
+  "pending",
+  "ready",
+  "running",
+  "succeeded",
+  "failed",
+  "skipped",
+  "canceled",
+] as const
+
+export const run_attempt_status_values = ["created", "running", "succeeded", "failed", "canceled"] as const
+
+export const run_node_skip_reason_code_values = ["branch_not_taken", "upstream_failed"] as const
+
+export const active_session_link_role_values = ["execution_node", "run_followup"] as const
+export const deferred_session_link_role_values = ["builder", "node_edit"] as const
+export const session_link_role_values = [...active_session_link_role_values] as const
+export const session_link_visibility_values = ["hidden", "visible"] as const
 
 export const run_status = z.enum(run_status_values)
 export const operation_status = z.enum(operation_status_values)
@@ -132,6 +163,11 @@ export const block_reason_code = z.enum(block_reason_code_values)
 export const actor_type = z.enum(actor_type_values)
 export const event_type = z.enum(event_type_values)
 export const validation_code = z.enum(validation_code_values)
+export const run_node_status = z.enum(run_node_status_values)
+export const run_attempt_status = z.enum(run_attempt_status_values)
+export const run_node_skip_reason_code = z.enum(run_node_skip_reason_code_values)
+export const session_link_role = z.enum(session_link_role_values)
+export const session_link_visibility = z.enum(session_link_visibility_values)
 
 export const policy_event_types = ["policy.decision", "dispatch.attempt", "dispatch.result"] as const
 
@@ -154,3 +190,8 @@ export type BlockReasonCode = z.infer<typeof block_reason_code>
 export type ActorType = z.infer<typeof actor_type>
 export type EventType = z.infer<typeof event_type>
 export type ValidationCode = z.infer<typeof validation_code>
+export type RunNodeStatus = z.infer<typeof run_node_status>
+export type RunAttemptStatus = z.infer<typeof run_attempt_status>
+export type RunNodeSkipReasonCode = z.infer<typeof run_node_skip_reason_code>
+export type SessionLinkRole = z.infer<typeof session_link_role>
+export type SessionLinkVisibility = z.infer<typeof session_link_visibility>

@@ -7,12 +7,23 @@ import { useGlobalSync } from "./global-sync"
 import { usePlatform } from "@/context/platform"
 import { useLanguage } from "@/context/language"
 import { useSettings } from "@/context/settings"
+import { useServer } from "@/context/server"
 import { Binary } from "@opencode-ai/util/binary"
 import { base64Encode } from "@opencode-ai/util/encode"
 import { decode64 } from "@/utils/base64"
 import { EventSessionError, EventWorkflowTriggerOutcome } from "@opencode-ai/sdk/v2"
 import { Persist, persisted } from "@/utils/persist"
 import { playSound, soundSrc } from "@/utils/sound"
+import { loadWorkflowSessionLink } from "@/pages/graph-detail-data"
+import type { GraphSessionLink } from "@/pages/graph-detail-data"
+import { shouldSuppressSessionNotification } from "./notification-session"
+import {
+  runOutcomeNotification,
+  triggerOutcomeNotification,
+  type RunOutcomeNotification,
+  type TriggerOutcomeNotification,
+  type WorkflowRunOutcomeEvent,
+} from "./notification-workflow"
 
 type NotificationBase = {
   directory?: string
@@ -31,41 +42,7 @@ type ErrorNotification = NotificationBase & {
   error: EventSessionError["properties"]["error"]
 }
 
-type TriggerOutcomeNotification = NotificationBase & {
-  type: "trigger-outcome"
-  trigger_type: EventWorkflowTriggerOutcome["properties"]["trigger_type"]
-  outcome: EventWorkflowTriggerOutcome["properties"]["outcome"]
-  workflow_id: string
-  reason_code: string | null
-  count: number
-  run_ids: string[]
-  message: string
-}
-
-export type Notification = TurnCompleteNotification | ErrorNotification | TriggerOutcomeNotification
-
-export function triggerOutcomeNotification(input: {
-  directory: string
-  currentDirectory?: string
-  event: EventWorkflowTriggerOutcome
-  time: number
-}): TriggerOutcomeNotification | undefined {
-  if (input.event.properties.outcome === "run_started") return
-
-  return {
-    directory: input.directory,
-    time: input.time,
-    viewed: input.currentDirectory === input.directory,
-    type: "trigger-outcome",
-    trigger_type: input.event.properties.trigger_type,
-    outcome: input.event.properties.outcome,
-    workflow_id: input.event.properties.workflow_id,
-    reason_code: input.event.properties.reason_code ?? null,
-    count: input.event.properties.count ?? 1,
-    run_ids: input.event.properties.run_ids ?? [],
-    message: input.event.properties.message,
-  }
-}
+export type Notification = TurnCompleteNotification | ErrorNotification | TriggerOutcomeNotification | RunOutcomeNotification
 
 type NotificationIndex = {
   session: {
@@ -84,6 +61,7 @@ type NotificationIndex = {
 
 const MAX_NOTIFICATIONS = 500
 const NOTIFICATION_TTL_MS = 1000 * 60 * 60 * 24 * 30
+let loadSessionLink = loadWorkflowSessionLink
 
 function pruneNotifications(list: Notification[]) {
   const cutoff = Date.now() - NOTIFICATION_TTL_MS
@@ -148,6 +126,7 @@ export const { use: useNotification, provider: NotificationProvider } = createSi
     const platform = usePlatform()
     const settings = useSettings()
     const language = useLanguage()
+    const server = useServer()
 
     const empty: Notification[] = []
 
@@ -250,6 +229,34 @@ export const { use: useNotification, provider: NotificationProvider } = createSi
         .catch(() => undefined)
     }
 
+    const linkBySession = new Map<string, Promise<GraphSessionLink | null>>()
+
+    const auth = () => {
+      const http = server.current?.http
+      if (!http?.url || !http.password) return
+      return {
+        baseUrl: http.url,
+        auth: `Basic ${btoa(`${http.username ?? "opencode"}:${http.password}`)}`,
+      }
+    }
+
+    const lookupLink = (directory: string, sessionID?: string) => {
+      if (!sessionID) return Promise.resolve(null)
+      const access = auth()
+      if (!access) return Promise.resolve(null)
+      const key = `${directory}:${sessionID}`
+      const current = linkBySession.get(key)
+      if (current) return current
+      const next = loadSessionLink({
+        baseUrl: access.baseUrl,
+        directory,
+        session_id: sessionID,
+        auth: access.auth,
+      }).catch(() => null)
+      linkBySession.set(key, next)
+      return next
+    }
+
     const viewedInCurrentSession = (directory: string, sessionID?: string) => {
       const activeDirectory = currentDirectory()
       const activeSession = currentSession()
@@ -268,9 +275,10 @@ export const { use: useNotification, provider: NotificationProvider } = createSi
 
     const handleSessionIdle = (directory: string, event: { properties: { sessionID?: string } }, time: number) => {
       const sessionID = event.properties.sessionID
-      void lookup(directory, sessionID).then((session) => {
+      void Promise.all([lookup(directory, sessionID), lookupLink(directory, sessionID)]).then(([session, link]) => {
         if (meta.disposed) return
         if (!session) return
+        if (shouldSuppressSessionNotification({ session, link })) return
         if (session.parentID) return
 
         if (settings.sounds.agentEnabled()) {
@@ -298,8 +306,9 @@ export const { use: useNotification, provider: NotificationProvider } = createSi
       time: number,
     ) => {
       const sessionID = event.properties.sessionID
-      void lookup(directory, sessionID).then((session) => {
+      void Promise.all([lookup(directory, sessionID), lookupLink(directory, sessionID)]).then(([session, link]) => {
         if (meta.disposed) return
+        if (shouldSuppressSessionNotification({ session, link })) return
         if (session?.parentID) return
 
         if (settings.sounds.errorsEnabled()) {
@@ -336,20 +345,51 @@ export const { use: useNotification, provider: NotificationProvider } = createSi
       append(notification)
     }
 
+    const handleRunOutcome = (directory: string, event: WorkflowRunOutcomeEvent, time: number) => {
+      const notification = runOutcomeNotification({
+        directory,
+        currentDirectory: viewedInCurrentProject(directory) ? directory : undefined,
+        event,
+        time,
+      })
+      append(notification)
+
+      const href = `/${base64Encode(directory)}/runs/${event.properties.run_id}`
+      const title =
+        event.properties.outcome === "completed"
+          ? "Workflow run completed"
+          : event.properties.outcome === "failed"
+            ? "Workflow run failed"
+            : "Workflow run canceled"
+      const description = `${event.properties.workflow_id} • ${event.properties.status}`
+      if (settings.notifications.agent()) {
+        void platform.notify(title, description, href)
+      }
+    }
+
     const unsub = globalSDK.event.listen((e) => {
       const event = e.details
       const directory = e.name
       const time = Date.now()
-      if (event.type === "session.idle") {
-        handleSessionIdle(directory, event, time)
+      const type = (event as { type: string }).type
+      if (type === "session.idle") {
+        handleSessionIdle(directory, event as { properties: { sessionID?: string } }, time)
         return
       }
-      if (event.type === "session.error") {
-        handleSessionError(directory, event, time)
+      if (type === "session.error") {
+        handleSessionError(
+          directory,
+          event as { properties: { sessionID?: string; error?: EventSessionError["properties"]["error"] } },
+          time,
+        )
         return
       }
-      if (event.type === "workflow.trigger.outcome") {
-        handleTriggerOutcome(directory, event, time)
+      if (type === "workflow.trigger.outcome") {
+        handleTriggerOutcome(directory, event as EventWorkflowTriggerOutcome, time)
+        return
+      }
+      if (type === "workflow.run.outcome") {
+        handleRunOutcome(directory, event as unknown as WorkflowRunOutcomeEvent, time)
       }
     })
     onCleanup(() => {
@@ -426,3 +466,11 @@ export const { use: useNotification, provider: NotificationProvider } = createSi
     }
   },
 })
+
+export const NotificationTesting = {
+  set(input?: {
+    loadWorkflowSessionLink?: typeof loadWorkflowSessionLink
+  }) {
+    loadSessionLink = input?.loadWorkflowSessionLink ?? loadWorkflowSessionLink
+  },
+}

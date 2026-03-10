@@ -1394,8 +1394,13 @@ export default function Layout(props: ParentProps) {
 
   const handleDeepLinks = (urls: string[]) => {
     if (!server.isLocal()) return
-    for (const directory of collectOpenProjectDeepLinks(urls)) {
-      openProject(directory)
+    for (const link of collectOpenProjectDeepLinks(urls)) {
+      openProject(link.directory, false)
+      if (link.href) {
+        navigateWithSidebarReset(link.href)
+        continue
+      }
+      void navigateToProject(link.directory)
     }
   }
 

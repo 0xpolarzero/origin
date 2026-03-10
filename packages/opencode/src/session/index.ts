@@ -29,6 +29,10 @@ import { PermissionNext } from "@/permission/next"
 import { Global } from "@/global"
 import type { LanguageModelV2Usage } from "@ai-sdk/provider"
 import { iife } from "@/util/iife"
+import { RuntimeRun } from "@/runtime/run"
+import { RuntimeRunNode } from "@/runtime/run-node"
+import { RuntimeRunSnapshot } from "@/runtime/run-snapshot"
+import { RuntimeSessionLink } from "@/runtime/session-link"
 
 export namespace Session {
   const log = Log.create({ service: "session" })
@@ -114,6 +118,53 @@ export namespace Session {
       return `${base} (fork #${num + 1})`
     }
     return `${title} (fork #1)`
+  }
+
+  async function seedFollowup(input: {
+    executionSessionID: string
+    followupSessionID: string
+    runID: string
+    runNodeID: string | null
+  }) {
+    const latest = (await messages({ sessionID: input.followupSessionID, limit: 1 }))[0]
+    const seeded = latest?.parts.some(
+      (part) =>
+        part.type === "text" &&
+        part.metadata?.workflow_continue === true &&
+        part.metadata?.execution_session_id === input.executionSessionID,
+    )
+    if (seeded) return
+
+    const snapshot = RuntimeRunSnapshot.byRun({ run_id: input.runID })
+    const node = input.runNodeID ? RuntimeRunNode.get({ id: input.runNodeID }) : null
+    const text = [
+      `Continue from workflow ${snapshot.workflow_id}.`,
+      `Run: ${input.runID}.`,
+      node ? `Node: ${node.node_id} (${node.title}).` : null,
+      `Source transcript session: ${input.executionSessionID}.`,
+      "The original execution transcript remains read-only; continue follow-up work in this session.",
+    ]
+      .filter((item): item is string => !!item)
+      .join("\n")
+
+    await SessionPrompt.prompt({
+      sessionID: input.followupSessionID,
+      noReply: true,
+      parts: [
+        {
+          type: "text",
+          text,
+          synthetic: true,
+          metadata: {
+            workflow_continue: true,
+            execution_session_id: input.executionSessionID,
+            run_id: input.runID,
+            run_node_id: input.runNodeID,
+            workflow_id: snapshot.workflow_id,
+          },
+        },
+      ],
+    })
   }
 
   export const Info = z
@@ -237,6 +288,39 @@ export namespace Session {
       messageID: Identifier.schema("message").optional(),
     }),
     async (input) => {
+      const link = RuntimeSessionLink.maybe(input.sessionID)
+      if (link?.role === "execution_node" && link.run_id) {
+        const followup = RuntimeSessionLink.byRun({
+          run_id: link.run_id,
+          role: "run_followup",
+        }).at(0)
+        if (followup) {
+          await seedFollowup({
+            executionSessionID: input.sessionID,
+            followupSessionID: followup.session_id,
+            runID: link.run_id,
+            runNodeID: link.run_node_id,
+          })
+          return get(followup.session_id)
+        }
+
+        const run = RuntimeRun.get({ id: link.run_id })
+        if (run.session_id) {
+          RuntimeSessionLink.upsert({
+            session_id: run.session_id,
+            role: "run_followup",
+            run_id: run.id,
+          })
+          await seedFollowup({
+            executionSessionID: input.sessionID,
+            followupSessionID: run.session_id,
+            runID: run.id,
+            runNodeID: link.run_node_id,
+          })
+          return get(run.session_id)
+        }
+      }
+
       const original = await get(input.sessionID)
       if (!original) throw new Error("session not found")
       const title = getForkedTitle(original.title)
@@ -568,7 +652,9 @@ export namespace Session {
         .limit(limit)
         .all(),
     )
+    const hidden = Database.use((db) => RuntimeSessionLink.hidden({ session_ids: rows.map((row) => row.id) }, db))
     for (const row of rows) {
+      if (hidden.has(row.id)) continue
       yield fromRow(row)
     }
   }
@@ -615,6 +701,7 @@ export namespace Session {
           : db.select().from(SessionTable)
       return query.orderBy(desc(SessionTable.time_updated), desc(SessionTable.id)).limit(limit).all()
     })
+    const hidden = Database.use((db) => RuntimeSessionLink.hidden({ session_ids: rows.map((row) => row.id) }, db))
 
     const ids = [...new Set(rows.map((row) => row.project_id))]
     const projects = new Map<string, ProjectInfo>()
@@ -637,6 +724,7 @@ export namespace Session {
     }
 
     for (const row of rows) {
+      if (hidden.has(row.id)) continue
       const project = projects.get(row.project_id) ?? null
       yield { ...fromRow(row), project }
     }

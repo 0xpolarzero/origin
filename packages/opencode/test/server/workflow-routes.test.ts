@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
 import { GlobalBus } from "../../src/bus/global"
-import { WorkspaceContext } from "../../src/control-plane/workspace-context"
 import { WorkspaceTable } from "../../src/control-plane/workspace.sql"
 import { JJ } from "../../src/project/jj"
 import { Instance } from "../../src/project/instance"
@@ -23,12 +22,9 @@ import { tmpdir } from "../fixture/fixture"
 
 Log.init({ print: false })
 
-type ExecuteItem = {
-  phase: string
-  directory: string
-  abort: AbortSignal
-  session_id?: string | null
-}
+type ExecuteItem = Parameters<
+  NonNullable<NonNullable<Parameters<(typeof WorkflowManualRun.Testing)["set"]>[0]>["execute"]>
+>[0]
 
 async function write(root: string, file: string, content: string) {
   const target = path.join(root, file)
@@ -45,6 +41,42 @@ function result(input?: { exitCode?: number; stdout?: string; stderr?: string })
     stderr,
     text: () => stdout.toString(),
   }
+}
+
+function manual_workflow(id = "basic", name = "Basic") {
+  return [
+    "schema_version: 2",
+    `id: ${id}`,
+    `name: ${name}`,
+    "trigger:",
+    "  type: manual",
+    "steps:",
+    "  - id: done",
+    "    kind: end",
+    "    title: Done",
+    "    result: success",
+  ].join("\n")
+}
+
+function waiting_workflow(id = "basic", name = "Basic") {
+  return [
+    "schema_version: 2",
+    `id: ${id}`,
+    `name: ${name}`,
+    "trigger:",
+    "  type: manual",
+    "steps:",
+    "  - id: inspect",
+    "    kind: agent_request",
+    "    title: Inspect",
+    "    prompt:",
+    "      source: inline",
+    "      text: Review",
+    "  - id: done",
+    "    kind: end",
+    "    title: Done",
+    "    result: success",
+  ].join("\n")
 }
 
 function seed(workspace_id: string, directory: string) {
@@ -64,7 +96,7 @@ function seed(workspace_id: string, directory: string) {
   })
 }
 
-function seams(input?: { execute?: (item: ExecuteItem) => Promise<void> }) {
+function seams(input?: Parameters<typeof WorkflowManualRun.Testing.set>[0]) {
   return {
     adapter: ({ directory }: { directory: string }) =>
       JJ.create({
@@ -84,6 +116,7 @@ function seams(input?: { execute?: (item: ExecuteItem) => Promise<void> }) {
         return
       }
     },
+    ...input,
   }
 }
 
@@ -159,8 +192,125 @@ describe("workflow/library routes", () => {
           data: { code: string; path: string; message: string }
         }
         expect(body.name).toBe("RuntimeWorkflowValidationError")
-        expect(body.data.code).toBe("resource_missing")
-        expect(body.data.path).toBe("$.resources[0].id")
+        expect(body.data.code).toBe("schema_version_unsupported")
+        expect(body.data.path).toBe("$.schema_version")
+      },
+    })
+  })
+
+  test("workflow get route returns 409 for ambiguous workflow ids", async () => {
+    await using dir = await tmpdir({ git: true })
+
+    await write(
+      dir.path,
+      ".origin/workflows/one.yaml",
+      [
+        "schema_version: 2",
+        "id: duplicate",
+        "name: One",
+        "trigger:",
+        "  type: manual",
+        "steps:",
+        "  - id: done_one",
+        "    kind: end",
+        "    title: Done",
+        "    result: success",
+      ].join("\n"),
+    )
+    await write(
+      dir.path,
+      ".origin/workflows/two.yaml",
+      [
+        "schema_version: 2",
+        "id: duplicate",
+        "name: Two",
+        "trigger:",
+        "  type: manual",
+        "steps:",
+        "  - id: done_two",
+        "    kind: end",
+        "    title: Done",
+        "    result: success",
+      ].join("\n"),
+    )
+
+    await Instance.provide({
+      directory: dir.path,
+      fn: async () => {
+        const app = Server.App()
+        const query = `?directory=${encodeURIComponent(dir.path)}`
+        const response = await app.request(`/workflow/duplicate${query}`, {
+          method: "GET",
+        })
+
+        expect(response.status).toBe(409)
+        expect(await response.text()).toContain("Workflow id is ambiguous: duplicate")
+      },
+    })
+  })
+
+  test("run validate route rejects omitted JSON body", async () => {
+    await using dir = await tmpdir({ git: true })
+    await write(dir.path, ".origin/workflows/basic.yaml", manual_workflow())
+
+    await Instance.provide({
+      directory: dir.path,
+      fn: async () => {
+        const app = Server.App()
+        const query = `?directory=${encodeURIComponent(dir.path)}`
+        const response = await app.request(`/workflow/run/validate${query}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: "{}",
+        })
+
+        expect(response.status).toBe(400)
+        expect(await response.text()).toContain("workflow_id")
+      },
+    })
+  })
+
+  test("manual run start route rejects omitted workflow_id", async () => {
+    await using dir = await tmpdir({ git: true })
+    await write(dir.path, ".origin/workflows/basic.yaml", manual_workflow())
+
+    await Instance.provide({
+      directory: dir.path,
+      fn: async () => {
+        seed("wrk_missing", dir.path)
+        const app = Server.App()
+        const query = `?directory=${encodeURIComponent(dir.path)}&workspace=wrk_missing`
+        const response = await app.request(`/workflow/run/start${query}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: "{}",
+        })
+
+        expect(response.status).toBe(400)
+        expect(await response.text()).toContain("workflow_id")
+      },
+    })
+  })
+
+  test("manual run start route rejects omitted JSON body", async () => {
+    await using dir = await tmpdir({ git: true })
+    await write(dir.path, ".origin/workflows/basic.yaml", manual_workflow())
+
+    await Instance.provide({
+      directory: dir.path,
+      fn: async () => {
+        seed("wrk_missing", dir.path)
+        const app = Server.App()
+        const query = `?directory=${encodeURIComponent(dir.path)}&workspace=wrk_missing`
+        const response = await app.request(`/workflow/run/start${query}`, {
+          method: "POST",
+        })
+
+        expect(response.status).toBe(400)
       },
     })
   })
@@ -291,12 +441,22 @@ describe("workflow/library routes", () => {
       dir.path,
       ".origin/workflows/basic.yaml",
       [
-        "schema_version: 1",
+        "schema_version: 2",
         "id: basic",
         "name: Basic",
         "trigger:",
         "  type: manual",
-        "instructions: ok",
+        "steps:",
+        "  - id: inspect",
+        "    kind: agent_request",
+        "    title: Inspect",
+        "    prompt:",
+        "      source: inline",
+        "      text: Hold",
+        "  - id: done",
+        "    kind: end",
+        "    title: Done",
+        "    result: success",
       ].join("\n"),
     )
 
@@ -355,12 +515,22 @@ describe("workflow/library routes", () => {
       dir.path,
       ".origin/workflows/basic.yaml",
       [
-        "schema_version: 1",
+        "schema_version: 2",
         "id: basic",
         "name: Basic",
         "trigger:",
         "  type: manual",
-        "instructions: ok",
+        "steps:",
+        "  - id: build",
+        "    kind: script",
+        "    title: Build",
+        "    script:",
+        "      source: inline",
+        "      text: echo build",
+        "  - id: done",
+        "    kind: end",
+        "    title: Done",
+        "    result: success",
       ].join("\n"),
     )
 
@@ -376,10 +546,19 @@ describe("workflow/library routes", () => {
         })
         WorkflowManualRun.Testing.set(
           seams({
-            execute: async (item) => {
-              if (item.phase !== "initial") return
-              await write(item.directory, "notes/result.md", "changed")
+            script: async ({ directory }) => {
+              await write(directory, "notes/result.md", "changed")
+              return {
+                exit_code: 0,
+                stdout: "changed",
+                stderr: "",
+              }
             },
+            classify: async () => ({
+              changed_paths: ["notes/result.md"],
+              base_change_id: null,
+              change_ids: [],
+            }),
           }),
         )
 
@@ -432,18 +611,7 @@ describe("workflow/library routes", () => {
   test("manual run start route requires workspace context", async () => {
     await using dir = await tmpdir({ git: true })
 
-    await write(
-      dir.path,
-      ".origin/workflows/basic.yaml",
-      [
-        "schema_version: 1",
-        "id: basic",
-        "name: Basic",
-        "trigger:",
-        "  type: manual",
-        "instructions: ok",
-      ].join("\n"),
-    )
+    await write(dir.path, ".origin/workflows/basic.yaml", manual_workflow())
 
     await Instance.provide({
       directory: dir.path,
@@ -471,18 +639,7 @@ describe("workflow/library routes", () => {
   test("manual run start rejects unknown workspace without creating session rows", async () => {
     await using dir = await tmpdir({ git: true })
 
-    await write(
-      dir.path,
-      ".origin/workflows/basic.yaml",
-      [
-        "schema_version: 1",
-        "id: basic",
-        "name: Basic",
-        "trigger:",
-        "  type: manual",
-        "instructions: ok",
-      ].join("\n"),
-    )
+    await write(dir.path, ".origin/workflows/basic.yaml", manual_workflow())
 
     await Instance.provide({
       directory: dir.path,
@@ -509,18 +666,7 @@ describe("workflow/library routes", () => {
   test("manual run get/cancel routes are scoped to workspace id", async () => {
     await using dir = await tmpdir({ git: true })
 
-    await write(
-      dir.path,
-      ".origin/workflows/basic.yaml",
-      [
-        "schema_version: 1",
-        "id: basic",
-        "name: Basic",
-        "trigger:",
-        "  type: manual",
-        "instructions: ok",
-      ].join("\n"),
-    )
+    await write(dir.path, ".origin/workflows/basic.yaml", waiting_workflow())
 
     let release = () => {}
     const hold = new Promise<void>((resolve) => {
@@ -535,8 +681,11 @@ describe("workflow/library routes", () => {
 
         WorkflowManualRun.Testing.set(
           seams({
-            execute: async () => {
+            agent: async () => {
               await hold
+              return {
+                structured: null,
+              }
             },
           }),
         )
@@ -588,18 +737,7 @@ describe("workflow/library routes", () => {
   test("manual run duplicate rejection maps to 409", async () => {
     await using dir = await tmpdir({ git: true })
 
-    await write(
-      dir.path,
-      ".origin/workflows/basic.yaml",
-      [
-        "schema_version: 1",
-        "id: basic",
-        "name: Basic",
-        "trigger:",
-        "  type: manual",
-        "instructions: ok",
-      ].join("\n"),
-    )
+    await write(dir.path, ".origin/workflows/basic.yaml", waiting_workflow())
 
     let release = () => {}
     const hold = new Promise<void>((resolve) => {
@@ -612,8 +750,11 @@ describe("workflow/library routes", () => {
         seed("wrk_manual", dir.path)
         WorkflowManualRun.Testing.set(
           seams({
-            execute: async () => {
+            agent: async () => {
               await hold
+              return {
+                structured: null,
+              }
             },
           }),
         )
@@ -1248,7 +1389,7 @@ describe("workflow/library routes", () => {
     }
   })
 
-  test("signal ingress fans out first delivery and suppresses provider-id duplicates without new sessions", async () => {
+  test("signal ingress remains non-runnable for deferred signal workflows", async () => {
     await using home = await tmpdir()
     const previous = process.env.OPENCODE_TEST_HOME
     const origin = path.join(home.path, "Documents", "origin")
@@ -1311,23 +1452,13 @@ describe("workflow/library routes", () => {
           const first_body = (await first.json()) as {
             accepted: boolean
             duplicate: boolean
+            reason: string | null
             run_ids: string[]
           }
-          expect(first_body.accepted).toBe(true)
+          expect(first_body.accepted).toBe(false)
           expect(first_body.duplicate).toBe(false)
-          expect(first_body.run_ids).toHaveLength(2)
-
-          await WorkspaceContext.provide({
-            workspaceID: "wrk_signal",
-            fn: async () => {
-              for (const run_id of first_body.run_ids) {
-                await WorkflowManualRun.wait({ run_id, timeout_ms: 5000 })
-              }
-            },
-          })
-
-          const sessions_before = Database.use((db) => db.select().from(SessionTable).all())
-          expect(sessions_before).toHaveLength(2)
+          expect(first_body.reason).toBe("signal_unregistered")
+          expect(first_body.run_ids).toHaveLength(0)
 
           const duplicate = await app.request(`/workflow/signals/incoming${query}`, {
             method: "POST",
@@ -1347,20 +1478,19 @@ describe("workflow/library routes", () => {
           const duplicate_body = (await duplicate.json()) as {
             accepted: boolean
             duplicate: boolean
+            reason: string | null
             run_ids: string[]
           }
-          expect(duplicate_body.accepted).toBe(true)
-          expect(duplicate_body.duplicate).toBe(true)
+          expect(duplicate_body.accepted).toBe(false)
+          expect(duplicate_body.duplicate).toBe(false)
+          expect(duplicate_body.reason).toBe("signal_unregistered")
           expect(duplicate_body.run_ids).toHaveLength(0)
 
           const rows = Database.use((db) => db.select().from(RunTable).all())
-          expect(rows).toHaveLength(4)
-          const skipped = rows.filter((row) => row.reason_code === "duplicate_event")
-          expect(skipped).toHaveLength(2)
-          expect(skipped.every((row) => row.session_id === null)).toBe(true)
+          expect(rows).toHaveLength(0)
 
           const sessions_after = Database.use((db) => db.select().from(SessionTable).all())
-          expect(sessions_after).toHaveLength(2)
+          expect(sessions_after).toHaveLength(0)
         },
       })
     } finally {
@@ -1369,7 +1499,7 @@ describe("workflow/library routes", () => {
     }
   })
 
-  test("signal ingress uses fallback hash dedupe, enforces no-backfill, and returns policy/unknown outcomes deterministically", async () => {
+  test("signal ingress returns deferred-signal outcomes deterministically", async () => {
     await using home = await tmpdir()
     const previous = process.env.OPENCODE_TEST_HOME
     const origin = path.join(home.path, "Documents", "origin")
@@ -1420,18 +1550,13 @@ describe("workflow/library routes", () => {
           const first_body = (await first.json()) as {
             accepted: boolean
             duplicate: boolean
+            reason: string | null
             run_ids: string[]
           }
-          expect(first_body.accepted).toBe(true)
+          expect(first_body.accepted).toBe(false)
           expect(first_body.duplicate).toBe(false)
-          expect(first_body.run_ids).toHaveLength(1)
-
-          await WorkspaceContext.provide({
-            workspaceID: "wrk_signal",
-            fn: async () => {
-              await WorkflowManualRun.wait({ run_id: first_body.run_ids[0]!, timeout_ms: 5000 })
-            },
-          })
+          expect(first_body.reason).toBe("signal_unregistered")
+          expect(first_body.run_ids).toHaveLength(0)
 
           const duplicate = await app.request(`/workflow/signals/incoming${query}`, {
             method: "POST",
@@ -1451,10 +1576,12 @@ describe("workflow/library routes", () => {
           const duplicate_body = (await duplicate.json()) as {
             accepted: boolean
             duplicate: boolean
+            reason: string | null
             run_ids: string[]
           }
-          expect(duplicate_body.accepted).toBe(true)
-          expect(duplicate_body.duplicate).toBe(true)
+          expect(duplicate_body.accepted).toBe(false)
+          expect(duplicate_body.duplicate).toBe(false)
+          expect(duplicate_body.reason).toBe("signal_unregistered")
           expect(duplicate_body.run_ids).toHaveLength(0)
 
           const boundary = await app.request(`/workflow/signals/incoming${query}`, {
@@ -1474,7 +1601,7 @@ describe("workflow/library routes", () => {
           expect(await boundary.json()).toEqual({
             accepted: false,
             duplicate: false,
-            reason: "before_enablement_boundary",
+            reason: "signal_unregistered",
             run_ids: [],
           })
 

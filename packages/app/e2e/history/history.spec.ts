@@ -207,6 +207,58 @@ const operationsRows = {
   },
 } as const
 
+const runDetail = {
+  run: {
+    id: "run-main",
+    status: "completed_no_change",
+    workflow_id: "workflow.daily",
+    workspace_id: "wrk_1",
+    session_id: "session-main",
+    reason_code: null,
+    failure_code: null,
+    created_at: 300,
+    started_at: 300,
+    finished_at: 301,
+    integration_candidate: null,
+  },
+  snapshot: {
+    id: "snap-main",
+    workflow_id: "workflow.daily",
+    workflow_revision_id: "rev-main",
+    workflow_hash: "hash-main",
+    workflow_text: "schema_version: 2",
+    graph_json: {
+      id: "workflow.daily",
+      name: "Daily workflow",
+      description: "History cross-link target",
+      steps: [
+        {
+          id: "done",
+          kind: "end",
+          title: "Done",
+          result: "success",
+        },
+      ],
+    },
+    input_json: {},
+    input_store_json: {},
+    resource_materials_json: {},
+  },
+  revision: {
+    id: "rev-main",
+    workflow_id: "workflow.daily",
+    content_hash: "hash-main",
+    created_at: 300,
+  },
+  live: {
+    current_revision_id: "rev-main",
+    has_newer_revision: false,
+  },
+  nodes: [],
+  events: [],
+  followup: null,
+} as const
+
 test("history tabs, filtering, cross-links, duplicate events, and missing links", async ({ page, withProject }) => {
   await withProject(async ({ slug }) => {
     const runs = async (route: Route) => {
@@ -281,8 +333,23 @@ test("history tabs, filtering, cross-links, duplicate events, and missing links"
       })
     }
 
+    const detail = async (route: Route) => {
+      const url = new URL(route.request().url())
+      if (url.origin !== serverUrl) {
+        await route.continue()
+        return
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(runDetail),
+      })
+    }
+
     await page.route("**/workflow/history/runs*", runs)
     await page.route("**/workflow/history/operations*", operations)
+    await page.route("**/workflow/runs/run-main/detail", detail)
 
     try {
       await page.goto(`/${slug}/history`)
@@ -301,7 +368,7 @@ test("history tabs, filtering, cross-links, duplicate events, and missing links"
       await duplicate.getByRole("button", { name: "Open Event Details" }).click()
       await expect(duplicate).toContainText("Ignored duplicate signal.")
       await expect(duplicate).toContainText("signal: incoming")
-      await expect(duplicate.getByRole("button", { name: "Open Run Session" })).toHaveCount(0)
+      await expect(duplicate.getByRole("button", { name: "Open Run" })).toHaveCount(0)
       await expect(duplicate).toContainText("No operation expected")
 
       const skipped = page.locator('[data-component="history-run-row"][data-id="run-skip"]')
@@ -313,6 +380,17 @@ test("history tabs, filtering, cross-links, duplicate events, and missing links"
 
       await expect(page.locator('[data-component="history-counter-runs"]')).toHaveText("2")
       await expect(page.locator('[data-component="history-counter-duplicates"]')).toHaveText("1")
+
+      await page.getByRole("button", { name: "Refresh" }).click()
+      const rows = page.locator('[data-component="history-run-row"]')
+      await expect(rows.nth(0)).toHaveAttribute("data-id", "run-main")
+      await expect(rows).toHaveCount(1)
+      await page.getByRole("button", { name: "Load More" }).click()
+      await expect(rows).toHaveCount(4)
+      await expect(rows.nth(0)).toHaveAttribute("data-id", "run-main")
+      await expect(rows.nth(1)).toHaveAttribute("data-id", "run-dup")
+      await expect(rows.nth(2)).toHaveAttribute("data-id", "run-skip")
+      await expect(rows.nth(3)).toHaveAttribute("data-id", "run-missing")
 
       const missingRun = page.locator('[data-component="history-run-row"][data-id="run-missing"]')
       await expect(missingRun.locator('[data-component="history-link-missing"]')).toHaveText("Operation link missing")
@@ -344,27 +422,13 @@ test("history tabs, filtering, cross-links, duplicate events, and missing links"
         .locator('[data-component="history-operation-row"][data-id="op-main"]')
         .getByRole("button", { name: "Open Run" })
         .click()
-      await expect(page).toHaveURL(new RegExp(`/history\\?tab=runs&run_id=run-main$`))
-      await expect(page.locator('[data-component="history-run-row"][data-id="run-main"]')).toBeVisible()
-      await expect(page.locator('[data-component="history-run-row"][data-id="run-main"]')).toHaveAttribute(
-        "data-focused",
-        "true",
-      )
-
-      await page.getByRole("button", { name: "Refresh" }).click()
-      const rows = page.locator('[data-component="history-run-row"]')
-      await expect(rows.nth(0)).toHaveAttribute("data-id", "run-main")
-      await expect(rows).toHaveCount(1)
-      await page.getByRole("button", { name: "Load More" }).click()
-      await expect(rows).toHaveCount(4)
-      await expect(rows.nth(0)).toHaveAttribute("data-id", "run-main")
-      await expect(rows.nth(1)).toHaveAttribute("data-id", "run-dup")
-      await expect(rows.nth(2)).toHaveAttribute("data-id", "run-skip")
-      await expect(rows.nth(3)).toHaveAttribute("data-id", "run-missing")
+      await expect(page).toHaveURL(new RegExp(`/runs/run-main$`))
+      await expect(page.locator('[data-page="run-detail"]')).toBeVisible()
     } finally {
       if (page.isClosed()) return
       await page.unroute("**/workflow/history/runs*", runs)
       await page.unroute("**/workflow/history/operations*", operations)
+      await page.unroute("**/workflow/runs/run-main/detail", detail)
     }
   })
 })

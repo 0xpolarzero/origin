@@ -1,6 +1,7 @@
 import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core"
 import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core"
 import { WorkspaceTable } from "@/control-plane/workspace.sql"
+import { ProjectTable } from "@/project/project.sql"
 import { SessionTable } from "@/session/session.sql"
 import {
   actor_type_values,
@@ -14,8 +15,13 @@ import {
   outbound_auth_state_values,
   operation_status_values,
   reason_code_values,
+  run_attempt_status_values,
+  run_node_skip_reason_code_values,
+  run_node_status_values,
   run_status_values,
   run_trigger_type_values,
+  session_link_role_values,
+  session_link_visibility_values,
 } from "./contract"
 
 const Timestamps = {
@@ -64,6 +70,158 @@ export const RunTable = sqliteTable(
     index("run_workspace_trigger_created_idx").on(table.workspace_id, table.trigger_type, table.created_at, table.id),
     index("run_workspace_status_idx").on(table.workspace_id, table.status),
     index("run_queue_idx").on(table.workspace_id, table.status, table.ready_for_integration_at, table.id),
+  ],
+)
+
+export const WorkflowRevisionTable = sqliteTable(
+  "workflow_revision",
+  {
+    id: text().primaryKey(),
+    project_id: text()
+      .notNull()
+      .references(() => ProjectTable.id, { onDelete: "cascade" }),
+    workflow_id: text().notNull(),
+    file: text().notNull(),
+    content_hash: text().notNull(),
+    canonical_text: text().notNull(),
+    ...Timestamps,
+  },
+  (table) => [
+    index("workflow_revision_project_workflow_created_idx").on(table.project_id, table.workflow_id, table.created_at, table.id),
+    index("workflow_revision_project_hash_idx").on(table.project_id, table.content_hash),
+  ],
+)
+
+export const RunSnapshotTable = sqliteTable(
+  "run_snapshot",
+  {
+    id: text().primaryKey(),
+    run_id: text()
+      .notNull()
+      .references(() => RunTable.id, { onDelete: "cascade" }),
+    workflow_id: text().notNull(),
+    workflow_revision_id: text()
+      .notNull()
+      .references(() => WorkflowRevisionTable.id, { onDelete: "restrict" }),
+    workflow_hash: text().notNull(),
+    workflow_text: text().notNull(),
+    graph_json: text({ mode: "json" }).notNull().$type<Record<string, unknown>>(),
+    input_json: text({ mode: "json" }).notNull().$type<Record<string, unknown>>(),
+    input_store_json: text({ mode: "json" }).notNull().$type<Record<string, unknown>>(),
+    trigger_metadata_json: text({ mode: "json" }).notNull().$type<Record<string, unknown>>(),
+    resource_materials_json: text({ mode: "json" }).notNull().$type<Record<string, unknown>>(),
+    material_root: text().notNull(),
+    ...Timestamps,
+  },
+  (table) => [
+    uniqueIndex("run_snapshot_run_uq").on(table.run_id),
+    index("run_snapshot_workflow_idx").on(table.workflow_id, table.created_at, table.id),
+    index("run_snapshot_revision_idx").on(table.workflow_revision_id),
+  ],
+)
+
+export const RunNodeTable = sqliteTable(
+  "run_node",
+  {
+    id: text().primaryKey(),
+    run_id: text()
+      .notNull()
+      .references(() => RunTable.id, { onDelete: "cascade" }),
+    snapshot_id: text()
+      .notNull()
+      .references(() => RunSnapshotTable.id, { onDelete: "cascade" }),
+    node_id: text().notNull(),
+    kind: text().notNull(),
+    title: text().notNull(),
+    status: text({ enum: run_node_status_values }).notNull(),
+    skip_reason_code: text({ enum: run_node_skip_reason_code_values }),
+    output_json: text({ mode: "json" }).$type<Record<string, unknown>>(),
+    error_json: text({ mode: "json" }).$type<Record<string, unknown>>(),
+    position: integer().notNull(),
+    attempt_count: integer()
+      .notNull()
+      .$default(() => 0),
+    ...Timestamps,
+    started_at: integer(),
+    finished_at: integer(),
+  },
+  (table) => [
+    uniqueIndex("run_node_run_node_id_uq").on(table.run_id, table.node_id),
+    index("run_node_run_position_idx").on(table.run_id, table.position),
+    index("run_node_run_status_idx").on(table.run_id, table.status),
+    index("run_node_snapshot_idx").on(table.snapshot_id),
+  ],
+)
+
+export const RunAttemptTable = sqliteTable(
+  "run_attempt",
+  {
+    id: text().primaryKey(),
+    run_node_id: text()
+      .notNull()
+      .references(() => RunNodeTable.id, { onDelete: "cascade" }),
+    attempt_index: integer().notNull(),
+    status: text({ enum: run_attempt_status_values }).notNull(),
+    session_id: text().references(() => SessionTable.id, { onDelete: "set null" }),
+    input_json: text({ mode: "json" }).$type<Record<string, unknown>>(),
+    output_json: text({ mode: "json" }).$type<Record<string, unknown>>(),
+    error_json: text({ mode: "json" }).$type<Record<string, unknown>>(),
+    ...Timestamps,
+    started_at: integer(),
+    finished_at: integer(),
+  },
+  (table) => [
+    uniqueIndex("run_attempt_node_index_uq").on(table.run_node_id, table.attempt_index),
+    index("run_attempt_status_idx").on(table.status),
+    index("run_attempt_session_idx").on(table.session_id),
+  ],
+)
+
+export const RunEventTable = sqliteTable(
+  "run_event",
+  {
+    id: text().primaryKey(),
+    run_id: text()
+      .notNull()
+      .references(() => RunTable.id, { onDelete: "cascade" }),
+    run_node_id: text().references(() => RunNodeTable.id, { onDelete: "set null" }),
+    run_attempt_id: text().references(() => RunAttemptTable.id, { onDelete: "set null" }),
+    sequence: integer().notNull(),
+    event_type: text().notNull(),
+    payload_json: text({ mode: "json" }).notNull().$type<Record<string, unknown>>(),
+    created_at: integer()
+      .notNull()
+      .$default(() => Date.now()),
+  },
+  (table) => [
+    uniqueIndex("run_event_run_sequence_uq").on(table.run_id, table.sequence),
+    index("run_event_run_idx").on(table.run_id, table.sequence),
+    index("run_event_node_idx").on(table.run_node_id, table.sequence),
+    index("run_event_attempt_idx").on(table.run_attempt_id, table.sequence),
+  ],
+)
+
+export const SessionLinkTable = sqliteTable(
+  "session_link",
+  {
+    session_id: text()
+      .primaryKey()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    role: text({ enum: session_link_role_values }).notNull(),
+    visibility: text({ enum: session_link_visibility_values }).notNull(),
+    run_id: text().references(() => RunTable.id, { onDelete: "set null" }),
+    run_node_id: text().references(() => RunNodeTable.id, { onDelete: "set null" }),
+    run_attempt_id: text().references(() => RunAttemptTable.id, { onDelete: "set null" }),
+    readonly: integer({ mode: "boolean" })
+      .notNull()
+      .$default(() => false),
+    ...Timestamps,
+  },
+  (table) => [
+    index("session_link_run_idx").on(table.run_id, table.role),
+    index("session_link_node_idx").on(table.run_node_id, table.role),
+    index("session_link_attempt_idx").on(table.run_attempt_id),
+    index("session_link_visibility_idx").on(table.visibility, table.role),
   ],
 )
 

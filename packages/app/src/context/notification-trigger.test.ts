@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { EventWorkflowTriggerOutcome } from "@opencode-ai/sdk/v2"
-import { triggerOutcomeNotification } from "./notification"
+import { runOutcomeNotification, triggerOutcomeNotification, type WorkflowRunOutcomeEvent } from "./notification-workflow"
 
 const event = (
   outcome: EventWorkflowTriggerOutcome["properties"]["outcome"],
@@ -50,6 +50,43 @@ describe("triggerOutcomeNotification", () => {
       count: 2,
       run_ids: ["run_1", "run_2"],
       message: "Ignored duplicate signal",
+    })
+  })
+})
+
+describe("runOutcomeNotification", () => {
+  test("maps terminal workflow run events into project notifications", () => {
+    const event: WorkflowRunOutcomeEvent = {
+      type: "workflow.run.outcome",
+      properties: {
+        workspace_id: "wrk_1",
+        workflow_id: "workflow.daily",
+        run_id: "run_7",
+        outcome: "failed",
+        status: "failed",
+        reason_code: "node_failed",
+        failure_code: "agent_error",
+      },
+    }
+
+    expect(
+      runOutcomeNotification({
+        directory: "/tmp/origin",
+        currentDirectory: "/tmp/other",
+        event,
+        time: 9,
+      }),
+    ).toEqual({
+      directory: "/tmp/origin",
+      time: 9,
+      viewed: false,
+      type: "run-outcome",
+      workflow_id: "workflow.daily",
+      run_id: "run_7",
+      outcome: "failed",
+      status: "failed",
+      reason_code: "node_failed",
+      failure_code: "agent_error",
     })
   })
 })

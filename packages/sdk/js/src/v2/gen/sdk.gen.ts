@@ -185,6 +185,8 @@ import type {
   WorkflowDebugReportCreateResponses,
   WorkflowDebugReportPreviewErrors,
   WorkflowDebugReportPreviewResponses,
+  WorkflowDetailGetErrors,
+  WorkflowDetailGetResponses,
   WorkflowDraftsApproveErrors,
   WorkflowDraftsApproveResponses,
   WorkflowDraftsCreateErrors,
@@ -203,12 +205,15 @@ import type {
   WorkflowHistoryRunsResponses,
   WorkflowRunCancelErrors,
   WorkflowRunCancelResponses,
+  WorkflowRunDetailGetErrors,
+  WorkflowRunDetailGetResponses,
   WorkflowRunGetErrors,
   WorkflowRunGetResponses,
   WorkflowRunStartErrors,
   WorkflowRunStartResponses,
   WorkflowRunValidateErrors,
   WorkflowRunValidateResponses,
+  WorkflowSessionLinkGetResponses,
   WorkflowSignalIngestErrors,
   WorkflowSignalIngestResponses,
   WorkflowValidateResponses,
@@ -3276,6 +3281,78 @@ export class Drafts extends HeyApiClient {
   }
 }
 
+export class Detail extends HeyApiClient {
+  /**
+   * Get workflow detail
+   *
+   * Return the graph-first workflow detail payload, including current revision, resources, and recent runs.
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      workflow_id: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workflow_id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<WorkflowDetailGetResponses, WorkflowDetailGetErrors, ThrowOnError>({
+      url: "/workflow/workflows/{workflow_id}/detail",
+      ...options,
+      ...params,
+    })
+  }
+}
+
+export class Detail2 extends HeyApiClient {
+  /**
+   * Get workflow run detail
+   *
+   * Return the graph-first run detail payload, including immutable snapshot data, run nodes, attempts, events, and linked sessions.
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      run_id: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "run_id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      WorkflowRunDetailGetResponses,
+      WorkflowRunDetailGetErrors,
+      ThrowOnError
+    >({
+      url: "/workflow/runs/{run_id}/detail",
+      ...options,
+      ...params,
+    })
+  }
+}
+
 export class Run extends HeyApiClient {
   /**
    * Validate workflow run entrypoint
@@ -3283,10 +3360,10 @@ export class Run extends HeyApiClient {
    * Reject non-runnable workflows deterministically before run creation starts.
    */
   public validate<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      workflow_id?: string
+      workflow_id: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -3322,11 +3399,14 @@ export class Run extends HeyApiClient {
    * Create and start a manual workflow run with linked session and run workspace.
    */
   public start<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      workflow_id?: string
+      workflow_id: string
       trigger_id?: string
+      inputs?: {
+        [key: string]: unknown
+      }
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -3339,6 +3419,7 @@ export class Run extends HeyApiClient {
             { in: "query", key: "workspace" },
             { in: "body", key: "workflow_id" },
             { in: "body", key: "trigger_id" },
+            { in: "body", key: "inputs" },
           ],
         },
       ],
@@ -3414,6 +3495,45 @@ export class Run extends HeyApiClient {
     )
     return (options?.client ?? this.client).post<WorkflowRunCancelResponses, WorkflowRunCancelErrors, ThrowOnError>({
       url: "/workflow/run/{run_id}/cancel",
+      ...options,
+      ...params,
+    })
+  }
+
+  private _detail?: Detail2
+  get detail(): Detail2 {
+    return (this._detail ??= new Detail2({ client: this.client }))
+  }
+}
+
+export class SessionLink extends HeyApiClient {
+  /**
+   * Get workflow session link
+   *
+   * Return the workflow runtime session link for a session when one exists.
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      session_id: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "session_id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<WorkflowSessionLinkGetResponses, unknown, ThrowOnError>({
+      url: "/workflow/session-link/{session_id}",
       ...options,
       ...params,
     })
@@ -3503,9 +3623,19 @@ export class Workflow extends HeyApiClient {
     return (this._drafts ??= new Drafts({ client: this.client }))
   }
 
+  private _detail?: Detail
+  get detail(): Detail {
+    return (this._detail ??= new Detail({ client: this.client }))
+  }
+
   private _run?: Run
   get run(): Run {
     return (this._run ??= new Run({ client: this.client }))
+  }
+
+  private _sessionLink?: SessionLink
+  get sessionLink(): SessionLink {
+    return (this._sessionLink ??= new SessionLink({ client: this.client }))
   }
 }
 

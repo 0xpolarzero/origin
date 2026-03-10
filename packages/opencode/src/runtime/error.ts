@@ -15,7 +15,7 @@ const trigger_failure_code = z.enum([
 export const RuntimeIllegalTransitionError = NamedError.create(
   "RuntimeIllegalTransitionError",
   z.object({
-    entity: z.enum(["run", "operation", "draft", "integration_attempt", "dispatch_attempt"]),
+    entity: z.enum(["run", "run_node", "run_attempt", "operation", "draft", "integration_attempt", "dispatch_attempt"]),
     from: z.string(),
     to: z.string(),
     code: z.literal("illegal_transition"),

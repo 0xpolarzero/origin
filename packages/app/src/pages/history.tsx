@@ -591,9 +591,7 @@ export default function History() {
   }
 
   const openRun = (run_id: string) => {
-    setTab("runs")
-    setFocus({ tab: "runs", id: run_id })
-    query({ tab: "runs", run_id })
+    navigate(`/${params.dir}/runs/${run_id}`)
   }
 
   const openDraft = (draft_id: string, scope: DraftScope) => {
@@ -1272,17 +1270,10 @@ export default function History() {
                               </Button>
                             </Show>
 
-                            <Show when={!isSkipped() && item.session_id}>
-                              {(session_id) => (
-                                <Button
-                                  variant="ghost"
-                                  onClick={() => {
-                                    navigate(`/${params.dir}/session/${session_id()}`)
-                                  }}
-                                >
-                                  Open Run Session
-                                </Button>
-                              )}
+                            <Show when={!isSkipped()}>
+                              <Button variant="ghost" onClick={() => openRun(item.id)}>
+                                Open Run
+                              </Button>
                             </Show>
 
                             <Show

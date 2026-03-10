@@ -163,6 +163,56 @@ try {
 
     const servermod = await import("../../opencode/src/server/server")
     inst = await import("../../opencode/src/project/instance")
+    const { JJ } = await import("../../opencode/src/project/jj")
+    const { SessionPrompt } = await import("../../opencode/src/session/prompt")
+    const { WorkflowManualRun } = await import("../../opencode/src/workflow/manual-run")
+    WorkflowManualRun.Testing.set({
+      adapter: ({ directory }: { directory: string }) =>
+        JJ.create({
+          cwd: directory,
+          run_root: path.join(directory, ".origin", "runs"),
+          runner: async (args) => {
+            if (args[0] === "workspace" && args[1] === "add") {
+              await fs.mkdir(args[2], { recursive: true })
+              return {
+                exitCode: 0,
+                stdout: Buffer.from(""),
+                stderr: Buffer.from(""),
+                text: () => "",
+              }
+            }
+            if (args[0] === "workspace" && args[1] === "forget") {
+              return {
+                exitCode: 0,
+                stdout: Buffer.from(""),
+                stderr: Buffer.from(""),
+                text: () => "",
+              }
+            }
+            return {
+              exitCode: 0,
+              stdout: Buffer.from(""),
+              stderr: Buffer.from(""),
+              text: () => "",
+            }
+          },
+        }),
+      agent: async ({ session_id, prompt }) => {
+        await SessionPrompt.prompt({
+          sessionID: session_id,
+          noReply: true,
+          parts: [
+            {
+              type: "text",
+              text: prompt,
+            },
+          ],
+        })
+        return {
+          structured: null,
+        }
+      },
+    })
     server = servermod.Server.listen({ port: serverPort, hostname: "127.0.0.1" })
     console.log(`opencode server listening on http://127.0.0.1:${serverPort}`)
 

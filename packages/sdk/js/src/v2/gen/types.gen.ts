@@ -795,6 +795,45 @@ export type EventCommandExecuted = {
   }
 }
 
+export type EventWorkflowTriggerOutcome = {
+  type: "workflow.trigger.outcome"
+  properties: {
+    workspace_id: string
+    workflow_id: string
+    trigger_type: "cron" | "signal"
+    outcome: "run_started" | "skipped" | "duplicate"
+    reason_code?: string | null
+    message: string
+    count?: number
+    run_ids?: Array<string>
+  }
+}
+
+export type EventWorkflowRunOutcome = {
+  type: "workflow.run.outcome"
+  properties: {
+    workspace_id: string
+    workflow_id: string
+    run_id: string
+    outcome: "completed" | "failed" | "canceled"
+    status:
+      | "queued"
+      | "running"
+      | "validating"
+      | "ready_for_integration"
+      | "integrating"
+      | "reconciling"
+      | "cancel_requested"
+      | "completed"
+      | "completed_no_change"
+      | "failed"
+      | "canceled"
+      | "skipped"
+    reason_code?: string | null
+    failure_code?: string | null
+  }
+}
+
 export type PermissionAction = "allow" | "deny" | "ask"
 
 export type PermissionRule = {
@@ -957,20 +996,6 @@ export type EventPtyDeleted = {
   }
 }
 
-export type EventWorkflowTriggerOutcome = {
-  type: "workflow.trigger.outcome"
-  properties: {
-    workspace_id: string
-    workflow_id: string
-    trigger_type: "cron" | "signal"
-    outcome: "run_started" | "skipped" | "duplicate"
-    reason_code?: string | null
-    message: string
-    count?: number
-    run_ids?: Array<string>
-  }
-}
-
 export type EventLibraryKnowledgeImported = {
   type: "library.knowledge.imported"
   properties: {
@@ -1021,6 +1046,8 @@ export type Event =
   | EventMcpToolsChanged
   | EventMcpBrowserOpenFailed
   | EventCommandExecuted
+  | EventWorkflowTriggerOutcome
+  | EventWorkflowRunOutcome
   | EventSessionCreated
   | EventSessionUpdated
   | EventSessionDeleted
@@ -1035,7 +1062,6 @@ export type Event =
   | EventPtyUpdated
   | EventPtyExited
   | EventPtyDeleted
-  | EventWorkflowTriggerOutcome
   | EventLibraryKnowledgeImported
 
 export type GlobalEvent = {
@@ -1811,6 +1837,62 @@ export type ConflictError = {
   }>
   success: false
 }
+
+export type WorkflowStepView =
+  | {
+      id: string
+      kind: "agent_request"
+      title: string
+      prompt:
+        | {
+            source: "inline"
+            text: string
+          }
+        | {
+            source: "resource"
+            resource_id: string
+          }
+      output?: {
+        type: "object"
+        required?: Array<string>
+        properties?: {
+          [key: string]: unknown
+        }
+      }
+    }
+  | {
+      id: string
+      kind: "script"
+      title: string
+      script:
+        | {
+            source: "inline"
+            text: string
+          }
+        | {
+            source: "resource"
+            resource_id: string
+          }
+      cwd?: string
+    }
+  | {
+      id: string
+      kind: "condition"
+      title: string
+      when: {
+        ref: string
+        op: "equals" | "not_equals"
+        value: string | number | boolean | null
+      }
+      then: Array<WorkflowStepView>
+      else: Array<WorkflowStepView>
+    }
+  | {
+      id: string
+      kind: "end"
+      title: string
+      result: "success" | "failure" | "noop"
+    }
 
 export type Symbol = {
   name: string
@@ -5008,6 +5090,543 @@ export type WorkflowDraftsSendResponses = {
 
 export type WorkflowDraftsSendResponse = WorkflowDraftsSendResponses[keyof WorkflowDraftsSendResponses]
 
+export type WorkflowDetailGetData = {
+  body?: never
+  path: {
+    workflow_id: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/workflows/{workflow_id}/detail"
+}
+
+export type WorkflowDetailGetErrors = {
+  /**
+   * Not found
+   */
+  404: NotFoundError
+  /**
+   * Conflict
+   */
+  409: ConflictError
+}
+
+export type WorkflowDetailGetError = WorkflowDetailGetErrors[keyof WorkflowDetailGetErrors]
+
+export type WorkflowDetailGetResponses = {
+  /**
+   * Workflow detail
+   */
+  200: {
+    item: {
+      file: string
+      id: string
+      workflow?: {
+        schema_version: 2
+        id: string
+        name: string
+        description?: string
+        trigger: {
+          type: "manual"
+        }
+        inputs?: Array<
+          | {
+              key: string
+              type: "text"
+              label: string
+              required: boolean
+              default?: string
+            }
+          | {
+              key: string
+              type: "long_text"
+              label: string
+              required: boolean
+              default?: string
+            }
+          | {
+              key: string
+              type: "number"
+              label: string
+              required: boolean
+              default?: number
+            }
+          | {
+              key: string
+              type: "boolean"
+              label: string
+              required: boolean
+              default?: boolean
+            }
+          | {
+              key: string
+              type: "select"
+              label: string
+              required: boolean
+              default?: string | number | boolean | null
+              options: Array<{
+                label: string
+                value: string | number | boolean | null
+              }>
+            }
+          | {
+              key: string
+              type: "path"
+              label: string
+              required: boolean
+              default?: string
+              mode: "file" | "directory" | "either"
+            }
+        >
+        resources?: Array<
+          | {
+              id: string
+              source: "local"
+              kind: "script" | "prompt_template"
+              path: string
+            }
+          | {
+              id: string
+              source: "library"
+              kind: "script" | "prompt_template"
+              item_id: string
+            }
+        >
+        steps: Array<WorkflowStepView>
+      }
+      errors: Array<{
+        code:
+          | "yaml_parse_error"
+          | "schema_invalid"
+          | "schema_version_unsupported"
+          | "workspace_capability_blocked"
+          | "node_kind_unsupported"
+          | "node_id_duplicate"
+          | "input_shape_invalid"
+          | "input_key_duplicate"
+          | "input_ref_invalid"
+          | "resource_missing"
+          | "resource_kind_unsupported"
+          | "resource_kind_mismatch"
+          | "local_resource_missing"
+          | "local_resource_outside_workflow"
+          | "condition_ref_invalid"
+          | "reference_broken_link"
+          | "resource_not_runnable"
+          | "resource_id_duplicate"
+          | "workflow_id_duplicate"
+          | "workflow_missing"
+          | "workflow_not_runnable"
+        path: string
+        message: string
+      }>
+      runnable: boolean
+    }
+    revision_head: {
+      id: string
+      project_id: string
+      workflow_id: string
+      file: string
+      content_hash: string
+      canonical_text: string
+      created_at: number
+      updated_at: number
+    } | null
+    resources: Array<
+      | {
+          id: string
+          source: "local"
+          kind: "script" | "prompt_template"
+          path: string
+          used_by: Array<string>
+          errors: Array<{
+            code:
+              | "yaml_parse_error"
+              | "schema_invalid"
+              | "schema_version_unsupported"
+              | "workspace_capability_blocked"
+              | "node_kind_unsupported"
+              | "node_id_duplicate"
+              | "input_shape_invalid"
+              | "input_key_duplicate"
+              | "input_ref_invalid"
+              | "resource_missing"
+              | "resource_kind_unsupported"
+              | "resource_kind_mismatch"
+              | "local_resource_missing"
+              | "local_resource_outside_workflow"
+              | "condition_ref_invalid"
+              | "reference_broken_link"
+              | "resource_not_runnable"
+              | "resource_id_duplicate"
+              | "workflow_id_duplicate"
+              | "workflow_missing"
+              | "workflow_not_runnable"
+            path: string
+            message: string
+          }>
+        }
+      | {
+          id: string
+          source: "library"
+          kind: "script" | "prompt_template"
+          item_id: string
+          used_by: Array<string>
+          errors: Array<{
+            code:
+              | "yaml_parse_error"
+              | "schema_invalid"
+              | "schema_version_unsupported"
+              | "workspace_capability_blocked"
+              | "node_kind_unsupported"
+              | "node_id_duplicate"
+              | "input_shape_invalid"
+              | "input_key_duplicate"
+              | "input_ref_invalid"
+              | "resource_missing"
+              | "resource_kind_unsupported"
+              | "resource_kind_mismatch"
+              | "local_resource_missing"
+              | "local_resource_outside_workflow"
+              | "condition_ref_invalid"
+              | "reference_broken_link"
+              | "resource_not_runnable"
+              | "resource_id_duplicate"
+              | "workflow_id_duplicate"
+              | "workflow_missing"
+              | "workflow_not_runnable"
+            path: string
+            message: string
+          }>
+        }
+    >
+    runs: Array<{
+      id: string
+      status: string
+      trigger_type: string
+      workflow_id: string | null
+      workspace_id: string
+      session_id: string | null
+      reason_code: string | null
+      failure_code: string | null
+      trigger_metadata: {
+        [key: string]: unknown
+      } | null
+      ready_for_integration_at: number | null
+      created_at: number
+      updated_at: number
+      started_at: number | null
+      finished_at: number | null
+      operation_id: string | null
+      operation_exists: boolean
+      duplicate_event: {
+        reason: boolean
+        failure: boolean
+      }
+      debug: boolean
+      snapshot_id: string | null
+      workflow_revision_id: string | null
+    }>
+  }
+}
+
+export type WorkflowDetailGetResponse = WorkflowDetailGetResponses[keyof WorkflowDetailGetResponses]
+
+export type WorkflowRunDetailGetData = {
+  body?: never
+  path: {
+    run_id: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/runs/{run_id}/detail"
+}
+
+export type WorkflowRunDetailGetErrors = {
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type WorkflowRunDetailGetError = WorkflowRunDetailGetErrors[keyof WorkflowRunDetailGetErrors]
+
+export type WorkflowRunDetailGetResponses = {
+  /**
+   * Workflow run detail
+   */
+  200: {
+    run: {
+      id: string
+      status: string
+      trigger_type: string
+      workflow_id: string | null
+      workspace_id: string
+      session_id: string | null
+      run_workspace_root: string | null
+      run_workspace_directory: string | null
+      ready_for_integration_at: number | null
+      reason_code: string | null
+      failure_code: string | null
+      trigger_metadata: {
+        [key: string]: unknown
+      } | null
+      cleanup_failed: boolean
+      created_at: number
+      updated_at: number
+      started_at: number | null
+      finished_at: number | null
+      integration_candidate: {
+        base_change_id: string | null
+        change_ids: Array<string>
+        changed_paths: Array<string>
+      } | null
+    }
+    snapshot: {
+      id: string
+      run_id: string
+      workflow_id: string
+      workflow_revision_id: string
+      workflow_hash: string
+      workflow_text: string
+      graph_json: {
+        schema_version: 2
+        id: string
+        name: string
+        description?: string
+        trigger: {
+          type: "manual"
+        }
+        inputs?: Array<
+          | {
+              key: string
+              type: "text"
+              label: string
+              required: boolean
+              default?: string
+            }
+          | {
+              key: string
+              type: "long_text"
+              label: string
+              required: boolean
+              default?: string
+            }
+          | {
+              key: string
+              type: "number"
+              label: string
+              required: boolean
+              default?: number
+            }
+          | {
+              key: string
+              type: "boolean"
+              label: string
+              required: boolean
+              default?: boolean
+            }
+          | {
+              key: string
+              type: "select"
+              label: string
+              required: boolean
+              default?: string | number | boolean | null
+              options: Array<{
+                label: string
+                value: string | number | boolean | null
+              }>
+            }
+          | {
+              key: string
+              type: "path"
+              label: string
+              required: boolean
+              default?: string
+              mode: "file" | "directory" | "either"
+            }
+        >
+        resources?: Array<
+          | {
+              id: string
+              source: "local"
+              kind: "script" | "prompt_template"
+              path: string
+            }
+          | {
+              id: string
+              source: "library"
+              kind: "script" | "prompt_template"
+              item_id: string
+            }
+        >
+        steps: Array<WorkflowStepView>
+      }
+      input_json: {
+        [key: string]: unknown
+      }
+      input_store_json: {
+        [key: string]: unknown
+      }
+      trigger_metadata_json: {
+        [key: string]: unknown
+      }
+      resource_materials_json: {
+        [key: string]: unknown
+      }
+      material_root: string
+      created_at: number
+      updated_at: number
+    }
+    revision: {
+      id: string
+      project_id: string
+      workflow_id: string
+      file: string
+      content_hash: string
+      canonical_text: string
+      created_at: number
+      updated_at: number
+    }
+    live: {
+      current_revision_id: string | null
+      has_newer_revision: boolean
+    }
+    nodes: Array<{
+      node: {
+        id: string
+        run_id: string
+        snapshot_id: string
+        node_id: string
+        kind: string
+        title: string
+        status: "pending" | "ready" | "running" | "succeeded" | "failed" | "skipped" | "canceled"
+        skip_reason_code: "branch_not_taken" | "upstream_failed" | null
+        output_json: {
+          [key: string]: unknown
+        } | null
+        error_json: {
+          [key: string]: unknown
+        } | null
+        position: number
+        attempt_count: number
+        created_at: number
+        updated_at: number
+        started_at: number | null
+        finished_at: number | null
+      }
+      step: WorkflowStepView
+      attempts: Array<{
+        attempt: {
+          id: string
+          run_node_id: string
+          attempt_index: number
+          status: "created" | "running" | "succeeded" | "failed" | "canceled"
+          session_id: string | null
+          input_json: {
+            [key: string]: unknown
+          } | null
+          output_json: {
+            [key: string]: unknown
+          } | null
+          error_json: {
+            [key: string]: unknown
+          } | null
+          created_at: number
+          updated_at: number
+          started_at: number | null
+          finished_at: number | null
+        }
+        session: {
+          link: {
+            session_id: string
+            role: "execution_node" | "run_followup"
+            visibility: "hidden" | "visible"
+            run_id: string | null
+            run_node_id: string | null
+            run_attempt_id: string | null
+            readonly: boolean
+            created_at: number
+            updated_at: number
+          }
+          session: {
+            id: string
+            title: string
+            directory: string
+          } | null
+        } | null
+      }>
+    }>
+    events: Array<{
+      id: string
+      run_id: string
+      run_node_id: string | null
+      run_attempt_id: string | null
+      sequence: number
+      event_type: string
+      payload_json: {
+        [key: string]: unknown
+      }
+      created_at: number
+    }>
+    followup: {
+      link: {
+        session_id: string
+        role: "execution_node" | "run_followup"
+        visibility: "hidden" | "visible"
+        run_id: string | null
+        run_node_id: string | null
+        run_attempt_id: string | null
+        readonly: boolean
+        created_at: number
+        updated_at: number
+      }
+      session: {
+        id: string
+        title: string
+        directory: string
+      } | null
+    } | null
+  }
+}
+
+export type WorkflowRunDetailGetResponse = WorkflowRunDetailGetResponses[keyof WorkflowRunDetailGetResponses]
+
+export type WorkflowSessionLinkGetData = {
+  body?: never
+  path: {
+    session_id: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/session-link/{session_id}"
+}
+
+export type WorkflowSessionLinkGetResponses = {
+  /**
+   * Session link detail
+   */
+  200: {
+    session_id: string
+    role: "execution_node" | "run_followup"
+    visibility: "hidden" | "visible"
+    run_id: string | null
+    run_node_id: string | null
+    run_attempt_id: string | null
+    readonly: boolean
+    created_at: number
+    updated_at: number
+  } | null
+}
+
+export type WorkflowSessionLinkGetResponse = WorkflowSessionLinkGetResponses[keyof WorkflowSessionLinkGetResponses]
+
 export type WorkflowValidateData = {
   body?: never
   path?: never
@@ -5028,27 +5647,77 @@ export type WorkflowValidateResponses = {
       file: string
       id: string
       workflow?: {
-        schema_version: 1
+        schema_version: 2
         id: string
         name: string
-        trigger:
+        description?: string
+        trigger: {
+          type: "manual"
+        }
+        inputs?: Array<
           | {
-              type: "manual"
+              key: string
+              type: "text"
+              label: string
+              required: boolean
+              default?: string
             }
           | {
-              type: "cron"
-              cron: string
+              key: string
+              type: "long_text"
+              label: string
+              required: boolean
+              default?: string
             }
           | {
-              type: "signal"
-              signal: string
+              key: string
+              type: "number"
+              label: string
+              required: boolean
+              default?: number
             }
-        instructions: string
-        resources?: Array<{
-          id: string
-          kind: "query" | "script" | "prompt_template"
-        }>
-        links?: Array<string>
+          | {
+              key: string
+              type: "boolean"
+              label: string
+              required: boolean
+              default?: boolean
+            }
+          | {
+              key: string
+              type: "select"
+              label: string
+              required: boolean
+              default?: string | number | boolean | null
+              options: Array<{
+                label: string
+                value: string | number | boolean | null
+              }>
+            }
+          | {
+              key: string
+              type: "path"
+              label: string
+              required: boolean
+              default?: string
+              mode: "file" | "directory" | "either"
+            }
+        >
+        resources?: Array<
+          | {
+              id: string
+              source: "local"
+              kind: "script" | "prompt_template"
+              path: string
+            }
+          | {
+              id: string
+              source: "library"
+              kind: "script" | "prompt_template"
+              item_id: string
+            }
+        >
+        steps: Array<WorkflowStepView>
       }
       errors: Array<{
         code:
@@ -5056,8 +5725,17 @@ export type WorkflowValidateResponses = {
           | "schema_invalid"
           | "schema_version_unsupported"
           | "workspace_capability_blocked"
+          | "node_kind_unsupported"
+          | "node_id_duplicate"
+          | "input_shape_invalid"
+          | "input_key_duplicate"
+          | "input_ref_invalid"
           | "resource_missing"
+          | "resource_kind_unsupported"
           | "resource_kind_mismatch"
+          | "local_resource_missing"
+          | "local_resource_outside_workflow"
+          | "condition_ref_invalid"
           | "reference_broken_link"
           | "resource_not_runnable"
           | "resource_id_duplicate"
@@ -5103,8 +5781,17 @@ export type WorkflowValidateResponses = {
           | "schema_invalid"
           | "schema_version_unsupported"
           | "workspace_capability_blocked"
+          | "node_kind_unsupported"
+          | "node_id_duplicate"
+          | "input_shape_invalid"
+          | "input_key_duplicate"
+          | "input_ref_invalid"
           | "resource_missing"
+          | "resource_kind_unsupported"
           | "resource_kind_mismatch"
+          | "local_resource_missing"
+          | "local_resource_outside_workflow"
+          | "condition_ref_invalid"
           | "reference_broken_link"
           | "resource_not_runnable"
           | "resource_id_duplicate"
@@ -5141,27 +5828,77 @@ export type WorkflowGetResponses = {
     file: string
     id: string
     workflow?: {
-      schema_version: 1
+      schema_version: 2
       id: string
       name: string
-      trigger:
+      description?: string
+      trigger: {
+        type: "manual"
+      }
+      inputs?: Array<
         | {
-            type: "manual"
+            key: string
+            type: "text"
+            label: string
+            required: boolean
+            default?: string
           }
         | {
-            type: "cron"
-            cron: string
+            key: string
+            type: "long_text"
+            label: string
+            required: boolean
+            default?: string
           }
         | {
-            type: "signal"
-            signal: string
+            key: string
+            type: "number"
+            label: string
+            required: boolean
+            default?: number
           }
-      instructions: string
-      resources?: Array<{
-        id: string
-        kind: "query" | "script" | "prompt_template"
-      }>
-      links?: Array<string>
+        | {
+            key: string
+            type: "boolean"
+            label: string
+            required: boolean
+            default?: boolean
+          }
+        | {
+            key: string
+            type: "select"
+            label: string
+            required: boolean
+            default?: string | number | boolean | null
+            options: Array<{
+              label: string
+              value: string | number | boolean | null
+            }>
+          }
+        | {
+            key: string
+            type: "path"
+            label: string
+            required: boolean
+            default?: string
+            mode: "file" | "directory" | "either"
+          }
+      >
+      resources?: Array<
+        | {
+            id: string
+            source: "local"
+            kind: "script" | "prompt_template"
+            path: string
+          }
+        | {
+            id: string
+            source: "library"
+            kind: "script" | "prompt_template"
+            item_id: string
+          }
+      >
+      steps: Array<WorkflowStepView>
     }
     errors: Array<{
       code:
@@ -5169,8 +5906,17 @@ export type WorkflowGetResponses = {
         | "schema_invalid"
         | "schema_version_unsupported"
         | "workspace_capability_blocked"
+        | "node_kind_unsupported"
+        | "node_id_duplicate"
+        | "input_shape_invalid"
+        | "input_key_duplicate"
+        | "input_ref_invalid"
         | "resource_missing"
+        | "resource_kind_unsupported"
         | "resource_kind_mismatch"
+        | "local_resource_missing"
+        | "local_resource_outside_workflow"
+        | "condition_ref_invalid"
         | "reference_broken_link"
         | "resource_not_runnable"
         | "resource_id_duplicate"
@@ -5187,7 +5933,7 @@ export type WorkflowGetResponses = {
 export type WorkflowGetResponse = WorkflowGetResponses[keyof WorkflowGetResponses]
 
 export type WorkflowRunValidateData = {
-  body?: {
+  body: {
     workflow_id: string
   }
   path?: never
@@ -5220,9 +5966,12 @@ export type WorkflowRunValidateResponses = {
 export type WorkflowRunValidateResponse = WorkflowRunValidateResponses[keyof WorkflowRunValidateResponses]
 
 export type WorkflowRunStartData = {
-  body?: {
+  body: {
     workflow_id: string
     trigger_id?: string
+    inputs?: {
+      [key: string]: unknown
+    }
   }
   path?: never
   query?: {
@@ -5445,8 +6194,17 @@ export type LibraryListResponses = {
         | "schema_invalid"
         | "schema_version_unsupported"
         | "workspace_capability_blocked"
+        | "node_kind_unsupported"
+        | "node_id_duplicate"
+        | "input_shape_invalid"
+        | "input_key_duplicate"
+        | "input_ref_invalid"
         | "resource_missing"
+        | "resource_kind_unsupported"
         | "resource_kind_mismatch"
+        | "local_resource_missing"
+        | "local_resource_outside_workflow"
+        | "condition_ref_invalid"
         | "reference_broken_link"
         | "resource_not_runnable"
         | "resource_id_duplicate"

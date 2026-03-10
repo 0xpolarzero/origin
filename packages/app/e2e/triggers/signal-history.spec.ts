@@ -105,7 +105,7 @@ test("signal-trigger history renders duplicate-event rows without inflating coun
       await expect(duplicate).toHaveAttribute("data-duplicate", "true")
       await expect(duplicate).toHaveAttribute("data-skipped", "true")
       await expect(duplicate.getByText("No operation expected")).toBeVisible()
-      await expect(duplicate.getByRole("button", { name: "Open Run Session" })).toHaveCount(0)
+      await expect(duplicate.getByRole("button", { name: "Open Run" })).toHaveCount(0)
 
       await duplicate.getByRole("button", { name: "Open Event Details" }).click()
       await expect(duplicate).toContainText("Ignored duplicate signal.")

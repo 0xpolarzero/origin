@@ -1,5 +1,6 @@
 import { Button } from "@opencode-ai/ui/button"
 import { createMemo, createResource, For, Match, Show, Switch } from "solid-js"
+import { useNavigate, useParams } from "@solidjs/router"
 import { useSDK } from "@/context/sdk"
 import { useServer } from "@/context/server"
 import { loadValidationList, type ValidationIssue, type ValidationItem } from "./workflow-validation"
@@ -28,6 +29,8 @@ const errorMessage = (error: unknown) => {
 export default function Workflows() {
   const sdk = useSDK()
   const server = useServer()
+  const navigate = useNavigate()
+  const params = useParams()
 
   const auth = createMemo(() => {
     const http = server.current?.http
@@ -109,6 +112,12 @@ export default function Workflows() {
                       >
                         {stateLabel(item.runnable)}
                       </div>
+                    </div>
+
+                    <div class="flex flex-wrap gap-2">
+                      <Button variant="ghost" onClick={() => navigate(`/${params.dir}/workflows/${item.id}`)}>
+                        Open Workflow
+                      </Button>
                     </div>
 
                     <Show

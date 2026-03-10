@@ -27,6 +27,7 @@ import type { InitError } from "../pages/error"
 import { useGlobalSDK } from "./global-sdk"
 import { bootstrapDirectory, bootstrapGlobal } from "./global-sync/bootstrap"
 import { createChildStoreManager } from "./global-sync/child-store"
+import { canDisposeDirectory, pickDirectoriesToEvict } from "./global-sync/eviction"
 import { applyDirectoryEvent, applyGlobalEvent } from "./global-sync/event-reducer"
 import { createRefreshQueue } from "./global-sync/queue"
 import { estimateRootSessionTotal, loadRootSessionsWithFallback } from "./global-sync/session-load"
@@ -406,5 +407,4 @@ export function useGlobalSync() {
   return context
 }
 
-export { canDisposeDirectory, pickDirectoriesToEvict } from "./global-sync/eviction"
-export { estimateRootSessionTotal, loadRootSessionsWithFallback } from "./global-sync/session-load"
+export { canDisposeDirectory, estimateRootSessionTotal, loadRootSessionsWithFallback, pickDirectoriesToEvict }

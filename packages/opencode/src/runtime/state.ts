@@ -3,6 +3,8 @@ import {
   type DispatchAttemptState,
   type FailureCode,
   type OperationStatus,
+  type RunAttemptStatus,
+  type RunNodeStatus,
   type ReasonCode,
   type RunStatus,
   type RunTriggerType,
@@ -76,6 +78,26 @@ export const dispatch_attempt_legal_edges = [
   edge("remote_accepted", "finalized"),
 ] as const
 
+export const run_node_legal_edges = [
+  edge("pending", "ready"),
+  edge("pending", "skipped"),
+  edge("pending", "canceled"),
+  edge("ready", "running"),
+  edge("ready", "skipped"),
+  edge("ready", "canceled"),
+  edge("running", "succeeded"),
+  edge("running", "failed"),
+  edge("running", "canceled"),
+  edge("running", "ready"),
+] as const
+
+export const run_attempt_legal_edges = [
+  edge("created", "running"),
+  edge("running", "succeeded"),
+  edge("running", "failed"),
+  edge("running", "canceled"),
+] as const
+
 function legal<T extends string>(edges: readonly { from: T; to: T }[]) {
   return new Set(edges.map((item) => `${item.from}->${item.to}`))
 }
@@ -84,12 +106,18 @@ const run_legal = legal(run_legal_edges)
 const operation_legal = legal(operation_legal_edges)
 const draft_legal = legal(draft_legal_edges)
 const dispatch_attempt_legal = legal(dispatch_attempt_legal_edges)
+const run_node_legal = legal(run_node_legal_edges)
+const run_attempt_legal = legal(run_attempt_legal_edges)
 
 function scheduler(trigger_type: RunTriggerType) {
   return trigger_type === "cron" || trigger_type === "signal"
 }
 
-function fail(entity: "run" | "operation" | "draft" | "integration_attempt" | "dispatch_attempt", from: string, to: string) {
+function fail(
+  entity: "run" | "run_node" | "run_attempt" | "operation" | "draft" | "integration_attempt" | "dispatch_attempt",
+  from: string,
+  to: string,
+) {
   throw new RuntimeIllegalTransitionError({
     entity,
     from,
@@ -166,4 +194,34 @@ export function validate_dispatch_attempt_transition(input: { from: DispatchAtte
   if (terminal_dispatch_attempt_states.has(input.from)) fail("dispatch_attempt", input.from, input.to)
   if (dispatch_attempt_legal.has(`${input.from}->${input.to}`)) return
   fail("dispatch_attempt", input.from, input.to)
+}
+
+function terminal_run_node(status: RunNodeStatus) {
+  return status === "succeeded" || status === "failed" || status === "skipped" || status === "canceled"
+}
+
+function terminal_run_attempt(status: RunAttemptStatus) {
+  return status === "succeeded" || status === "failed" || status === "canceled"
+}
+
+export function validate_run_node_create(status: RunNodeStatus) {
+  if (status === "pending") return
+  fail("run_node", "create", status)
+}
+
+export function validate_run_node_transition(input: { from: RunNodeStatus; to: RunNodeStatus }) {
+  if (terminal_run_node(input.from)) fail("run_node", input.from, input.to)
+  if (run_node_legal.has(`${input.from}->${input.to}`)) return
+  fail("run_node", input.from, input.to)
+}
+
+export function validate_run_attempt_create(status: RunAttemptStatus) {
+  if (status === "created") return
+  fail("run_attempt", "create", status)
+}
+
+export function validate_run_attempt_transition(input: { from: RunAttemptStatus; to: RunAttemptStatus }) {
+  if (terminal_run_attempt(input.from)) fail("run_attempt", input.from, input.to)
+  if (run_attempt_legal.has(`${input.from}->${input.to}`)) return
+  fail("run_attempt", input.from, input.to)
 }

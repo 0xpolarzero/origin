@@ -34,15 +34,18 @@ describe("workflow run gate", () => {
       dir.path,
       ".origin/workflows/invalid.yaml",
       [
-        "schema_version: 1",
+        "schema_version: 2",
         "id: broken_run",
         "name: Broken run",
         "trigger:",
         "  type: manual",
-        "instructions: broken",
-        "resources:",
-        "  - id: missing_resource",
+        "steps:",
+        "  - id: broken",
         "    kind: script",
+        "    title: Broken",
+        "    script:",
+        "      source: resource",
+        "      resource_id: missing_resource",
       ].join("\n"),
     )
 
@@ -58,7 +61,7 @@ describe("workflow run gate", () => {
       expect(error).toBeInstanceOf(RuntimeWorkflowValidationError)
       const value = error as InstanceType<typeof RuntimeWorkflowValidationError>
       expect(value.data.code).toBe("resource_missing")
-      expect(value.data.path).toBe("$.resources[0].id")
+      expect(value.data.path).toBe("$.steps[0].script.resource_id")
       expect(value.data.workflow_id).toBe("broken_run")
     }
 
@@ -89,12 +92,16 @@ describe("workflow run gate", () => {
       dir.path,
       ".origin/workflows/one.yaml",
       [
-        "schema_version: 1",
+        "schema_version: 2",
         "id: duplicate",
         "name: One",
         "trigger:",
         "  type: manual",
-        "instructions: one",
+        "steps:",
+        "  - id: done",
+        "    kind: end",
+        "    title: Done",
+        "    result: success",
       ].join("\n"),
     )
 
@@ -102,12 +109,16 @@ describe("workflow run gate", () => {
       dir.path,
       ".origin/workflows/two.yaml",
       [
-        "schema_version: 1",
+        "schema_version: 2",
         "id: duplicate",
         "name: Two",
         "trigger:",
         "  type: manual",
-        "instructions: two",
+        "steps:",
+        "  - id: done",
+        "    kind: end",
+        "    title: Done",
+        "    result: success",
       ].join("\n"),
     )
 
