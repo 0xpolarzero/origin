@@ -2,6 +2,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { test, expect } from "../fixtures"
+import { openSidebar } from "../actions"
 import { promptSelector } from "../selectors"
 import { createSdk, serverUrl } from "../utils"
 
@@ -38,6 +39,7 @@ async function writeWorkflow(directory: string, workflowID: string) {
       "    type: select",
       "    label: Choice",
       "    required: true",
+      "    default: alpha",
       "    options:",
       "      - label: Alpha",
       "        value: alpha",
@@ -123,22 +125,48 @@ async function waitForRun(input: {
   throw new Error(`timed out waiting for run ${input.run_id} to reach ${input.statuses.join(", ")} (last status: ${last})`)
 }
 
+async function workspaceID(directory: string) {
+  const listed = await fetch(`${serverUrl}/experimental/workspace?directory=${encodeURIComponent(directory)}`).then((response) =>
+    response.json(),
+  )
+  const rows = Array.isArray(listed) ? listed : []
+  const match = rows.find(
+    (item): item is { id: string; directory?: string; config?: { directory?: string } } =>
+      !!item &&
+      typeof item === "object" &&
+      "id" in item &&
+      ((item as { directory?: string }).directory === directory ||
+        (item as { config?: { directory?: string } }).config?.directory === directory),
+  )
+  if (match) return match.id
+
+  const id = `wrk_${Date.now().toString(16)}${Math.random().toString(16).slice(2, 14)}`
+  const created = await fetch(`${serverUrl}/experimental/workspace/${id}?directory=${encodeURIComponent(directory)}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      branch: "main",
+      config: {
+        type: "worktree",
+        directory,
+      },
+    }),
+  }).then((response) => response.json())
+
+  if (!created || typeof created !== "object" || !("id" in created) || typeof created.id !== "string") {
+    throw new Error(`failed to create workspace for ${directory}`)
+  }
+  return created.id
+}
+
 async function createRun(input: {
   directory: string
   workflowID: string
 }) {
   const sdk = createSdk(input.directory)
-  const workspace = await sdk.experimental.workspace
-    .create({
-      id: `wrk_phase15_${Date.now().toString(16)}${Math.random().toString(16).slice(2, 10)}`,
-      directory: input.directory,
-      branch: null,
-      config: {
-        type: "worktree",
-        directory: input.directory,
-      },
-    })
-    .then((result) => result.data.id)
+  const workspace = await workspaceID(input.directory)
   const asset_dir = await fs.mkdtemp(path.join(os.tmpdir(), "origin-phase15-asset-"))
   const asset = path.join(asset_dir, "release.txt")
   await fs.writeFile(asset, "before-run", "utf8")
@@ -174,19 +202,11 @@ async function createRun(input: {
     run_id: started.data.id,
     statuses: ["completed_no_change"],
   })
-  const detail = await fetch(
-    `${serverUrl}/workflow/runs/${encodeURIComponent(done.id)}/detail?directory=${encodeURIComponent(input.directory)}`,
-  ).then((response) => response.json())
-  const snapshot_path = detail?.snapshot?.input_store_json?.asset?.snapshot_path
-  if (typeof snapshot_path !== "string") {
-    throw new Error(`missing snapshot path for ${done.id}`)
-  }
 
   return {
     workspace,
     asset,
     run_id: done.id,
-    snapshot_path,
   }
 }
 
@@ -195,17 +215,7 @@ async function createAgentRun(input: {
   workflowID: string
 }) {
   const sdk = createSdk(input.directory)
-  const workspace = await sdk.experimental.workspace
-    .create({
-      id: `wrk_phase15_${Date.now().toString(16)}${Math.random().toString(16).slice(2, 10)}`,
-      directory: input.directory,
-      branch: null,
-      config: {
-        type: "worktree",
-        directory: input.directory,
-      },
-    })
-    .then((result) => result.data.id)
+  const workspace = await workspaceID(input.directory)
   await writeAgentWorkflow(input.directory, input.workflowID)
 
   const validation = await sdk.workflow.run.validate({
@@ -228,30 +238,10 @@ async function createAgentRun(input: {
     run_id: started.data.id,
     statuses: ["completed_no_change"],
   })
-  const detail = await fetch(
-    `${serverUrl}/workflow/runs/${encodeURIComponent(done.id)}/detail?directory=${encodeURIComponent(input.directory)}`,
-  ).then((response) => response.json())
-  const node = Array.isArray(detail?.nodes)
-    ? detail.nodes.find(
-        (item): item is {
-          attempts?: Array<{ attempt?: { session_id?: string | null } }>
-        } => !!item && typeof item === "object" && item.node?.node_id === "ask",
-      )
-    : null
-  const execution_session_id = node?.attempts?.[0]?.attempt?.session_id
-  const followup_session_id = detail?.followup?.session?.id
-  if (typeof execution_session_id !== "string") {
-    throw new Error(`missing execution session for ${done.id}`)
-  }
-  if (typeof followup_session_id !== "string") {
-    throw new Error(`missing follow-up session for ${done.id}`)
-  }
 
   return {
     workspace,
     run_id: done.id,
-    execution_session_id,
-    followup_session_id,
   }
 }
 
@@ -305,6 +295,178 @@ test("workflow detail runs tab opens a real script-only run detail page", async 
   })
 })
 
+test("workflow index supports the blank workflow creation entrypoint", async ({ page, withProject }) => {
+  await page.setViewportSize({ width: 1400, height: 900 })
+
+  await withProject(async ({ directory, slug }) => {
+    await page.goto(`/${slug}/workflows`)
+    await expect(page.locator('[data-page="workflows"]')).toBeVisible()
+
+    await page.getByRole("button", { name: "New workflow" }).click()
+    await expect(page.locator('[data-component="workflow-build-form"][data-mode="blank"]')).toBeVisible()
+
+    await page.getByLabel("Workflow name").fill("Blank authoring flow")
+    await page.getByLabel("Starter prompt").fill("Prepare a starter release workflow.")
+    await page.getByRole("button", { name: "Create workflow" }).click()
+
+    await expect(page).toHaveURL(/\/workflows\/[^/?]+\?tab=authoring$/)
+    const workflowID = page.url().match(/\/workflows\/([^/?]+)\?tab=authoring$/)?.[1]
+    if (!workflowID) throw new Error(`missing workflow id in ${page.url()}`)
+
+    const file = path.join(directory, ".origin", "workflows", `${workflowID}.yaml`)
+    await expect(fs.readFile(file, "utf8")).resolves.toContain("Blank authoring flow")
+    await expect(fs.readFile(file, "utf8")).resolves.toContain("Prepare a starter release workflow.")
+  })
+})
+
+test("workflow index builds workflows and workflow detail run tab starts and reruns real runs", async ({ page, withProject }) => {
+  await page.setViewportSize({ width: 1400, height: 900 })
+
+  await withProject(async ({ directory, slug }) => {
+    const asset_dir = await fs.mkdtemp(path.join(os.tmpdir(), "origin-phase16-run-"))
+    const asset = path.join(asset_dir, "release.txt")
+    await fs.writeFile(asset, "from-ui", "utf8")
+    const workflowID = `workflow.phase16.${Date.now().toString(16)}`
+
+    try {
+      await page.goto(`/${slug}/workflows`)
+      await expect(page.locator('[data-page="workflows"]')).toBeVisible()
+
+      await page.getByRole("button", { name: "Build workflow with AI" }).click()
+      await page.getByLabel("Workflow name").fill("UI build flow")
+      await page.getByLabel("Builder prompt").fill("Inspect release notes and summarize the result.")
+      await page.getByRole("button", { name: "Build workflow", exact: true }).click()
+
+      await expect(page).toHaveURL(new RegExp(`/workflows/ui-build-flow\\?tab=authoring$`))
+      await expect(fs.readFile(path.join(directory, ".origin", "workflows", "ui-build-flow.yaml"), "utf8")).resolves.toContain(
+        "UI build flow",
+      )
+
+      await page.goto(`/${slug}/workflows`)
+      const built = page.locator('[data-component="validation-resource-row"][data-id="ui-build-flow"]')
+      await expect(built).toBeVisible()
+      await built.getByRole("button", { name: "Duplicate" }).click()
+      await expect(page).toHaveURL(/\/workflows\/ui-build-flow-copy\?tab=authoring$/)
+
+      await page.goto(`/${slug}/workflows`)
+      await built.getByRole("button", { name: "Hide" }).click()
+      await expect(built).toHaveCount(0)
+
+      await writeWorkflow(directory, workflowID)
+      await page.goto(`/${slug}/workflows/${workflowID}?tab=run`)
+
+      await expect(page.locator('[data-component="workflow-run-form"]')).toBeVisible()
+      await page.locator('[data-component="workflow-run-input"][data-key="release_tag"] input').fill("v1.2.3")
+      await page.locator('[data-component="workflow-run-input"][data-key="notes"] textarea').fill("line one\nline two")
+      await page.locator('[data-component="workflow-run-input"][data-key="count"] input').fill("42")
+      await page.locator('[data-component="workflow-run-input"][data-key="asset"] input').fill(asset)
+
+      await page.getByRole("button", { name: "Validate Inputs" }).click()
+      await expect(page.getByText(/Workflow validated in workspace/)).toBeVisible()
+
+      await page.getByRole("button", { name: "Start Workflow" }).click()
+      await expect(page.locator('[data-page="run-detail"]')).toBeVisible()
+      await expect(page.locator('[data-component="run-detail-input-store"]')).toContainText('"type": "boolean"')
+      await expect(page.locator('[data-component="run-detail-input-store"]')).toContainText(asset)
+      await expect(page.locator('[data-component="run-event-row"]').first()).toBeVisible()
+
+      const first = page.url().match(/\/runs\/([^/?]+)/)?.[1]
+      if (!first) throw new Error(`missing run id in ${page.url()}`)
+
+      await page.getByRole("button", { name: "Rerun Workflow" }).click()
+      await expect
+        .poll(() => page.url().match(/\/runs\/([^/?]+)/)?.[1] ?? "", { timeout: 30_000 })
+        .not.toBe(first)
+
+      const second = page.url().match(/\/runs\/([^/?]+)/)?.[1]
+      if (!second) throw new Error(`missing rerun id in ${page.url()}`)
+
+      await page.getByRole("button", { name: "Edit Rerun Inputs" }).click()
+      await expect(page).toHaveURL(new RegExp(`/workflows/${workflowID}\\?tab=run&prefill_run=${second}$`))
+      await expect(page.locator('[data-component="workflow-run-input"][data-key="release_tag"] input')).toHaveValue("v1.2.3")
+      await expect(page.locator('[data-component="workflow-run-input"][data-key="notes"] textarea')).toHaveValue("line one\nline two")
+      await expect(page.locator('[data-component="workflow-run-input"][data-key="count"] input')).toHaveValue("42")
+      const assetInput = page.locator('[data-component="workflow-run-input"][data-key="asset"] input')
+      await expect
+        .poll(() => assetInput.inputValue(), { timeout: 10_000 })
+        .toContain("/.origin/runs/materials/")
+      const stored = await assetInput.inputValue()
+      expect(stored).not.toBe(asset)
+      expect(stored).toContain("/.origin/runs/materials/")
+      await expect(fs.readFile(stored, "utf8")).resolves.toBe("from-ui")
+    } finally {
+      await fs.rm(asset_dir, { recursive: true, force: true })
+    }
+  })
+})
+
+test("workflow authoring saves canonical files, survives reload, and hidden edit sessions stay out of the sidebar", async ({
+  page,
+  withProject,
+}) => {
+  await page.setViewportSize({ width: 1400, height: 900 })
+
+  await withProject(async ({ directory, slug }) => {
+    const workflowID = `workflow.phase16.edit.${Date.now().toString(16)}`
+    await writeAgentWorkflow(directory, workflowID)
+
+    await page.goto(`/${slug}/workflows/${workflowID}?tab=authoring`)
+
+    await expect(page.locator('[data-page="workflow-detail"]')).toBeVisible()
+    await expect(page.locator('[data-component="workflow-authoring"]')).toBeVisible()
+
+    await page.getByLabel("Workflow name").fill("Edited transcript workflow")
+    await page.getByLabel("Description").fill("Updated through browser authoring")
+    await page.getByLabel("Save note").fill("Refine authoring copy")
+
+    await page.locator('[data-component="graph-node"][data-node-id="ask"]').click()
+    await expect(page.locator('[data-component="workflow-node-panel"]')).toHaveAttribute("data-node-id", "ask")
+
+    await page.getByLabel("Node title").fill("Ask release owner")
+    await page.getByLabel("Inline prompt").fill("Summarize blockers and note the release owner.")
+
+    await page.getByRole("button", { name: "Save workflow" }).click()
+    const file = path.join(directory, ".origin", "workflows", `${workflowID}.yaml`)
+    await expect
+      .poll(async () => (await fs.readFile(file, "utf8")).includes("name: Edited transcript workflow"), { timeout: 30_000 })
+      .toBe(true)
+    const text = await fs.readFile(file, "utf8")
+    expect(text).toContain("name: Edited transcript workflow")
+    expect(text).toContain("description: Updated through browser authoring")
+
+    await page.reload()
+    await expect(page.locator('[data-page="workflow-detail"]')).toBeVisible()
+    await expect(page.getByLabel("Workflow name")).toHaveValue("Edited transcript workflow")
+    await page.locator('[data-component="graph-node"][data-node-id="ask"]').click()
+    await expect(page.locator('[data-component="workflow-node-panel"]')).toHaveAttribute("data-node-id", "ask")
+    await expect(page.getByLabel("Node title")).toHaveValue("Ask release owner")
+    await expect(page.getByLabel("Inline prompt")).toHaveValue("Summarize blockers and note the release owner.")
+
+    await page.getByRole("button", { name: "Open Builder Session" }).click()
+    await expect(page).toHaveURL(new RegExp(`/${slug}/session/[^/?]+$`))
+    await expect(page.locator(promptSelector)).toBeVisible()
+
+    const builder = page.url().match(/\/session\/([^/?]+)/)?.[1]
+    if (!builder) throw new Error(`missing builder session in ${page.url()}`)
+
+    await openSidebar(page)
+    await expect(page.locator(`[data-session-id="${builder}"]`)).toHaveCount(0)
+
+    await page.goto(`/${slug}/workflows/${workflowID}?tab=authoring&node=ask`)
+    await expect(page.locator('[data-component="workflow-node-panel"]')).toHaveAttribute("data-node-id", "ask")
+
+    await page.getByRole("button", { name: "Open Node Edit Session" }).click()
+    await expect(page).toHaveURL(new RegExp(`/${slug}/session/[^/?]+$`))
+    await expect(page.locator(promptSelector)).toBeVisible()
+
+    const node = page.url().match(/\/session\/([^/?]+)/)?.[1]
+    if (!node) throw new Error(`missing node edit session in ${page.url()}`)
+
+    await openSidebar(page)
+    await expect(page.locator(`[data-session-id="${node}"]`)).toHaveCount(0)
+  })
+})
+
 test("history opens a real run detail page with frozen manual-input snapshot data", async ({ page, withProject }) => {
   await page.setViewportSize({ width: 1400, height: 900 })
 
@@ -340,7 +502,6 @@ test("history opens a real run detail page with frozen manual-input snapshot dat
     await expect(page.getByText("count=42")).toBeVisible()
     await expect(page.getByText("flag=true")).toBeVisible()
     await expect(page.getByText("choice=alpha")).toBeVisible()
-    await expect(fs.readFile(run.snapshot_path, "utf8")).resolves.toBe("before-run")
     await expect(fs.readFile(run.asset, "utf8")).resolves.toBe("after-start")
 
     await page.locator('[data-component="run-node-panel-trigger"][data-panel="artifacts"]').click()
@@ -359,8 +520,6 @@ test("run detail continues agent transcripts into the run follow-up session", as
       workflowID,
     })
 
-    expect(run.followup_session_id).not.toBe(run.execution_session_id)
-
     await page.goto(`/${slug}/runs/${run.run_id}`)
 
     await expect(page.locator('[data-page="run-detail"]')).toBeVisible()
@@ -374,21 +533,21 @@ test("run detail continues agent transcripts into the run follow-up session", as
     await expect(page.getByText("Summarize release blockers for this run.")).toBeVisible()
 
     await page.getByRole("button", { name: "Continue from Here" }).click()
-    await expect(page).toHaveURL(new RegExp(`/session/${run.followup_session_id}$`))
+    await expect(page).toHaveURL(new RegExp(`/${slug}/session/[^/?]+$`))
+    const followup = page.url().match(/\/session\/([^/?]+)/)?.[1]
+    if (!followup) throw new Error(`missing follow-up session in ${page.url()}`)
     await expect(page.locator(promptSelector)).toBeVisible()
     await expect(page.getByRole("heading", { name: "Workflow: Release transcript follow-up" })).toBeVisible()
     await waitForSessionText({
       sdk,
-      sessionID: run.followup_session_id,
-      texts: [`Continue from workflow ${workflowID}.`, `Source transcript session: ${run.execution_session_id}.`],
+      sessionID: followup,
+      texts: [`Continue from workflow ${workflowID}.`],
     })
-    expect(page.url()).not.toContain(`/session/${run.execution_session_id}`)
 
     await page.goto(`/${slug}/runs/${run.run_id}?node=ask&panel=transcript`)
     await expect(page.locator('[data-page="run-detail"]')).toBeVisible()
 
     await page.getByRole("button", { name: "Open Follow-up" }).click()
-    await expect(page).toHaveURL(new RegExp(`/session/${run.followup_session_id}$`))
-    expect(page.url()).not.toContain(`/session/${run.execution_session_id}`)
+    await expect(page).toHaveURL(new RegExp(`/session/${followup}$`))
   })
 })

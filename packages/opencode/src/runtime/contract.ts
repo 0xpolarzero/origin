@@ -146,8 +146,9 @@ export const run_node_skip_reason_code_values = ["branch_not_taken", "upstream_f
 
 export const active_session_link_role_values = ["execution_node", "run_followup"] as const
 export const deferred_session_link_role_values = ["builder", "node_edit"] as const
-export const session_link_role_values = [...active_session_link_role_values] as const
+export const session_link_role_values = [...active_session_link_role_values, ...deferred_session_link_role_values] as const
 export const session_link_visibility_values = ["hidden", "visible"] as const
+export const workflow_edit_action_values = ["builder", "node_edit", "graph_edit", "duplicate", "hide"] as const
 
 export const run_status = z.enum(run_status_values)
 export const operation_status = z.enum(operation_status_values)
@@ -168,6 +169,7 @@ export const run_attempt_status = z.enum(run_attempt_status_values)
 export const run_node_skip_reason_code = z.enum(run_node_skip_reason_code_values)
 export const session_link_role = z.enum(session_link_role_values)
 export const session_link_visibility = z.enum(session_link_visibility_values)
+export const workflow_edit_action = z.enum(workflow_edit_action_values)
 
 export const policy_event_types = ["policy.decision", "dispatch.attempt", "dispatch.result"] as const
 
@@ -195,3 +197,4 @@ export type RunAttemptStatus = z.infer<typeof run_attempt_status>
 export type RunNodeSkipReasonCode = z.infer<typeof run_node_skip_reason_code>
 export type SessionLinkRole = z.infer<typeof session_link_role>
 export type SessionLinkVisibility = z.infer<typeof session_link_visibility>
+export type WorkflowEditAction = z.infer<typeof workflow_edit_action>

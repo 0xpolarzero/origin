@@ -207,6 +207,91 @@ const operationsRows = {
   },
 } as const
 
+const editsRows = {
+  main: {
+    edit: {
+      id: "edit-main",
+      project_id: "project-1",
+      workflow_id: "workflow.daily",
+      workflow_revision_id: "rev-edit-main",
+      previous_workflow_revision_id: "rev-edit-prev",
+      session_id: "session-builder",
+      action: "graph_edit",
+      node_id: "draft",
+      note: "Rename the draft step",
+      created_at: 320,
+      updated_at: 321,
+    },
+    revision: {
+      id: "rev-edit-main",
+      project_id: "project-1",
+      workflow_id: "workflow.daily",
+      file: ".origin/workflows/workflow.daily.yaml",
+      content_hash: "hash-edit-main",
+      canonical_text: "name: Daily workflow edited",
+      created_at: 320,
+      updated_at: 321,
+    },
+    previous_revision: {
+      id: "rev-edit-prev",
+      project_id: "project-1",
+      workflow_id: "workflow.daily",
+      file: ".origin/workflows/workflow.daily.yaml",
+      content_hash: "hash-edit-prev",
+      canonical_text: "name: Daily workflow",
+      created_at: 300,
+      updated_at: 300,
+    },
+    diff: [
+      "*** .origin/workflows/workflow.daily.yaml",
+      "--- previous",
+      "+++ current",
+      "@@",
+      "-name: Daily workflow",
+      "+name: Daily workflow edited",
+    ].join("\n"),
+    session: {
+      id: "session-builder",
+      title: "Builder: Daily workflow",
+      directory: "/tmp/demo",
+    },
+  },
+  missing: {
+    edit: {
+      id: "edit-missing",
+      project_id: "project-1",
+      workflow_id: "workflow.daily",
+      workflow_revision_id: "rev-edit-missing",
+      previous_workflow_revision_id: null,
+      session_id: "session-gone",
+      action: "node_edit",
+      node_id: "review",
+      note: null,
+      created_at: 200,
+      updated_at: 201,
+    },
+    revision: {
+      id: "rev-edit-missing",
+      project_id: "project-1",
+      workflow_id: "workflow.daily",
+      file: ".origin/workflows/workflow.daily.yaml",
+      content_hash: "hash-edit-missing",
+      canonical_text: "name: Daily workflow missing session",
+      created_at: 200,
+      updated_at: 201,
+    },
+    previous_revision: null,
+    diff: [
+      "*** .origin/workflows/workflow.daily.yaml",
+      "--- previous",
+      "+++ current",
+      "@@",
+      "+name: Daily workflow missing session",
+    ].join("\n"),
+    session: null,
+  },
+} as const
+
 const runDetail = {
   run: {
     id: "run-main",
@@ -257,6 +342,46 @@ const runDetail = {
   nodes: [],
   events: [],
   followup: null,
+} as const
+
+const workflowDetail = {
+  item: {
+    id: "workflow.daily",
+    file: ".origin/workflows/workflow.daily.yaml",
+    runnable: true,
+    errors: [],
+    workflow: {
+      id: "workflow.daily",
+      name: "Daily workflow",
+      description: "History cross-link target",
+      steps: [
+        {
+          id: "draft",
+          kind: "agent_request",
+          title: "Draft",
+          prompt: {
+            source: "inline",
+            text: "Draft the update",
+          },
+        },
+        {
+          id: "done",
+          kind: "end",
+          title: "Done",
+          result: "success",
+        },
+      ],
+      resources: [],
+    },
+  },
+  revision_head: {
+    id: "rev-edit-main",
+    workflow_id: "workflow.daily",
+    content_hash: "hash-edit-main",
+    created_at: 320,
+  },
+  resources: [],
+  runs: [],
 } as const
 
 test("history tabs, filtering, cross-links, duplicate events, and missing links", async ({ page, withProject }) => {
@@ -433,6 +558,98 @@ test("history tabs, filtering, cross-links, duplicate events, and missing links"
   })
 })
 
+test("workflow edits tab renders loading, checkpoint drilldown, missing session state, and workflow cross-links", async ({
+  page,
+  withProject,
+}) => {
+  await withProject(async ({ slug }) => {
+    const edits = async (route: Route) => {
+      const url = new URL(route.request().url())
+      if (url.origin !== serverUrl) {
+        await route.continue()
+        return
+      }
+
+      const cursor = url.searchParams.get("cursor")
+      if (!cursor) {
+        await new Promise((resolve) => setTimeout(resolve, 150))
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            items: [editsRows.main],
+            next_cursor: "320:edit-main",
+          }),
+        })
+        return
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          items: [editsRows.missing],
+          next_cursor: null,
+        }),
+      })
+    }
+
+    const detail = async (route: Route) => {
+      const url = new URL(route.request().url())
+      if (url.origin !== serverUrl) {
+        await route.continue()
+        return
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(workflowDetail),
+      })
+    }
+
+    await page.route("**/workflow/history/edits*", edits)
+    await page.route("**/workflow/workflows/workflow.daily/detail*", detail)
+
+    try {
+      await page.goto(`/${slug}/history?tab=edits`)
+      await expect(page.getByText("Loading workflow edits...")).toBeVisible()
+
+      const row = page.locator('[data-component="history-edit-row"][data-id="edit-main"]')
+      await expect(row).toBeVisible()
+      await expect(row.locator('[data-component="history-edit-action"]')).toContainText("graph edit")
+      await expect(row.locator('[data-component="history-edit-session"]')).toContainText("Builder: Daily workflow")
+      await expect(row.locator('[data-component="history-edit-note"]')).toContainText("Rename the draft step")
+
+      await row.locator('[data-component="history-open-checkpoint"]').click()
+      await expect(page).toHaveURL(new RegExp(`/history\\?tab=edits&edit_id=edit-main$`))
+      await expect(row).toHaveAttribute("data-focused", "true")
+      await expect(row.locator('[data-component="history-edit-detail"]')).toBeVisible()
+      await expect(row.locator('[data-component="history-edit-diff"]')).toContainText("+name: Daily workflow edited")
+
+      await page.getByRole("button", { name: "Load More" }).click()
+      const missing = page.locator('[data-component="history-edit-row"][data-id="edit-missing"]')
+      await expect(missing).toBeVisible()
+      await expect(missing.locator('[data-component="history-link-missing"]')).toHaveText("Session link missing")
+
+      await row.locator('[data-component="history-open-workflow"]').click()
+      await expect(page).toHaveURL(new RegExp(`/workflows/workflow\\.daily$`))
+      await expect(page.locator('[data-page="workflow-detail"]')).toBeVisible()
+
+      await page.goBack()
+      await expect(page.locator('[data-page="history"]')).toBeVisible()
+
+      await page.locator('[data-component="history-edit-row"][data-id="edit-main"] [data-component="history-open-workflow-history"]').click()
+      await expect(page).toHaveURL(new RegExp(`/workflows/workflow\\.daily\\?tab=history&edit_id=edit-main$`))
+      await expect(page.locator('[data-page="workflow-detail"]')).toBeVisible()
+    } finally {
+      if (page.isClosed()) return
+      await page.unroute("**/workflow/history/edits*", edits)
+      await page.unroute("**/workflow/workflows/workflow.daily/detail*", detail)
+    }
+  })
+})
+
 test("history debug deep-link focus and debug precedence are deterministic", async ({ page, withProject }) => {
   await withProject(async ({ slug }) => {
     const runs = async (route: Route) => {
@@ -489,6 +706,53 @@ test("history debug deep-link focus and debug precedence are deterministic", asy
     } finally {
       if (page.isClosed()) return
       await page.unroute("**/workflow/history/runs*", runs)
+    }
+  })
+})
+
+test("workflow edits tab shows empty and error states without crashing", async ({ page, withProject }) => {
+  await withProject(async ({ slug }) => {
+    let mode = "empty"
+
+    const edits = async (route: Route) => {
+      const url = new URL(route.request().url())
+      if (url.origin !== serverUrl) {
+        await route.continue()
+        return
+      }
+
+      if (mode === "error") {
+        await route.fulfill({
+          status: 503,
+          contentType: "text/plain",
+          body: "workflow edits unavailable",
+        })
+        return
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          items: [],
+          next_cursor: null,
+        }),
+      })
+    }
+
+    await page.route("**/workflow/history/edits*", edits)
+
+    try {
+      await page.goto(`/${slug}/history?tab=edits`)
+      await expect(page.getByText("No workflow edits were returned.")).toBeVisible()
+
+      mode = "error"
+      await page.getByRole("button", { name: "Refresh" }).click()
+      await expect(page.getByText("workflow edits unavailable")).toBeVisible()
+      await expect(page.getByRole("heading", { name: "History" })).toBeVisible()
+    } finally {
+      if (page.isClosed()) return
+      await page.unroute("**/workflow/history/edits*", edits)
     }
   })
 })

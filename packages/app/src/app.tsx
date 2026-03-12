@@ -35,9 +35,30 @@ const Session = lazy(() => import("@/pages/session"))
 const Workflows = lazy(() => import("@/pages/workflows"))
 const WorkflowDetail = lazy(() => import("@/pages/workflow-detail"))
 const Library = lazy(() => import("@/pages/library"))
+const LibraryDetail = lazy(() => import("@/pages/library-detail"))
+const Runs = lazy(() => import("@/pages/runs"))
 const History = lazy(() => import("@/pages/history"))
 const RunDetail = lazy(() => import("@/pages/run-detail"))
-const Loading = () => <div class="size-full" />
+const Loading = () => (
+  <div data-component="route-loading" class="size-full bg-background-base">
+    <div class="mx-auto flex h-full w-full max-w-3xl items-center justify-center p-6">
+      <div class="w-full max-w-md rounded-2xl border border-border-weak-base bg-background-base p-6 shadow-xs-border-base">
+        <div class="space-y-4">
+          <div class="flex items-center gap-3">
+            <div class="size-2.5 rounded-full bg-text-strong animate-pulse" />
+            <p class="text-14-medium text-text-strong">Loading view...</p>
+          </div>
+          <p class="text-13-regular text-text-weak">Preparing the current workspace route.</p>
+          <div class="space-y-2" aria-hidden="true">
+            <div class="h-2.5 w-3/4 rounded-full bg-background-stronger animate-pulse" />
+            <div class="h-2.5 w-full rounded-full bg-background-stronger animate-pulse [animation-delay:120ms]" />
+            <div class="h-2.5 w-2/3 rounded-full bg-background-stronger animate-pulse [animation-delay:240ms]" />
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+)
 
 const HomeRoute = () => (
   <Suspense fallback={<Loading />}>
@@ -68,6 +89,18 @@ const WorkflowDetailRoute = () => (
 const LibraryRoute = () => (
   <Suspense fallback={<Loading />}>
     <Library />
+  </Suspense>
+)
+
+const LibraryDetailRoute = () => (
+  <Suspense fallback={<Loading />}>
+    <LibraryDetail />
+  </Suspense>
+)
+
+const RunsRoute = () => (
+  <Suspense fallback={<Loading />}>
+    <Runs />
   </Suspense>
 )
 
@@ -197,8 +230,10 @@ export function AppInterface(props: {
                 <Route path="/session/:id?" component={SessionRoute} />
                 <Route path="/workflows" component={WorkflowsRoute} />
                 <Route path="/workflows/:workflowId" component={WorkflowDetailRoute} />
+                <Route path="/runs" component={RunsRoute} />
                 <Route path="/runs/:runId" component={RunDetailRoute} />
                 <Route path="/library" component={LibraryRoute} />
+                <Route path="/library/:itemId" component={LibraryDetailRoute} />
                 <Route path="/history" component={HistoryRoute} />
               </Route>
             </Dynamic>

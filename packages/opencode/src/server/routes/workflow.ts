@@ -18,6 +18,7 @@ import { RuntimeRun } from "@/runtime/run"
 import { RuntimeSessionLink } from "@/runtime/session-link"
 import { WorkflowDetail } from "@/workflow/detail"
 import { WorkflowDebugReport } from "@/workflow/debug-report"
+import { WorkflowAuthoring, WorkflowRerunTargetError } from "@/workflow/authoring"
 import { Session } from "@/session"
 
 const run_validate = z
@@ -43,6 +44,13 @@ const session_link_param = z
     session_id: z.string().min(1),
   })
   .strict()
+
+const workflow_history_query = z
+  .object({
+    cursor: z.string().regex(/^\d+:[0-9a-f-]+$/i).optional(),
+    limit: z.coerce.number().int().min(1).max(200).optional(),
+  })
+  .passthrough()
 
 const query_boolean = z
   .preprocess(
@@ -264,6 +272,34 @@ export const WorkflowRoutes = lazy(() =>
           })
         }
         return c.json(await WorkflowDebugReport.create(params.run_id, body))
+      },
+    )
+    .get(
+      "/history/edits",
+      describeRoute({
+        summary: "List workflow edit history",
+        description: "List persisted workflow edit checkpoints with diff-first review metadata.",
+        operationId: "workflow.history.edits",
+        responses: {
+          200: {
+            description: "Workflow edit history page",
+            content: {
+              "application/json": {
+                schema: resolver(WorkflowAuthoring.HistoryPage),
+              },
+            },
+          },
+        },
+      }),
+      validator("query", workflow_history_query),
+      async (c) => {
+        const query = c.req.valid("query")
+        return c.json(
+          await WorkflowAuthoring.history({
+            cursor: query.cursor,
+            limit: query.limit,
+          }),
+        )
       },
     )
     .get(
@@ -541,6 +577,198 @@ export const WorkflowRoutes = lazy(() =>
         )
       },
     )
+    .post(
+      "/workflows/build",
+      describeRoute({
+        summary: "Build a workflow draft",
+        description: "Create a first workflow draft on disk and open a hidden builder session for further refinement.",
+        operationId: "workflow.build",
+        responses: {
+          200: {
+            description: "Builder workflow created",
+            content: {
+              "application/json": {
+                schema: resolver(WorkflowAuthoring.BuildResult),
+              },
+            },
+          },
+          ...errors(400, 409),
+        },
+      }),
+      validator("json", WorkflowAuthoring.BuildInput),
+      async (c) => {
+        const body = c.req.valid("json")
+        return c.json(await WorkflowAuthoring.build(body))
+      },
+    )
+    .post(
+      "/workflows/:workflow_id/copy",
+      describeRoute({
+        summary: "Duplicate workflow definition",
+        description: "Create a canonical duplicate of a workflow and its local resources.",
+        operationId: "workflow.copy",
+        responses: {
+          200: {
+            description: "Workflow duplicated",
+            content: {
+              "application/json": {
+                schema: resolver(WorkflowAuthoring.CopyResult),
+              },
+            },
+          },
+          ...errors(400, 409),
+        },
+      }),
+      validator("param", workflow_detail_param),
+      validator("json", WorkflowAuthoring.CopyInput),
+      async (c) => {
+        const params = c.req.valid("param")
+        const body = c.req.valid("json")
+        return c.json(await WorkflowAuthoring.copy(params.workflow_id, body))
+      },
+    )
+    .post(
+      "/workflows/:workflow_id/hide",
+      describeRoute({
+        summary: "Hide workflow definition",
+        description: "Move a workflow out of the active canonical workflow index without deleting its on-disk content.",
+        operationId: "workflow.hide",
+        responses: {
+          200: {
+            description: "Workflow hidden",
+            content: {
+              "application/json": {
+                schema: resolver(WorkflowAuthoring.HideResult),
+              },
+            },
+          },
+          ...errors(400, 409),
+        },
+      }),
+      validator("param", workflow_detail_param),
+      validator("json", z.object({})),
+      async (c) => {
+        const params = c.req.valid("param")
+        c.req.valid("json")
+        return c.json(await WorkflowAuthoring.hide(params.workflow_id))
+      },
+    )
+    .get(
+      "/workflows",
+      describeRoute({
+        summary: "List workflow summaries",
+        description: "Return workflow summaries with last-run and last-edit metadata for the workflows index.",
+        operationId: "workflow.list",
+        responses: {
+          200: {
+            description: "Workflow summaries",
+            content: {
+              "application/json": {
+                schema: resolver(WorkflowAuthoring.Page),
+              },
+            },
+          },
+        },
+      }),
+      validator("query", z.object({})),
+      async (c) => {
+        return c.json(await WorkflowAuthoring.list())
+      },
+    )
+    .put(
+      "/workflows/:workflow_id",
+      describeRoute({
+        summary: "Save workflow definition",
+        description: "Persist a workflow definition and any supplied local resource materials back to canonical files.",
+        operationId: "workflow.save",
+        responses: {
+          200: {
+            description: "Workflow detail",
+            content: {
+              "application/json": {
+                schema: resolver(WorkflowDetail.WorkflowView),
+              },
+            },
+          },
+          ...errors(400, 409),
+        },
+      }),
+      validator("param", workflow_detail_param),
+      validator("json", WorkflowAuthoring.SaveInput),
+      async (c) => {
+        c.req.valid("param")
+        const body = c.req.valid("json")
+        return c.json(await WorkflowAuthoring.save(body))
+      },
+    )
+    .post(
+      "/workflows/:workflow_id/session",
+      describeRoute({
+        summary: "Open workflow authoring session",
+        description: "Create a hidden builder or node-edit session linked to a workflow authoring context.",
+        operationId: "workflow.session.open",
+        responses: {
+          200: {
+            description: "Workflow authoring session created",
+            content: {
+              "application/json": {
+                schema: resolver(WorkflowAuthoring.SessionResult),
+              },
+            },
+          },
+          ...errors(400, 409),
+        },
+      }),
+      validator("param", workflow_detail_param),
+      validator(
+        "json",
+        WorkflowAuthoring.SessionInput.omit({
+          workflow_id: true,
+        }),
+      ),
+      async (c) => {
+        const params = c.req.valid("param")
+        const body = c.req.valid("json")
+        return c.json(
+          await WorkflowAuthoring.open({
+            ...body,
+            workflow_id: params.workflow_id,
+          }),
+        )
+      },
+    )
+    .get(
+      "/workflows/:workflow_id/history",
+      describeRoute({
+        summary: "Get workflow edit history",
+        description: "Return workflow-local edit checkpoints, diffs, and linked session metadata.",
+        operationId: "workflow.history.get",
+        responses: {
+          200: {
+            description: "Workflow history page",
+            content: {
+              "application/json": {
+                schema: resolver(WorkflowAuthoring.HistoryPage),
+              },
+            },
+          },
+          ...errors(400),
+        },
+      }),
+      validator("param", workflow_detail_param),
+      validator("query", workflow_history_query),
+      async (c) => {
+        const params = c.req.valid("param")
+        const query = c.req.valid("query")
+        return c.json(
+          await WorkflowAuthoring.history({
+            workflow_id: params.workflow_id,
+            cursor: query.cursor,
+            limit: query.limit,
+          }),
+        )
+      },
+    )
     .get(
       "/workflows/:workflow_id/detail",
       describeRoute({
@@ -613,6 +841,39 @@ export const WorkflowRoutes = lazy(() =>
             run_id: params.run_id,
           }),
         )
+      },
+    )
+    .post(
+      "/runs/:run_id/rerun",
+      describeRoute({
+        summary: "Rerun a workflow",
+        description: "Start a new manual workflow run using the frozen input payload from an earlier run.",
+        operationId: "workflow.run.rerun",
+        responses: {
+          200: {
+            description: "Manual run started",
+            content: {
+              "application/json": {
+                schema: resolver(WorkflowManualRun.Info),
+              },
+            },
+          },
+          ...errors(400, 404, 409),
+        },
+      }),
+      validator("param", run_detail_param),
+      validator("json", WorkflowAuthoring.RerunInput),
+      async (c) => {
+        const params = c.req.valid("param")
+        const body = c.req.valid("json")
+        try {
+          return c.json(await WorkflowAuthoring.rerun(params.run_id, body))
+        } catch (error) {
+          if (!(error instanceof WorkflowRerunTargetError)) throw error
+          throw new HTTPException(409, {
+            message: error.message,
+          })
+        }
       },
     )
     .get(

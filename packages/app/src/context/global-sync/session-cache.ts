@@ -11,6 +11,7 @@ import type {
 export const SESSION_CACHE_LIMIT = 40
 
 type SessionCache = {
+  session_hidden?: Record<string, boolean | undefined>
   session_status: Record<string, SessionStatus | undefined>
   session_diff: Record<string, FileDiff[] | undefined>
   todo: Record<string, Todo[] | undefined>
@@ -31,6 +32,7 @@ export function dropSessionCaches(store: SessionCache, sessionIDs: Iterable<stri
   }
 
   for (const sessionID of stale) {
+    if (store.session_hidden) delete store.session_hidden[sessionID]
     delete store.message[sessionID]
     delete store.todo[sessionID]
     delete store.session_diff[sessionID]

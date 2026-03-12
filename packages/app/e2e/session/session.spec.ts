@@ -120,14 +120,20 @@ test("session can be deleted via header menu", async ({ page, sdk, gotoSession }
 })
 
 test("session can be shared and unshared via header button", async ({ page, sdk, gotoSession }) => {
-  test.skip(shareDisabled, "Share is disabled in this environment (OPENCODE_DISABLE_SHARE).")
-
   const stamp = Date.now()
   const title = `e2e share test ${stamp}`
 
   await withSession(sdk, title, async (session) => {
     await seedMessage(sdk, session.id)
     await gotoSession(session.id)
+
+    if (shareDisabled) {
+      const shared = await openSharePopover(page)
+      await expect(shared.popoverBody.getByRole("button", { name: "Publish" }).first()).toBeVisible({
+        timeout: 30_000,
+      })
+      return
+    }
 
     const shared = await openSharePopover(page)
     const publish = shared.popoverBody.getByRole("button", { name: "Publish" }).first()

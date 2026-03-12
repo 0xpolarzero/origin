@@ -74,6 +74,8 @@ export namespace Database {
     const required = [
       { type: "table", name: "run" },
       { type: "table", name: "workflow_revision" },
+      { type: "table", name: "library_revision" },
+      { type: "table", name: "workflow_edit" },
       { type: "table", name: "run_snapshot" },
       { type: "table", name: "run_node" },
       { type: "table", name: "run_attempt" },
@@ -90,6 +92,8 @@ export namespace Database {
       { type: "index", name: "dispatch_attempt_draft_uq" },
       { type: "index", name: "integration_attempt_run_id_id_uq" },
       { type: "index", name: "run_queue_idx" },
+      { type: "index", name: "library_revision_project_item_created_idx" },
+      { type: "index", name: "workflow_edit_project_workflow_created_idx" },
       { type: "index", name: "run_snapshot_run_uq" },
       { type: "index", name: "run_node_run_node_id_uq" },
       { type: "index", name: "run_attempt_node_index_uq" },

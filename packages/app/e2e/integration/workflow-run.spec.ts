@@ -10,8 +10,12 @@ async function workspace_id(directory: string) {
   )
   const rows = Array.isArray(listed) ? listed : []
   const match = rows.find(
-    (item): item is { id: string; config?: { directory?: string } } =>
-      !!item && typeof item === "object" && "id" in item && (item as { config?: { directory?: string } }).config?.directory === directory,
+    (item): item is { id: string; directory?: string; config?: { directory?: string } } =>
+      !!item &&
+      typeof item === "object" &&
+      "id" in item &&
+      ((item as { directory?: string }).directory === directory ||
+        (item as { config?: { directory?: string } }).config?.directory === directory),
   )
   if (match) return match.id
 

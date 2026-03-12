@@ -1,4 +1,4 @@
-import { stat } from "node:fs/promises"
+import { cp, readdir, rm, stat } from "node:fs/promises"
 import path from "node:path"
 import { Bus } from "@/bus"
 import { JJ } from "@/project/jj"
@@ -34,6 +34,7 @@ const REPAIR_MAX = 3
 const REPAIR_WINDOW_MS = 10 * 60 * 1000
 const WAIT_STEP_MS = 50
 const AUTOMATED_RETRY_MAX = 2
+const checkpoint_skip = new Set([".git", ".jj"])
 
 const start_input = z
   .object({
@@ -391,6 +392,54 @@ function normalize(file: string) {
   return file.split(path.sep).join(path.posix.sep)
 }
 
+function checkpoint(root: string, node_id: string) {
+  return path.join(root, "checkpoints", node_id)
+}
+
+async function clone_materials(source: string, target: string) {
+  await rm(target, { recursive: true, force: true })
+  const value = await stat(source).catch(() => undefined)
+  if (!value?.isDirectory()) return
+  await cp(source, target, {
+    recursive: true,
+    force: true,
+  })
+}
+
+async function save_checkpoint(input: { source: string; target: string }) {
+  await rm(input.target, { recursive: true, force: true })
+  await cp(input.source, input.target, {
+    recursive: true,
+    force: true,
+    filter: (source) => {
+      const rel = path.relative(input.source, source)
+      if (!rel) return true
+      return !checkpoint_skip.has(rel.split(path.sep)[0]!)
+    },
+  })
+}
+
+async function restore_checkpoint(input: { source: string; target: string }) {
+  const value = await stat(input.source).catch(() => undefined)
+  if (!value?.isDirectory()) {
+    throw new NotFoundError({ message: `Checkpoint not found: ${input.source}` })
+  }
+  const names = await readdir(input.target).catch(() => [])
+  await Promise.all(
+    names.map(async (name) => {
+      if (checkpoint_skip.has(name)) return
+      await rm(path.join(input.target, name), {
+        recursive: true,
+        force: true,
+      })
+    }),
+  )
+  await cp(input.source, input.target, {
+    recursive: true,
+    force: true,
+  })
+}
+
 async function files(input: { directory: string; exclude?: string[] }) {
   const directory = input.directory
   const exclude = new Set(
@@ -709,6 +758,308 @@ async function drive(input: {
   }
 }
 
+async function launch_manual(input: {
+  prepared: Awaited<ReturnType<typeof WorkflowGraphRun.prepare>>
+  seams?: Seams
+  cleanup_materials_on_fail: boolean
+  seeds?: WorkflowGraphRun.ReplaySeed[]
+  checkpoint_id?: string | null
+  run_id?: string
+}) {
+  const workspace_id = workspace_required()
+  const workspace = await Workspace.get(workspace_id)
+  if (!workspace) throw new NotFoundError({ message: `Workspace not found: ${workspace_id}` })
+  queue_start()
+
+  const key_id = key(workspace_id, input.prepared.workflow.id)
+  const lock = state().keys.get(key_id)
+  if (lock) {
+    throw new RuntimeManualRunDuplicateError({
+      code: "manual_run_duplicate",
+      workspace_id,
+      workflow_id: input.prepared.workflow.id,
+      trigger_id: null,
+      run_id: lock.run_id,
+    })
+  }
+
+  state().keys.set(key_id, { run_id: null })
+
+  const all = current(input.seams)
+  const adapter = (all.adapter ?? ((item: { directory: string }) => JJ.create({ cwd: item.directory })))({
+    directory: Instance.directory,
+  })
+
+  const run_id = input.run_id ?? create_uuid_v7()
+  const run_workspace_directory = adapter.workspace.path(run_id)
+
+  let run: Row | undefined
+  let session_id: string | undefined
+  let task = false
+
+  try {
+    const session = await Session.createNext({
+      directory: Instance.directory,
+      title: `Workflow: ${input.prepared.workflow.name}`,
+      workspaceID: workspace_id,
+    })
+    session_id = session.id
+
+    run = RuntimeRun.create({
+      id: run_id,
+      status: "queued",
+      trigger_type: "manual",
+      workflow_id: input.prepared.workflow.id,
+      workspace_id,
+      session_id: session.id,
+      run_workspace_root: path.dirname(run_workspace_directory),
+      run_workspace_directory,
+      trigger_metadata_json: null,
+    })
+    RuntimeSessionLink.upsert({
+      session_id: session.id,
+      role: "run_followup",
+      run_id: run.id,
+    })
+    const snapshot = RuntimeRunSnapshot.create({
+      run_id: run.id,
+      workflow_id: input.prepared.workflow.id,
+      workflow_revision_id: input.prepared.workflow_revision_id,
+      workflow_hash: input.prepared.workflow_hash,
+      workflow_text: input.prepared.workflow_text,
+      graph_json: input.prepared.workflow,
+      input_json: input.prepared.input_json,
+      input_store_json: input.prepared.input_store_json,
+      trigger_metadata_json: {},
+      resource_materials_json: input.prepared.resource_materials_json,
+      material_root: input.prepared.material_root,
+    })
+    const nodes = WorkflowGraphRun.create_nodes({
+      run_id: run.id,
+      snapshot_id: snapshot.id,
+      workflow: input.prepared.workflow,
+    })
+
+    if (input.seeds?.length) {
+      WorkflowGraphRun.seed_nodes({
+        run_id: run.id,
+        workflow: input.prepared.workflow,
+        nodes,
+        seeds: input.seeds,
+      })
+    }
+
+    state().keys.set(key_id, { run_id: run.id })
+
+    const created = await adapter.workspace.create(run.id)
+    if (created.status !== "success") {
+      nodes.forEach((node) => {
+        if (node.status !== "pending" && node.status !== "ready") return
+        RuntimeRunNode.transition({
+          id: node.id,
+          to: "canceled",
+        })
+      })
+      fail(run.id, "manual_start_failed")
+      await finalize_cleanup({
+        run_id: run.id,
+        adapter,
+        workspace: created,
+      })
+      return present(read(run.id))
+    }
+
+    if (input.checkpoint_id) {
+      await restore_checkpoint({
+        source: checkpoint(input.prepared.material_root, input.checkpoint_id),
+        target: created.directory,
+      })
+    }
+
+    const relative = path.relative(Instance.directory, created.directory)
+    const material_relative = path.relative(Instance.directory, input.prepared.material_root)
+    const root_exclude = [relative, material_relative].filter((item) => item && item !== "." && !item.startsWith(".."))
+    const root_before = await files({
+      directory: Instance.directory,
+      exclude: root_exclude,
+    })
+    const before = await files({
+      directory: created.directory,
+    })
+    const abort = new AbortController()
+    const run_ref = run.id
+    const entry: Task = {
+      key: key_id,
+      abort,
+      session_id: null,
+      done: Promise.resolve(),
+    }
+    const graph_seams: {
+      agent?: WorkflowGraphRun.AgentSeam
+      script?: WorkflowGraphRun.ScriptSeam
+    } = {
+      agent:
+        all.agent ??
+        (all.execute
+          ? async (value: GraphAgentInput) => {
+              await all.execute?.({
+                run: read(run_ref),
+                workflow_id: value.workflow_id,
+                session_id: value.session_id,
+                workspace_id: value.workspace_id,
+                directory: value.directory,
+                phase: "initial",
+                attempt: 0,
+                prompt: value.prompt,
+                abort: value.abort,
+              })
+              return {
+                structured: null,
+              }
+            }
+          : undefined),
+      script: all.script,
+    }
+    state().tasks.set(run_ref, entry)
+    const done = (async () => {
+      try {
+        if (read(run_ref).status === "queued") {
+          transition({
+            id: run_ref,
+            to: "running",
+          })
+        }
+
+        const result = await WorkflowGraphRun.execute({
+          run_id: run_ref,
+          workflow: input.prepared.workflow,
+          directory: created.directory,
+          workspace_id,
+          nodes,
+          prepared: input.prepared,
+          abort: abort.signal,
+          seams: graph_seams,
+          on_session: (value) => {
+            entry.session_id = value
+          },
+          on_checkpoint: (node_id) =>
+            save_checkpoint({
+              source: created.directory,
+              target: checkpoint(input.prepared.material_root, node_id),
+            }),
+        })
+
+        if (abort.signal.aborted || read(run_ref).status === "canceled") return
+
+        if (read(run_ref).status === "running") {
+          transition({
+            id: run_ref,
+            to: "validating",
+          })
+        }
+
+        if (result.outcome === "failure") {
+          fail(run_ref, "workflow_failed")
+          return
+        }
+
+        if (result.outcome === "node_failed") {
+          fail(run_ref, "node_execution_failed")
+          return
+        }
+
+        const classify = all.classify ?? classify_default
+        const result_value = classification_result.parse(
+          await classify({
+            run: read(run_ref),
+            workflow_id: input.prepared.workflow.id,
+            session_id: session.id,
+            workspace_id,
+            directory: created.directory,
+            before,
+          }),
+        )
+
+        const root_after = await files({
+          directory: Instance.directory,
+          exclude: root_exclude,
+        })
+        const escaped = changed(root_before, root_after)
+        if (escaped.length > 0) {
+          fail(run_ref, "workspace_policy_blocked")
+          return
+        }
+
+        if (!result_value.changed_paths.length) {
+          const done = transition({
+            id: run_ref,
+            to: "completed_no_change",
+          })
+          publish_outcome(done.id)
+          return
+        }
+
+        const done = transition({
+          id: run_ref,
+          to: "ready_for_integration",
+        })
+
+        RuntimeRun.candidate({
+          id: run_ref,
+          integration_candidate_base_change_id: result_value.base_change_id ?? null,
+          integration_candidate_change_ids: result_value.change_ids ?? [],
+          integration_candidate_changed_paths: result_value.changed_paths,
+        })
+
+        queue_touch()
+        publish_outcome(done.id)
+      } catch (error) {
+        if (error instanceof NotFoundError) return
+        if (abort.signal.aborted || read(run_ref).status === "canceled") return
+        if (error instanceof RuntimeWorkflowValidationError) {
+          fail(run_ref, "validation_error")
+          return
+        }
+        fail(run_ref, "manual_start_failed")
+      }
+    })().finally(async () => {
+      await finalize_cleanup({
+        run_id: run_ref,
+        adapter,
+        workspace: created,
+      }).catch(() => undefined)
+      state().tasks.delete(run_ref)
+      state().keys.delete(key_id)
+    })
+    entry.done = done
+    task = true
+
+    return present(read(run_ref))
+  } catch (error) {
+    if (run) {
+      fail(run.id, "manual_start_failed")
+      await finalize_cleanup({
+        run_id: run.id,
+        adapter,
+        workspace: {
+          name: adapter.workspace.name(run.id),
+          root: path.dirname(adapter.workspace.path(run.id)),
+          directory: adapter.workspace.path(run.id),
+        },
+      }).catch(() => undefined)
+    }
+    throw error
+  } finally {
+    if (!run && session_id) {
+      await Session.remove(session_id).catch(() => undefined)
+    }
+    if (!run && input.cleanup_materials_on_fail) {
+      await WorkflowGraphRun.cleanup_materials(input.prepared.material_root).catch(() => undefined)
+    }
+    if (!task) state().keys.delete(key_id)
+  }
+}
+
 export namespace WorkflowManualRun {
   export const StartInput = start_input
   export const ControlInput = control_input
@@ -726,287 +1077,46 @@ export namespace WorkflowManualRun {
 
   export async function start(value: z.input<typeof StartInput>, seams?: Seams) {
     const input = StartInput.parse(value)
-    const workspace_id = workspace_required()
-    const workspace = await Workspace.get(workspace_id)
-    if (!workspace) throw new NotFoundError({ message: `Workspace not found: ${workspace_id}` })
-    queue_start()
-
     const gate = await WorkflowRunGate.validate({
       directory: Instance.directory,
       workflow_id: input.workflow_id,
     })
-
-    const run_id = create_uuid_v7()
-    const key_id = key(workspace_id, input.workflow_id, input.trigger_id)
-    const lock = state().keys.get(key_id)
-    if (lock) {
-      throw new RuntimeManualRunDuplicateError({
-        code: "manual_run_duplicate",
-        workspace_id,
-        workflow_id: input.workflow_id,
-        trigger_id: input.trigger_id ?? null,
-        run_id: lock.run_id,
-      })
-    }
-
-    state().keys.set(key_id, { run_id: null })
-
     const all = current(seams)
-    const adapter = (all.adapter ?? ((item: { directory: string }) => JJ.create({ cwd: item.directory })))({
+    const run_id = create_uuid_v7()
+    const material_root = path.join(path.dirname(JJ.create({ cwd: Instance.directory }).workspace.path(run_id)), "materials", run_id)
+    const prepared = await (all.prepare ?? WorkflowGraphRun.prepare)({
       directory: Instance.directory,
+      workflow_id: gate.workflow.id,
+      inputs: input.inputs,
+      material_root,
     })
+    return launch_manual({
+      prepared,
+      seams,
+      cleanup_materials_on_fail: true,
+      run_id,
+    })
+  }
 
-    let run: Row | undefined
-    let session_id: string | undefined
-    let task = false
-    const run_workspace_directory = adapter.workspace.path(run_id)
-    const material_root = path.join(path.dirname(run_workspace_directory), "materials", run_id)
-    let prepared: Awaited<ReturnType<typeof WorkflowGraphRun.prepare>> | undefined
-
-    try {
-      prepared = await (all.prepare ?? WorkflowGraphRun.prepare)({
-        directory: Instance.directory,
-        workflow_id: gate.workflow.id,
-        inputs: input.inputs,
+  export async function replay(input: {
+    prepared: WorkflowGraphRun.PrepareResult
+    seeds: WorkflowGraphRun.ReplaySeed[]
+    checkpoint_id?: string | null
+  }, seams?: Seams) {
+    const run_id = create_uuid_v7()
+    const material_root = path.join(path.dirname(JJ.create({ cwd: Instance.directory }).workspace.path(run_id)), "materials", run_id)
+    await clone_materials(input.prepared.material_root, material_root)
+    return launch_manual({
+      prepared: {
+        ...input.prepared,
         material_root,
-      })
-      const session = await Session.createNext({
-        directory: Instance.directory,
-        title: `Workflow: ${prepared.workflow.name}`,
-      })
-      session_id = session.id
-
-      run = RuntimeRun.create({
-        id: run_id,
-        status: "queued",
-        trigger_type: "manual",
-        workflow_id: prepared.workflow.id,
-        workspace_id,
-        session_id: session.id,
-        run_workspace_root: path.dirname(run_workspace_directory),
-        run_workspace_directory,
-        trigger_metadata_json: null,
-      })
-      RuntimeSessionLink.upsert({
-        session_id: session.id,
-        role: "run_followup",
-        run_id: run.id,
-      })
-      const snapshot = RuntimeRunSnapshot.create({
-        run_id: run.id,
-        workflow_id: prepared.workflow.id,
-        workflow_revision_id: prepared.workflow_revision_id,
-        workflow_hash: prepared.workflow_hash,
-        workflow_text: prepared.workflow_text,
-        graph_json: prepared.workflow,
-        input_json: prepared.input_json,
-        input_store_json: prepared.input_store_json,
-        trigger_metadata_json: {},
-        resource_materials_json: prepared.resource_materials_json,
-        material_root: prepared.material_root,
-      })
-      const nodes = WorkflowGraphRun.create_nodes({
-        run_id: run.id,
-        snapshot_id: snapshot.id,
-        workflow: prepared.workflow,
-      })
-
-      state().keys.set(key_id, { run_id: run.id })
-
-      const created = await adapter.workspace.create(run.id)
-      if (created.status !== "success") {
-        nodes.forEach((node) => {
-          RuntimeRunNode.transition({
-            id: node.id,
-            to: "canceled",
-          })
-        })
-        fail(run.id, "manual_start_failed")
-        await finalize_cleanup({
-          run_id: run.id,
-          adapter,
-          workspace: created,
-        })
-        return present(read(run.id))
-      }
-
-      const relative = path.relative(Instance.directory, created.directory)
-      const material_relative = path.relative(Instance.directory, prepared.material_root)
-      const root_exclude = [relative, material_relative].filter((item) => item && item !== "." && !item.startsWith(".."))
-      const root_before = await files({
-        directory: Instance.directory,
-        exclude: root_exclude,
-      })
-      const before = await files({
-        directory: created.directory,
-      })
-      const abort = new AbortController()
-      const run_ref = run.id
-      const entry: Task = {
-        key: key_id,
-        abort,
-        session_id: null,
-        done: Promise.resolve(),
-      }
-      const graph_seams: {
-        agent?: WorkflowGraphRun.AgentSeam
-        script?: WorkflowGraphRun.ScriptSeam
-      } = {
-        agent:
-          all.agent ??
-          (all.execute
-            ? async (value: GraphAgentInput) => {
-                await all.execute?.({
-                  run: read(run_ref),
-                  workflow_id: value.workflow_id,
-                  session_id: value.session_id,
-                  workspace_id: value.workspace_id,
-                  directory: value.directory,
-                  phase: "initial",
-                  attempt: 0,
-                  prompt: value.prompt,
-                  abort: value.abort,
-                })
-                return {
-                  structured: null,
-                }
-              }
-            : undefined),
-        script: all.script,
-      }
-      state().tasks.set(run_ref, entry)
-      const done = (async () => {
-        try {
-          if (read(run_ref).status === "queued") {
-            transition({
-              id: run_ref,
-              to: "running",
-            })
-          }
-
-          const result = await WorkflowGraphRun.execute({
-            run_id: run_ref,
-            workflow: prepared.workflow,
-            directory: created.directory,
-            workspace_id,
-            nodes,
-            prepared,
-            abort: abort.signal,
-            seams: graph_seams,
-            on_session: (value) => {
-              entry.session_id = value
-            },
-          })
-
-          if (abort.signal.aborted || read(run_ref).status === "canceled") return
-
-          if (read(run_ref).status === "running") {
-            transition({
-              id: run_ref,
-              to: "validating",
-            })
-          }
-
-          if (result.outcome === "failure") {
-            fail(run_ref, "workflow_failed")
-            return
-          }
-
-          if (result.outcome === "node_failed") {
-            fail(run_ref, "node_execution_failed")
-            return
-          }
-
-          const classify = all.classify ?? classify_default
-          const result_value = classification_result.parse(
-            await classify({
-              run: read(run_ref),
-              workflow_id: prepared.workflow.id,
-              session_id: session.id,
-              workspace_id,
-              directory: created.directory,
-              before,
-            }),
-          )
-
-          const root_after = await files({
-            directory: Instance.directory,
-            exclude: root_exclude,
-          })
-          const escaped = changed(root_before, root_after)
-          if (escaped.length > 0) {
-            fail(run_ref, "workspace_policy_blocked")
-            return
-          }
-
-          if (!result_value.changed_paths.length) {
-            const done = transition({
-              id: run_ref,
-              to: "completed_no_change",
-            })
-            publish_outcome(done.id)
-            return
-          }
-
-          const done = transition({
-            id: run_ref,
-            to: "ready_for_integration",
-          })
-
-          RuntimeRun.candidate({
-            id: run_ref,
-            integration_candidate_base_change_id: result_value.base_change_id ?? null,
-            integration_candidate_change_ids: result_value.change_ids ?? [],
-            integration_candidate_changed_paths: result_value.changed_paths,
-          })
-
-          queue_touch()
-          publish_outcome(done.id)
-        } catch (error) {
-          if (error instanceof NotFoundError) return
-          if (abort.signal.aborted || read(run_ref).status === "canceled") return
-          if (error instanceof RuntimeWorkflowValidationError) {
-            fail(run_ref, "validation_error")
-            return
-          }
-          fail(run_ref, "manual_start_failed")
-        }
-      })().finally(async () => {
-        await finalize_cleanup({
-          run_id: run_ref,
-          adapter,
-          workspace: created,
-        }).catch(() => undefined)
-        state().tasks.delete(run_ref)
-        state().keys.delete(key_id)
-      })
-      entry.done = done
-      task = true
-
-      return present(read(run_ref))
-    } catch (error) {
-      if (run) {
-        fail(run.id, "manual_start_failed")
-        await finalize_cleanup({
-          run_id: run.id,
-          adapter,
-          workspace: {
-            name: adapter.workspace.name(run.id),
-            root: path.dirname(adapter.workspace.path(run.id)),
-            directory: adapter.workspace.path(run.id),
-          },
-        }).catch(() => undefined)
-      }
-      throw error
-    } finally {
-      if (!run && session_id) {
-        await Session.remove(session_id).catch(() => undefined)
-      }
-      if (!run && prepared) {
-        await WorkflowGraphRun.cleanup_materials(prepared.material_root).catch(() => undefined)
-      }
-      if (!task) state().keys.delete(key_id)
-    }
+      },
+      seeds: input.seeds,
+      seams,
+      cleanup_materials_on_fail: true,
+      checkpoint_id: input.checkpoint_id ?? null,
+      run_id,
+    })
   }
 
   export function get(value: z.input<typeof ControlInput>) {
@@ -1115,6 +1225,7 @@ export namespace WorkflowAutoRun {
       const session = await Session.createNext({
         directory: run_workspace_directory,
         title: `Workflow: ${input.workflow.name}`,
+        workspaceID: workspace_id,
       })
       session_id = session.id
 

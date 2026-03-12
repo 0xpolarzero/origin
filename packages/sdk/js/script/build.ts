@@ -56,12 +56,42 @@ const normalizeWorkflowStepRefs = (value: unknown, aliases: Set<string>): unknow
   )
 }
 
+const escape = (value: string) => value.replaceAll("~", "~0").replaceAll("/", "~1")
+
+const normalizeSchemaRefs = (value: unknown, path: string[] = [], defs = new Map<string, string>()): unknown => {
+  if (Array.isArray(value)) return value.map((item, index) => normalizeSchemaRefs(item, [...path, `${index}`], defs))
+  if (!value || typeof value !== "object") return value
+
+  const current = value as Record<string, unknown>
+  const next = new Map(defs)
+  const local = current.$defs
+  if (local && typeof local === "object" && !Array.isArray(local)) {
+    Object.keys(local).forEach((key) => {
+      if (!/^__schema\d+$/.test(key)) return
+      next.set(key, `#/${[...path, "$defs", key].map(escape).join("/")}`)
+    })
+  }
+
+  const ref = typeof current.$ref === "string" ? current.$ref : undefined
+  const alias = ref?.match(/^#\/components\/schemas\/(__schema\d+)$/)?.[1]
+  if (alias && next.has(alias)) {
+    return {
+      ...current,
+      $ref: next.get(alias)!,
+    }
+  }
+
+  return Object.fromEntries(Object.entries(current).map(([key, item]) => [key, normalizeSchemaRefs(item, [...path, key], next)]))
+}
+
 const openapi = (await Bun.file("./openapi.json").json()) as {
   components?: {
     schemas?: Record<string, unknown>
   }
 }
-const normalized = normalizeWorkflowStepRefs(openapi, collectWorkflowStepAliases(openapi)) as typeof openapi
+const normalized = normalizeSchemaRefs(
+  normalizeWorkflowStepRefs(openapi, collectWorkflowStepAliases(openapi)),
+) as typeof openapi
 
 await Bun.write("./openapi.json", JSON.stringify(normalized, null, 2) + "\n")
 

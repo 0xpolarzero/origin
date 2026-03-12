@@ -2710,6 +2710,28 @@ export type ExperimentalWorkspaceRemoveResponses = {
 export type ExperimentalWorkspaceRemoveResponse =
   ExperimentalWorkspaceRemoveResponses[keyof ExperimentalWorkspaceRemoveResponses]
 
+export type PostExperimentalWorkspaceIdData = {
+  body?: {
+    branch?: string | null
+    config: {
+      type: "worktree"
+      directory: string
+    }
+  }
+  path: {
+    id: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/workspace/{id}"
+}
+
+export type PostExperimentalWorkspaceIdResponses = {
+  200: unknown
+}
+
 export type WorktreeRemoveData = {
   body?: WorktreeRemoveInput
   path?: never
@@ -4535,6 +4557,70 @@ export type WorkflowDebugReportCreateResponses = {
 export type WorkflowDebugReportCreateResponse =
   WorkflowDebugReportCreateResponses[keyof WorkflowDebugReportCreateResponses]
 
+export type WorkflowHistoryEditsData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    cursor?: string
+    limit?: number
+  }
+  url: "/workflow/history/edits"
+}
+
+export type WorkflowHistoryEditsResponses = {
+  /**
+   * Workflow edit history page
+   */
+  200: {
+    items: Array<{
+      edit: {
+        id: string
+        project_id: string
+        workflow_id: string
+        workflow_revision_id: string
+        previous_workflow_revision_id: string | null
+        session_id: string | null
+        action: "builder" | "node_edit" | "graph_edit" | "duplicate" | "hide"
+        node_id: string | null
+        note: string | null
+        created_at: number
+        updated_at: number
+      }
+      revision: {
+        id: string
+        project_id: string
+        workflow_id: string
+        file: string
+        content_hash: string
+        canonical_text: string
+        created_at: number
+        updated_at: number
+      }
+      previous_revision: {
+        id: string
+        project_id: string
+        workflow_id: string
+        file: string
+        content_hash: string
+        canonical_text: string
+        created_at: number
+        updated_at: number
+      } | null
+      diff: string
+      session: {
+        id: string
+        title: string
+        directory: string
+      } | null
+    }>
+    next_cursor: string | null
+  }
+}
+
+export type WorkflowHistoryEditsResponse = WorkflowHistoryEditsResponses[keyof WorkflowHistoryEditsResponses]
+
 export type WorkflowHistoryRunsData = {
   body?: never
   path?: never
@@ -5111,6 +5197,633 @@ export type WorkflowDraftsSendResponses = {
 
 export type WorkflowDraftsSendResponse = WorkflowDraftsSendResponses[keyof WorkflowDraftsSendResponses]
 
+export type WorkflowBuildData = {
+  body?: {
+    prompt: string
+    name?: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/workflows/build"
+}
+
+export type WorkflowBuildErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Conflict
+   */
+  409: ConflictError
+}
+
+export type WorkflowBuildError = WorkflowBuildErrors[keyof WorkflowBuildErrors]
+
+export type WorkflowBuildResponses = {
+  /**
+   * Builder workflow created
+   */
+  200: {
+    workflow_id: string
+    file: string
+    session_id: string
+  }
+}
+
+export type WorkflowBuildResponse = WorkflowBuildResponses[keyof WorkflowBuildResponses]
+
+export type WorkflowCopyData = {
+  body?: {
+    name?: string
+  }
+  path: {
+    workflow_id: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/workflows/{workflow_id}/copy"
+}
+
+export type WorkflowCopyErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Conflict
+   */
+  409: ConflictError
+}
+
+export type WorkflowCopyError = WorkflowCopyErrors[keyof WorkflowCopyErrors]
+
+export type WorkflowCopyResponses = {
+  /**
+   * Workflow duplicated
+   */
+  200: {
+    workflow_id: string
+    file: string
+  }
+}
+
+export type WorkflowCopyResponse = WorkflowCopyResponses[keyof WorkflowCopyResponses]
+
+export type WorkflowHideData = {
+  body?: {
+    [key: string]: unknown
+  }
+  path: {
+    workflow_id: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/workflows/{workflow_id}/hide"
+}
+
+export type WorkflowHideErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Conflict
+   */
+  409: ConflictError
+}
+
+export type WorkflowHideError = WorkflowHideErrors[keyof WorkflowHideErrors]
+
+export type WorkflowHideResponses = {
+  /**
+   * Workflow hidden
+   */
+  200: {
+    workflow_id: string
+    hidden: true
+    file: string
+    target: string
+  }
+}
+
+export type WorkflowHideResponse = WorkflowHideResponses[keyof WorkflowHideResponses]
+
+export type WorkflowListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/workflows"
+}
+
+export type WorkflowListResponses = {
+  /**
+   * Workflow summaries
+   */
+  200: {
+    items: Array<{
+      id: string
+      file: string
+      name: string
+      description?: string
+      runnable: boolean
+      errors: Array<{
+        code:
+          | "yaml_parse_error"
+          | "schema_invalid"
+          | "schema_version_unsupported"
+          | "workspace_capability_blocked"
+          | "node_kind_unsupported"
+          | "node_id_duplicate"
+          | "input_shape_invalid"
+          | "input_key_duplicate"
+          | "input_ref_invalid"
+          | "resource_missing"
+          | "resource_kind_unsupported"
+          | "resource_kind_mismatch"
+          | "local_resource_missing"
+          | "local_resource_outside_workflow"
+          | "condition_ref_invalid"
+          | "reference_broken_link"
+          | "resource_not_runnable"
+          | "resource_id_duplicate"
+          | "workflow_id_duplicate"
+          | "workflow_missing"
+          | "workflow_not_runnable"
+        path: string
+        message: string
+      }>
+      trigger_summary: string
+      last_run: {
+        id: string
+        status: string
+        created_at: number
+        started_at: number | null
+        finished_at: number | null
+      } | null
+      last_edit: {
+        created_at: number
+        action: "builder" | "node_edit" | "graph_edit" | "duplicate" | "hide"
+        note: string | null
+      } | null
+    }>
+  }
+}
+
+export type WorkflowListResponse = WorkflowListResponses[keyof WorkflowListResponses]
+
+export type WorkflowSaveData = {
+  body?: {
+    workflow: {
+      schema_version: 2
+      id: string
+      name: string
+      description?: string
+      trigger: {
+        type: "manual"
+      }
+      inputs?: Array<
+        | {
+            key: string
+            type: "text"
+            label: string
+            required: boolean
+            default?: string
+          }
+        | {
+            key: string
+            type: "long_text"
+            label: string
+            required: boolean
+            default?: string
+          }
+        | {
+            key: string
+            type: "number"
+            label: string
+            required: boolean
+            default?: number
+          }
+        | {
+            key: string
+            type: "boolean"
+            label: string
+            required: boolean
+            default?: boolean
+          }
+        | {
+            key: string
+            type: "select"
+            label: string
+            required: boolean
+            default?: string | number | boolean | null
+            options: Array<{
+              label: string
+              value: string | number | boolean | null
+            }>
+          }
+        | {
+            key: string
+            type: "path"
+            label: string
+            required: boolean
+            default?: string
+            mode: "file" | "directory" | "either"
+          }
+      >
+      resources?: Array<
+        | {
+            id: string
+            source: "local"
+            kind: "script" | "prompt_template"
+            path: string
+          }
+        | {
+            id: string
+            source: "library"
+            kind: "script" | "prompt_template"
+            item_id: string
+          }
+      >
+      steps: Array<WorkflowStepView>
+    }
+    file?: string
+    resources?: {
+      [key: string]: string
+    }
+    action?: "builder" | "node_edit" | "graph_edit" | "duplicate" | "hide"
+    session_id?: string | null
+    node_id?: string | null
+    note?: string | null
+  }
+  path: {
+    workflow_id: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/workflows/{workflow_id}"
+}
+
+export type WorkflowSaveErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Conflict
+   */
+  409: ConflictError
+}
+
+export type WorkflowSaveError = WorkflowSaveErrors[keyof WorkflowSaveErrors]
+
+export type WorkflowSaveResponses = {
+  /**
+   * Workflow detail
+   */
+  200: {
+    item: {
+      file: string
+      id: string
+      workflow?: {
+        schema_version: 2
+        id: string
+        name: string
+        description?: string
+        trigger: {
+          type: "manual"
+        }
+        inputs?: Array<
+          | {
+              key: string
+              type: "text"
+              label: string
+              required: boolean
+              default?: string
+            }
+          | {
+              key: string
+              type: "long_text"
+              label: string
+              required: boolean
+              default?: string
+            }
+          | {
+              key: string
+              type: "number"
+              label: string
+              required: boolean
+              default?: number
+            }
+          | {
+              key: string
+              type: "boolean"
+              label: string
+              required: boolean
+              default?: boolean
+            }
+          | {
+              key: string
+              type: "select"
+              label: string
+              required: boolean
+              default?: string | number | boolean | null
+              options: Array<{
+                label: string
+                value: string | number | boolean | null
+              }>
+            }
+          | {
+              key: string
+              type: "path"
+              label: string
+              required: boolean
+              default?: string
+              mode: "file" | "directory" | "either"
+            }
+        >
+        resources?: Array<
+          | {
+              id: string
+              source: "local"
+              kind: "script" | "prompt_template"
+              path: string
+            }
+          | {
+              id: string
+              source: "library"
+              kind: "script" | "prompt_template"
+              item_id: string
+            }
+        >
+        steps: Array<WorkflowStepView>
+      }
+      errors: Array<{
+        code:
+          | "yaml_parse_error"
+          | "schema_invalid"
+          | "schema_version_unsupported"
+          | "workspace_capability_blocked"
+          | "node_kind_unsupported"
+          | "node_id_duplicate"
+          | "input_shape_invalid"
+          | "input_key_duplicate"
+          | "input_ref_invalid"
+          | "resource_missing"
+          | "resource_kind_unsupported"
+          | "resource_kind_mismatch"
+          | "local_resource_missing"
+          | "local_resource_outside_workflow"
+          | "condition_ref_invalid"
+          | "reference_broken_link"
+          | "resource_not_runnable"
+          | "resource_id_duplicate"
+          | "workflow_id_duplicate"
+          | "workflow_missing"
+          | "workflow_not_runnable"
+        path: string
+        message: string
+      }>
+      runnable: boolean
+    }
+    revision_head: {
+      id: string
+      project_id: string
+      workflow_id: string
+      file: string
+      content_hash: string
+      canonical_text: string
+      created_at: number
+      updated_at: number
+    } | null
+    resources: Array<
+      | {
+          id: string
+          source: "local"
+          kind: "script" | "prompt_template"
+          path: string
+          used_by: Array<string>
+          errors: Array<{
+            code:
+              | "yaml_parse_error"
+              | "schema_invalid"
+              | "schema_version_unsupported"
+              | "workspace_capability_blocked"
+              | "node_kind_unsupported"
+              | "node_id_duplicate"
+              | "input_shape_invalid"
+              | "input_key_duplicate"
+              | "input_ref_invalid"
+              | "resource_missing"
+              | "resource_kind_unsupported"
+              | "resource_kind_mismatch"
+              | "local_resource_missing"
+              | "local_resource_outside_workflow"
+              | "condition_ref_invalid"
+              | "reference_broken_link"
+              | "resource_not_runnable"
+              | "resource_id_duplicate"
+              | "workflow_id_duplicate"
+              | "workflow_missing"
+              | "workflow_not_runnable"
+            path: string
+            message: string
+          }>
+        }
+      | {
+          id: string
+          source: "library"
+          kind: "script" | "prompt_template"
+          item_id: string
+          used_by: Array<string>
+          errors: Array<{
+            code:
+              | "yaml_parse_error"
+              | "schema_invalid"
+              | "schema_version_unsupported"
+              | "workspace_capability_blocked"
+              | "node_kind_unsupported"
+              | "node_id_duplicate"
+              | "input_shape_invalid"
+              | "input_key_duplicate"
+              | "input_ref_invalid"
+              | "resource_missing"
+              | "resource_kind_unsupported"
+              | "resource_kind_mismatch"
+              | "local_resource_missing"
+              | "local_resource_outside_workflow"
+              | "condition_ref_invalid"
+              | "reference_broken_link"
+              | "resource_not_runnable"
+              | "resource_id_duplicate"
+              | "workflow_id_duplicate"
+              | "workflow_missing"
+              | "workflow_not_runnable"
+            path: string
+            message: string
+          }>
+        }
+    >
+    runs: Array<{
+      id: string
+      status: string
+      trigger_type: string
+      workflow_id: string | null
+      workspace_id: string
+      session_id: string | null
+      reason_code: string | null
+      failure_code: string | null
+      trigger_metadata: {
+        [key: string]: unknown
+      } | null
+      ready_for_integration_at: number | null
+      created_at: number
+      updated_at: number
+      started_at: number | null
+      finished_at: number | null
+      operation_id: string | null
+      operation_exists: boolean
+      duplicate_event: {
+        reason: boolean
+        failure: boolean
+      }
+      debug: boolean
+      snapshot_id: string | null
+      workflow_revision_id: string | null
+    }>
+  }
+}
+
+export type WorkflowSaveResponse = WorkflowSaveResponses[keyof WorkflowSaveResponses]
+
+export type WorkflowSessionOpenData = {
+  body?: {
+    role: "builder" | "node_edit"
+    node_id?: string
+    title?: string
+    text?: string
+  }
+  path: {
+    workflow_id: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/workflows/{workflow_id}/session"
+}
+
+export type WorkflowSessionOpenErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Conflict
+   */
+  409: ConflictError
+}
+
+export type WorkflowSessionOpenError = WorkflowSessionOpenErrors[keyof WorkflowSessionOpenErrors]
+
+export type WorkflowSessionOpenResponses = {
+  /**
+   * Workflow authoring session created
+   */
+  200: {
+    session_id: string
+  }
+}
+
+export type WorkflowSessionOpenResponse = WorkflowSessionOpenResponses[keyof WorkflowSessionOpenResponses]
+
+export type WorkflowHistoryGetData = {
+  body?: never
+  path: {
+    workflow_id: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+    cursor?: string
+    limit?: number
+  }
+  url: "/workflow/workflows/{workflow_id}/history"
+}
+
+export type WorkflowHistoryGetErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type WorkflowHistoryGetError = WorkflowHistoryGetErrors[keyof WorkflowHistoryGetErrors]
+
+export type WorkflowHistoryGetResponses = {
+  /**
+   * Workflow history page
+   */
+  200: {
+    items: Array<{
+      edit: {
+        id: string
+        project_id: string
+        workflow_id: string
+        workflow_revision_id: string
+        previous_workflow_revision_id: string | null
+        session_id: string | null
+        action: "builder" | "node_edit" | "graph_edit" | "duplicate" | "hide"
+        node_id: string | null
+        note: string | null
+        created_at: number
+        updated_at: number
+      }
+      revision: {
+        id: string
+        project_id: string
+        workflow_id: string
+        file: string
+        content_hash: string
+        canonical_text: string
+        created_at: number
+        updated_at: number
+      }
+      previous_revision: {
+        id: string
+        project_id: string
+        workflow_id: string
+        file: string
+        content_hash: string
+        canonical_text: string
+        created_at: number
+        updated_at: number
+      } | null
+      diff: string
+      session: {
+        id: string
+        title: string
+        directory: string
+      } | null
+    }>
+    next_cursor: string | null
+  }
+}
+
+export type WorkflowHistoryGetResponse = WorkflowHistoryGetResponses[keyof WorkflowHistoryGetResponses]
+
 export type WorkflowDetailGetData = {
   body?: never
   path: {
@@ -5565,7 +6278,7 @@ export type WorkflowRunDetailGetResponses = {
         session: {
           link: {
             session_id: string
-            role: "execution_node" | "run_followup"
+            role: "execution_node" | "run_followup" | "builder" | "node_edit"
             visibility: "hidden" | "visible"
             run_id: string | null
             run_node_id: string | null
@@ -5597,7 +6310,7 @@ export type WorkflowRunDetailGetResponses = {
     followup: {
       link: {
         session_id: string
-        role: "execution_node" | "run_followup"
+        role: "execution_node" | "run_followup" | "builder" | "node_edit"
         visibility: "hidden" | "visible"
         run_id: string | null
         run_node_id: string | null
@@ -5617,6 +6330,71 @@ export type WorkflowRunDetailGetResponses = {
 
 export type WorkflowRunDetailGetResponse = WorkflowRunDetailGetResponses[keyof WorkflowRunDetailGetResponses]
 
+export type WorkflowRunRerunData = {
+  body?: {
+    node_id?: string
+  }
+  path: {
+    run_id: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/runs/{run_id}/rerun"
+}
+
+export type WorkflowRunRerunErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+  /**
+   * Conflict
+   */
+  409: ConflictError
+}
+
+export type WorkflowRunRerunError = WorkflowRunRerunErrors[keyof WorkflowRunRerunErrors]
+
+export type WorkflowRunRerunResponses = {
+  /**
+   * Manual run started
+   */
+  200: {
+    id: string
+    status: string
+    trigger_type: string
+    workflow_id: string | null
+    workspace_id: string
+    session_id: string | null
+    run_workspace_root: string | null
+    run_workspace_directory: string | null
+    ready_for_integration_at: number | null
+    reason_code: string | null
+    failure_code: string | null
+    trigger_metadata: {
+      [key: string]: unknown
+    } | null
+    cleanup_failed: boolean
+    created_at: number
+    updated_at: number
+    started_at: number | null
+    finished_at: number | null
+    integration_candidate: {
+      base_change_id: string | null
+      change_ids: Array<string>
+      changed_paths: Array<string>
+    } | null
+  }
+}
+
+export type WorkflowRunRerunResponse = WorkflowRunRerunResponses[keyof WorkflowRunRerunResponses]
+
 export type WorkflowSessionLinkGetData = {
   body?: never
   path: {
@@ -5635,7 +6413,7 @@ export type WorkflowSessionLinkGetResponses = {
    */
   200: {
     session_id: string
-    role: "execution_node" | "run_followup"
+    role: "execution_node" | "run_followup" | "builder" | "node_edit"
     visibility: "hidden" | "visible"
     run_id: string | null
     run_node_id: string | null
@@ -6237,6 +7015,7 @@ export type LibraryListResponses = {
     }>
     runnable: boolean
     used_by: Array<string>
+    last_edited_at: number | null
   }>
 }
 
@@ -6287,6 +7066,373 @@ export type LibraryKnowledgeImportResponses = {
 }
 
 export type LibraryKnowledgeImportResponse = LibraryKnowledgeImportResponses[keyof LibraryKnowledgeImportResponses]
+
+export type LibraryItemDeleteData = {
+  body?: never
+  path: {
+    item_id: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/library/items/{item_id}"
+}
+
+export type LibraryItemDeleteErrors = {
+  /**
+   * Not found
+   */
+  404: NotFoundError
+  /**
+   * Conflict
+   */
+  409: ConflictError
+}
+
+export type LibraryItemDeleteError = LibraryItemDeleteErrors[keyof LibraryItemDeleteErrors]
+
+export type LibraryItemDeleteResponses = {
+  /**
+   * Delete result
+   */
+  200: {
+    deleted: true
+  }
+}
+
+export type LibraryItemDeleteResponse = LibraryItemDeleteResponses[keyof LibraryItemDeleteResponses]
+
+export type LibraryItemDetailData = {
+  body?: never
+  path: {
+    item_id: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/library/items/{item_id}"
+}
+
+export type LibraryItemDetailErrors = {
+  /**
+   * Not found
+   */
+  404: NotFoundError
+  /**
+   * Conflict
+   */
+  409: ConflictError
+}
+
+export type LibraryItemDetailError = LibraryItemDetailErrors[keyof LibraryItemDetailErrors]
+
+export type LibraryItemDetailResponses = {
+  /**
+   * Library item detail
+   */
+  200: {
+    item: {
+      file: string
+      id: string
+      resource?:
+        | {
+            schema_version: 1
+            id: string
+            name?: string
+            kind: "query"
+            query: string
+            links?: Array<string>
+          }
+        | {
+            schema_version: 1
+            id: string
+            name?: string
+            kind: "script"
+            script: string
+            links?: Array<string>
+          }
+        | {
+            schema_version: 1
+            id: string
+            name?: string
+            kind: "prompt_template"
+            template: string
+            links?: Array<string>
+          }
+      errors: Array<{
+        code:
+          | "yaml_parse_error"
+          | "schema_invalid"
+          | "schema_version_unsupported"
+          | "workspace_capability_blocked"
+          | "node_kind_unsupported"
+          | "node_id_duplicate"
+          | "input_shape_invalid"
+          | "input_key_duplicate"
+          | "input_ref_invalid"
+          | "resource_missing"
+          | "resource_kind_unsupported"
+          | "resource_kind_mismatch"
+          | "local_resource_missing"
+          | "local_resource_outside_workflow"
+          | "condition_ref_invalid"
+          | "reference_broken_link"
+          | "resource_not_runnable"
+          | "resource_id_duplicate"
+          | "workflow_id_duplicate"
+          | "workflow_missing"
+          | "workflow_not_runnable"
+        path: string
+        message: string
+      }>
+      runnable: boolean
+      used_by: Array<string>
+      last_edited_at: number | null
+    }
+    revision_head: {
+      id: string
+      project_id: string
+      item_id: string
+      file: string
+      content_hash: string
+      canonical_text: string
+      created_at: number
+      updated_at: number
+    } | null
+    canonical_text: string
+    used_by: Array<{
+      workflow_id: string
+      name: string
+      file: string
+    }>
+  }
+}
+
+export type LibraryItemDetailResponse = LibraryItemDetailResponses[keyof LibraryItemDetailResponses]
+
+export type LibraryItemSaveData = {
+  body?: {
+    text: string
+  }
+  path: {
+    item_id: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/library/items/{item_id}"
+}
+
+export type LibraryItemSaveErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+  /**
+   * Conflict
+   */
+  409: ConflictError
+}
+
+export type LibraryItemSaveError = LibraryItemSaveErrors[keyof LibraryItemSaveErrors]
+
+export type LibraryItemSaveResponses = {
+  /**
+   * Library item detail
+   */
+  200: {
+    item: {
+      file: string
+      id: string
+      resource?:
+        | {
+            schema_version: 1
+            id: string
+            name?: string
+            kind: "query"
+            query: string
+            links?: Array<string>
+          }
+        | {
+            schema_version: 1
+            id: string
+            name?: string
+            kind: "script"
+            script: string
+            links?: Array<string>
+          }
+        | {
+            schema_version: 1
+            id: string
+            name?: string
+            kind: "prompt_template"
+            template: string
+            links?: Array<string>
+          }
+      errors: Array<{
+        code:
+          | "yaml_parse_error"
+          | "schema_invalid"
+          | "schema_version_unsupported"
+          | "workspace_capability_blocked"
+          | "node_kind_unsupported"
+          | "node_id_duplicate"
+          | "input_shape_invalid"
+          | "input_key_duplicate"
+          | "input_ref_invalid"
+          | "resource_missing"
+          | "resource_kind_unsupported"
+          | "resource_kind_mismatch"
+          | "local_resource_missing"
+          | "local_resource_outside_workflow"
+          | "condition_ref_invalid"
+          | "reference_broken_link"
+          | "resource_not_runnable"
+          | "resource_id_duplicate"
+          | "workflow_id_duplicate"
+          | "workflow_missing"
+          | "workflow_not_runnable"
+        path: string
+        message: string
+      }>
+      runnable: boolean
+      used_by: Array<string>
+      last_edited_at: number | null
+    }
+    revision_head: {
+      id: string
+      project_id: string
+      item_id: string
+      file: string
+      content_hash: string
+      canonical_text: string
+      created_at: number
+      updated_at: number
+    } | null
+    canonical_text: string
+    used_by: Array<{
+      workflow_id: string
+      name: string
+      file: string
+    }>
+  }
+}
+
+export type LibraryItemSaveResponse = LibraryItemSaveResponses[keyof LibraryItemSaveResponses]
+
+export type LibraryItemHistoryData = {
+  body?: never
+  path: {
+    item_id: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+    cursor?: string
+    limit?: number
+  }
+  url: "/library/items/{item_id}/history"
+}
+
+export type LibraryItemHistoryErrors = {
+  /**
+   * Not found
+   */
+  404: NotFoundError
+  /**
+   * Conflict
+   */
+  409: ConflictError
+}
+
+export type LibraryItemHistoryError = LibraryItemHistoryErrors[keyof LibraryItemHistoryErrors]
+
+export type LibraryItemHistoryResponses = {
+  /**
+   * Library item history
+   */
+  200: {
+    items: Array<{
+      revision: {
+        id: string
+        project_id: string
+        item_id: string
+        file: string
+        content_hash: string
+        canonical_text: string
+        created_at: number
+        updated_at: number
+      }
+      previous_revision: {
+        id: string
+        project_id: string
+        item_id: string
+        file: string
+        content_hash: string
+        canonical_text: string
+        created_at: number
+        updated_at: number
+      } | null
+      diff: string
+    }>
+    next_cursor: string | null
+  }
+}
+
+export type LibraryItemHistoryResponse = LibraryItemHistoryResponses[keyof LibraryItemHistoryResponses]
+
+export type LibraryItemCopyData = {
+  body?: {
+    workflow_id: string
+  }
+  path: {
+    item_id: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/library/items/{item_id}/copy"
+}
+
+export type LibraryItemCopyErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+  /**
+   * Conflict
+   */
+  409: ConflictError
+}
+
+export type LibraryItemCopyError = LibraryItemCopyErrors[keyof LibraryItemCopyErrors]
+
+export type LibraryItemCopyResponses = {
+  /**
+   * Copy result
+   */
+  200: {
+    workflow_id: string
+    resources: Array<{
+      id: string
+      path: string
+    }>
+  }
+}
+
+export type LibraryItemCopyResponse = LibraryItemCopyResponses[keyof LibraryItemCopyResponses]
 
 export type FindTextData = {
   body?: never

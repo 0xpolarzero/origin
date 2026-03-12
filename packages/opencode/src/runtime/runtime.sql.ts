@@ -22,6 +22,7 @@ import {
   run_trigger_type_values,
   session_link_role_values,
   session_link_visibility_values,
+  workflow_edit_action_values,
 } from "./contract"
 
 const Timestamps = {
@@ -89,6 +90,50 @@ export const WorkflowRevisionTable = sqliteTable(
   (table) => [
     index("workflow_revision_project_workflow_created_idx").on(table.project_id, table.workflow_id, table.created_at, table.id),
     index("workflow_revision_project_hash_idx").on(table.project_id, table.content_hash),
+  ],
+)
+
+export const LibraryRevisionTable = sqliteTable(
+  "library_revision",
+  {
+    id: text().primaryKey(),
+    project_id: text()
+      .notNull()
+      .references(() => ProjectTable.id, { onDelete: "cascade" }),
+    item_id: text().notNull(),
+    file: text().notNull(),
+    content_hash: text().notNull(),
+    canonical_text: text().notNull(),
+    ...Timestamps,
+  },
+  (table) => [
+    index("library_revision_project_item_created_idx").on(table.project_id, table.item_id, table.created_at, table.id),
+    index("library_revision_project_hash_idx").on(table.project_id, table.content_hash),
+  ],
+)
+
+export const WorkflowEditTable = sqliteTable(
+  "workflow_edit",
+  {
+    id: text().primaryKey(),
+    project_id: text()
+      .notNull()
+      .references(() => ProjectTable.id, { onDelete: "cascade" }),
+    workflow_id: text().notNull(),
+    workflow_revision_id: text()
+      .notNull()
+      .references(() => WorkflowRevisionTable.id, { onDelete: "cascade" }),
+    previous_workflow_revision_id: text().references((): AnySQLiteColumn => WorkflowRevisionTable.id, { onDelete: "set null" }),
+    session_id: text().references(() => SessionTable.id, { onDelete: "set null" }),
+    action: text({ enum: workflow_edit_action_values }).notNull(),
+    node_id: text(),
+    note: text(),
+    ...Timestamps,
+  },
+  (table) => [
+    index("workflow_edit_project_workflow_created_idx").on(table.project_id, table.workflow_id, table.created_at, table.id),
+    index("workflow_edit_revision_idx").on(table.workflow_revision_id),
+    index("workflow_edit_session_idx").on(table.session_id, table.created_at),
   ],
 )
 

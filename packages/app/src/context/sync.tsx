@@ -3,6 +3,7 @@ import { createStore, produce, reconcile } from "solid-js/store"
 import { Binary } from "@opencode-ai/util/binary"
 import { retry } from "@opencode-ai/util/retry"
 import { createSimpleContext } from "@opencode-ai/ui/context"
+import { loadWorkflowSessionLink } from "@/pages/graph-detail-data"
 import { useGlobalSync } from "./global-sync"
 import { useSDK } from "./sdk"
 import type { Message, Part } from "@opencode-ai/sdk/v2/client"
@@ -108,6 +109,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
     const messagePageSize = 200
     const inflight = new Map<string, Promise<void>>()
     const inflightDiff = new Map<string, Promise<void>>()
+    const inflightHidden = new Map<string, Promise<void>>()
     const inflightTodo = new Map<string, Promise<void>>()
     const maxDirs = 30
     const seen = new Map<string, Set<string>>()
@@ -225,6 +227,23 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         })
     }
 
+    const loadHidden = async (input: {
+      directory: string
+      setStore: Setter
+      sessionID: string
+    }) => {
+      const key = keyFor(input.directory, `hidden:${input.sessionID}`)
+      return runInflight(inflightHidden, key, async () => {
+        const link = await loadWorkflowSessionLink({
+          baseUrl: sdk.url,
+          directory: input.directory,
+          session_id: input.sessionID,
+        }).catch(() => null)
+        if (!tracked(input.directory, input.sessionID)) return
+        input.setStore("session_hidden", input.sessionID, link?.visibility === "hidden")
+      })
+    }
+
     return {
       get data() {
         return current()[0]
@@ -289,7 +308,10 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
 
           touch(directory, setStore, sessionID)
 
-          if (store.message[sessionID] !== undefined && hasSession && meta.limit[key] !== undefined) return
+          if (store.message[sessionID] !== undefined && hasSession && meta.limit[key] !== undefined) {
+            await loadHidden({ directory, setStore, sessionID })
+            return
+          }
 
           const limit = meta.limit[key] ?? messagePageSize
 
@@ -320,7 +342,9 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             limit,
           })
 
-          return runInflight(inflight, key, () => Promise.all([sessionReq, messagesReq]).then(() => {}))
+          return runInflight(inflight, key, () =>
+            Promise.all([sessionReq, messagesReq, loadHidden({ directory, setStore, sessionID })]).then(() => {}),
+          )
         },
         async diff(sessionID: string) {
           const directory = sdk.directory

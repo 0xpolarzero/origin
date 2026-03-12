@@ -11,7 +11,7 @@ import {
   Show,
   untrack,
 } from "solid-js"
-import { useNavigate, useParams } from "@solidjs/router"
+import { useLocation, useNavigate, useParams } from "@solidjs/router"
 import { useLayout, LocalProject } from "@/context/layout"
 import { useGlobalSync } from "@/context/global-sync"
 import { Persist, persisted } from "@/utils/persist"
@@ -93,6 +93,39 @@ import { workspaceOpenState } from "./layout/sidebar-workspace-helpers"
 import { ProjectDragOverlay, SortableProject, type ProjectSidebarContext } from "./layout/sidebar-project"
 import { SidebarContent } from "./layout/sidebar-shell"
 
+type View = "sessions" | "workflows" | "library" | "runs" | "history"
+
+const views = [
+  { id: "sessions" as const, label: "Sessions" },
+  { id: "workflows" as const, label: "Workflows" },
+  { id: "library" as const, label: "Library" },
+  { id: "runs" as const, label: "Runs" },
+  { id: "history" as const, label: "History" },
+]
+
+function ShellLoading(props: { title: string; note: string }) {
+  return (
+    <div data-component="shell-loading" class="size-full p-6">
+      <div class="mx-auto flex h-full w-full max-w-3xl items-center justify-center">
+        <div class="w-full max-w-lg rounded-2xl border border-border-weak-base bg-background-base p-6 shadow-xs-border-base">
+          <div class="space-y-4">
+            <div class="flex items-center gap-3">
+              <div class="size-2.5 rounded-full bg-text-strong animate-pulse" />
+              <p class="text-14-medium text-text-strong">{props.title}</p>
+            </div>
+            <p class="text-13-regular text-text-weak">{props.note}</p>
+            <div class="space-y-2" aria-hidden="true">
+              <div class="h-2.5 w-3/4 rounded-full bg-background-stronger animate-pulse" />
+              <div class="h-2.5 w-full rounded-full bg-background-stronger animate-pulse [animation-delay:120ms]" />
+              <div class="h-2.5 w-2/3 rounded-full bg-background-stronger animate-pulse [animation-delay:240ms]" />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function Layout(props: ParentProps) {
   const [store, setStore, , ready] = persisted(
     Persist.global("layout.page", ["layout.page.v1"]),
@@ -113,6 +146,7 @@ export default function Layout(props: ParentProps) {
   let scrollContainerRef: HTMLDivElement | undefined
 
   const params = useParams()
+  const location = useLocation()
   const globalSDK = useGlobalSDK()
   const globalSync = useGlobalSync()
   const layout = useLayout()
@@ -139,6 +173,21 @@ export default function Layout(props: ParentProps) {
   }
   const colorSchemeLabel = (scheme: ColorScheme) => language.t(colorSchemeKey[scheme])
   const currentDir = createMemo(() => decode64(params.dir) ?? "")
+  const section = createMemo<View>(() => {
+    if (!params.dir) return "sessions"
+    const base = `/${params.dir}`
+    if (!location.pathname.startsWith(base)) return "sessions"
+    const first = location.pathname
+      .slice(base.length)
+      .split("/")
+      .filter(Boolean)[0]
+    if (!first || first === "session") return "sessions"
+    if (first === "workflows") return "workflows"
+    if (first === "library") return "library"
+    if (first === "runs") return "runs"
+    if (first === "history") return "history"
+    return "sessions"
+  })
   const protectedWorkspace = createMemo(() =>
     resolveGlobalWorkspaceDirectory({
       configured: settings.general.globalWorkspaceDirectory(),
@@ -2158,6 +2207,33 @@ export default function Layout(props: ParentProps) {
       if (project.vcs !== "git") return false
       return layout.sidebar.workspaces(project.worktree)()
     })
+    const here = createMemo(() => {
+      const project = panelProps.project
+      const dir = currentDir()
+      if (!project || !dir) return false
+      return workspaceIds(project).some((item) => workspaceKey(item) === workspaceKey(dir))
+    })
+    const dir = createMemo(() => {
+      const project = panelProps.project
+      if (!project) return ""
+      if (here()) return currentDir()
+      return project.worktree
+    })
+    const active = createMemo(() => (here() ? section() : ""))
+    const open = (view: View) => {
+      const project = panelProps.project
+      const next = dir()
+      if (!project || !next) return
+      layout.projects.open(project.worktree)
+      server.projects.touch(project.worktree)
+      if (view === "sessions") {
+        clearSidebarHoverState()
+        layout.mobileSidebar.hide()
+        void navigateToProject(next)
+        return
+      }
+      navigateWithSidebarReset(`/${base64Encode(next)}/${view}`)
+    }
     const homedir = createMemo(() => globalSync.data.path.home)
 
     return (
@@ -2262,6 +2338,26 @@ export default function Layout(props: ParentProps) {
               </div>
 
               <div class="flex-1 min-h-0 flex flex-col">
+                <div class="shrink-0 px-3 pb-1">
+                  <div class="grid grid-cols-2 gap-1 rounded-xl border border-border-weak-base bg-background-base p-1">
+                    <For each={views}>
+                      {(view) => (
+                        <Button
+                          size="small"
+                          variant={active() === view.id ? "secondary" : "ghost"}
+                          class="justify-start"
+                          data-component="sidebar-destination"
+                          data-view={view.id}
+                          data-current={active() === view.id ? "true" : "false"}
+                          aria-current={active() === view.id ? "page" : undefined}
+                          onClick={() => open(view.id)}
+                        >
+                          {view.label}
+                        </Button>
+                      )}
+                    </For>
+                  </div>
+                </div>
                 <Show
                   when={workspacesEnabled()}
                   fallback={
@@ -2523,7 +2619,10 @@ export default function Layout(props: ParentProps) {
                   "size-full overflow-x-hidden flex flex-col items-start contain-strict border-t border-border-weak-base bg-background-base xl:border-l xl:rounded-tl-[12px]": true,
                 }}
               >
-                <Show when={!autoselecting()} fallback={<div class="size-full" />}>
+                <Show
+                  when={!autoselecting()}
+                  fallback={<ShellLoading title="Loading workspace..." note="Preparing the current project shell." />}
+                >
                   {props.children}
                 </Show>
               </main>

@@ -6,6 +6,8 @@ export { WorkspaceTable } from "../control-plane/workspace.sql"
 export {
   RunTable,
   WorkflowRevisionTable,
+  LibraryRevisionTable,
+  WorkflowEditTable,
   RunSnapshotTable,
   RunNodeTable,
   RunAttemptTable,

@@ -80,32 +80,46 @@ test("library view renders non-runnable validation rows from backend list contra
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({
-          items: [
-            {
+        body: JSON.stringify([
+          {
+            id: "lib-invalid",
+            file: ".origin/library/summary-template.yaml",
+            resource: {
+              schema_version: 1,
               id: "lib-invalid",
-              kind: "prompt_template",
               name: "summary-template",
-              path: ".origin/library/summary-template.yaml",
-              runnable: false,
-              errors: [
-                {
-                  code: "library.kind_invalid",
-                  path: "kind",
-                  message: "Unsupported library kind for workspace type",
-                },
-              ],
+              kind: "prompt_template",
+              template: "Summarize {{input}}",
+              links: [],
             },
-            {
+            runnable: false,
+            used_by: [],
+            last_edited_at: null,
+            errors: [
+              {
+                code: "library.kind_invalid",
+                path: "kind",
+                message: "Unsupported library kind for workspace type",
+              },
+            ],
+          },
+          {
+            id: "lib-valid",
+            file: ".origin/library/fetch-open-items.yaml",
+            resource: {
+              schema_version: 1,
               id: "lib-valid",
-              kind: "query",
               name: "fetch-open-items",
-              path: ".origin/library/fetch-open-items.yaml",
-              runnable: true,
-              errors: [],
+              kind: "query",
+              query: "SELECT * FROM open_items",
+              links: [],
             },
-          ],
-        }),
+            runnable: true,
+            used_by: [],
+            last_edited_at: null,
+            errors: [],
+          },
+        ]),
       })
     }
 
@@ -113,21 +127,19 @@ test("library view renders non-runnable validation rows from backend list contra
     try {
       await page.goto(`/${slug}/library`)
 
-      const invalid = page.locator('[data-component="validation-resource-row"][data-id="lib-invalid"]')
+      const invalid = page.locator('[data-component="library-row"][data-id="lib-invalid"]')
       await expect(invalid).toBeVisible()
       await expect(invalid).toHaveAttribute("data-runnable", "false")
-      await expect(invalid.locator('[data-component="validation-state"]')).toHaveText("Non-runnable")
+      await expect(invalid).toContainText("Non-runnable")
 
-      const invalidError = invalid.locator('[data-component="validation-error-row"]').first()
-      await expect(invalidError).toBeVisible()
-      await expect(invalidError).toContainText("library.kind_invalid")
-      await expect(invalidError).toContainText("kind")
-      await expect(invalidError).toContainText("Unsupported library kind for workspace type")
+      await expect(invalid).toContainText("library.kind_invalid")
+      await expect(invalid).toContainText("kind")
+      await expect(invalid).toContainText("Unsupported library kind for workspace type")
 
-      const valid = page.locator('[data-component="validation-resource-row"][data-id="lib-valid"]')
+      const valid = page.locator('[data-component="library-row"][data-id="lib-valid"]')
       await expect(valid).toBeVisible()
       await expect(valid).toHaveAttribute("data-runnable", "true")
-      await expect(valid.locator('[data-component="validation-state"]')).toHaveText("Runnable")
+      await expect(valid).toContainText("Runnable")
     } finally {
       await page.unroute("**/library*", libraries)
     }

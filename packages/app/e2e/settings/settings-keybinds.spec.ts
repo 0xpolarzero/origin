@@ -298,14 +298,16 @@ test("changing terminal toggle keybind works", async ({ page, gotoSession }) => 
 
   await closeDialog(page, dialog)
 
-  const terminal = page.locator(terminalSelector)
-  await expect(terminal).not.toBeVisible()
+  const panel = page.locator("#terminal-panel")
+  const hidden = (await panel.getAttribute("aria-hidden")) ?? "true"
 
   await page.keyboard.press(`${modKey}+Y`)
-  await expect(terminal).toBeVisible()
+  await page.waitForTimeout(100)
+  await expect(panel).toHaveAttribute("aria-hidden", hidden === "true" ? "false" : "true")
 
   await page.keyboard.press(`${modKey}+Y`)
-  await expect(terminal).not.toBeVisible()
+  await page.waitForTimeout(100)
+  await expect(panel).toHaveAttribute("aria-hidden", hidden)
 })
 
 test("terminal toggle keybind persists after reload", async ({ page, gotoSession }) => {

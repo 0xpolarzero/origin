@@ -45,6 +45,23 @@ type Runtime = {
   outcome: "success" | "failure" | "noop" | "node_failed" | "canceled"
 }
 
+type ReplayPlan =
+  | {
+      node_id: string
+      status: "succeeded"
+      output_json: Record<string, unknown> | null
+      attempt?: {
+        input_json: Record<string, unknown> | null
+        output_json: Record<string, unknown> | null
+        error_json: Record<string, unknown> | null
+      }
+    }
+  | {
+      node_id: string
+      status: "skipped"
+      skip_reason_code: "branch_not_taken"
+    }
+
 type Seams = {
   agent?: (input: {
     run_id: string
@@ -764,6 +781,93 @@ function cancel_attempt(input: {
   return { outcome: "canceled" as const }
 }
 
+function seed_succeeded(input: {
+  run_id: string
+  step: WorkflowStep
+  seed: Extract<ReplayPlan, { status: "succeeded" }>
+  nodes: Map<string, ReturnType<typeof RuntimeRunNode.get>>
+}) {
+  const ready = mark_ready({
+    run_id: input.run_id,
+    step: input.step,
+    nodes: input.nodes,
+  })
+  const running = update_node(input.nodes, {
+    id: ready.id,
+    to: "running",
+  })
+  event({
+    run_id: input.run_id,
+    run_node_id: running.id,
+    event_type: "node.running",
+    payload_json: { node_id: input.step.id, reused: true },
+  })
+
+  if (input.seed.attempt) {
+    const attempt = RuntimeRunAttempt.create({
+      run_node_id: running.id,
+      input_json: input.seed.attempt.input_json,
+    })
+    event({
+      run_id: input.run_id,
+      run_node_id: running.id,
+      run_attempt_id: attempt.id,
+      event_type: "attempt.created",
+      payload_json: { node_id: input.step.id, attempt_index: attempt.attempt_index, reused: true },
+    })
+    RuntimeRunAttempt.transition({
+      id: attempt.id,
+      to: "running",
+    })
+    event({
+      run_id: input.run_id,
+      run_node_id: running.id,
+      run_attempt_id: attempt.id,
+      event_type: "attempt.running",
+      payload_json: { node_id: input.step.id, attempt_index: attempt.attempt_index, reused: true },
+    })
+    RuntimeRunAttempt.transition({
+      id: attempt.id,
+      to: "succeeded",
+      output_json: input.seed.attempt.output_json,
+      error_json: input.seed.attempt.error_json,
+    })
+    event({
+      run_id: input.run_id,
+      run_node_id: running.id,
+      run_attempt_id: attempt.id,
+      event_type: "attempt.succeeded",
+      payload_json: { node_id: input.step.id, attempt_index: attempt.attempt_index, reused: true },
+    })
+  }
+
+  const next = update_node(input.nodes, {
+    id: running.id,
+    to: "succeeded",
+    output_json: input.seed.output_json,
+  })
+  event({
+    run_id: input.run_id,
+    run_node_id: next.id,
+    event_type: "node.succeeded",
+    payload_json: { node_id: input.step.id, reused: true },
+  })
+}
+
+function seed_skipped(input: {
+  run_id: string
+  step: WorkflowStep
+  seed: Extract<ReplayPlan, { status: "skipped" }>
+  nodes: Map<string, ReturnType<typeof RuntimeRunNode.get>>
+}) {
+  mark_skipped({
+    run_id: input.run_id,
+    step: input.step,
+    nodes: input.nodes,
+    reason: input.seed.skip_reason_code,
+  })
+}
+
 function fail_attempt(input: {
   run_id: string
   step: WorkflowStep
@@ -813,6 +917,7 @@ async function execute_agent(input: {
   abort: AbortSignal
   seams?: Seams
   on_session?: (session_id: string | null) => void
+  on_checkpoint?: (node_id: string) => Promise<void>
 }) {
   if (input.step.kind !== "agent_request" || !input.step.prompt) return { outcome: "node_failed" as const }
   const ready = mark_ready({
@@ -834,6 +939,7 @@ async function execute_agent(input: {
   const session = await Session.createNext({
     directory: input.directory,
     title: input.step.title,
+    workspaceID: input.workspace_id,
   })
   const attempt = RuntimeRunAttempt.create({
     run_node_id: running.id,
@@ -931,6 +1037,7 @@ async function execute_agent(input: {
       event_type: "node.succeeded",
       payload_json: { node_id: input.step.id },
     })
+    await input.on_checkpoint?.(input.step.id)
     return { outcome: "continue" as const }
   } catch (error) {
     if (input.abort.aborted) return cancel_attempt({ ...input, running, attempt })
@@ -955,6 +1062,7 @@ async function execute_script(input: {
   prepared: Prepared
   abort: AbortSignal
   seams?: Seams
+  on_checkpoint?: (node_id: string) => Promise<void>
 }) {
   if (input.step.kind !== "script" || !input.step.script) return { outcome: "node_failed" as const }
   const ready = mark_ready({
@@ -1059,6 +1167,7 @@ async function execute_script(input: {
         event_type: "node.succeeded",
         payload_json: { node_id: input.step.id },
       })
+      await input.on_checkpoint?.(input.step.id)
       return { outcome: "continue" as const }
     }
 
@@ -1094,7 +1203,39 @@ async function run_step(input: {
   abort: AbortSignal
   seams?: Seams
   on_session?: (session_id: string | null) => void
+  on_checkpoint?: (node_id: string) => Promise<void>
 }): Promise<{ outcome: "continue" | Runtime["outcome"] }> {
+  const current = node_state(input.nodes, input.step.id)
+  if (current.status === "succeeded") {
+    if (input.step.kind === "condition" && input.step.when) {
+      const row = record(current.output_json)
+      const branch = row?.branch
+      if (branch !== "then" && branch !== "else") return { outcome: "node_failed" }
+      skip_tree({
+        run_id: input.run_id,
+        steps: branch === "then" ? input.step.else ?? [] : input.step.then ?? [],
+        nodes: input.nodes,
+        reason: "branch_not_taken",
+      })
+      return run_steps({
+        ...input,
+        steps: branch === "then" ? input.step.then ?? [] : input.step.else ?? [],
+        index: 0,
+      })
+    }
+
+    if (input.step.kind === "end" && input.step.result) {
+      const row = record(current.output_json)
+      const result = row?.result
+      if (result === "success" || result === "failure" || result === "noop") return { outcome: result }
+      return { outcome: input.step.result }
+    }
+
+    return { outcome: "continue" }
+  }
+
+  if (current.status === "skipped") return { outcome: "continue" }
+
   if (input.abort.aborted) {
     cancel_tree({
       run_id: input.run_id,
@@ -1212,6 +1353,7 @@ async function run_steps(input: {
   abort: AbortSignal
   seams?: Seams
   on_session?: (session_id: string | null) => void
+  on_checkpoint?: (node_id: string) => Promise<void>
 }): Promise<{ outcome: "continue" | Runtime["outcome"] }> {
   for (const [index, step] of input.steps.entries()) {
     const result = await run_step({
@@ -1246,6 +1388,7 @@ export namespace WorkflowGraphRun {
   export type ScriptSeam = Seams["script"]
   export type PrepareResult = Prepared
   export type ExecuteResult = Runtime
+  export type ReplaySeed = ReplayPlan
   export type Testing = Seams
 
   export async function prepare(input: {
@@ -1356,6 +1499,34 @@ export namespace WorkflowGraphRun {
     )
   }
 
+  export function seed_nodes(input: {
+    run_id: string
+    workflow: Workflow
+    nodes: Map<string, ReturnType<typeof RuntimeRunNode.get>>
+    seeds: ReplayPlan[]
+  }) {
+    const seeded = new Map(input.seeds.map((item) => [item.node_id, item] as const))
+    visit(input.workflow.steps, (step) => {
+      const seed = seeded.get(step.id)
+      if (!seed) return
+      if (seed.status === "succeeded") {
+        seed_succeeded({
+          run_id: input.run_id,
+          step,
+          seed,
+          nodes: input.nodes,
+        })
+        return
+      }
+      seed_skipped({
+        run_id: input.run_id,
+        step,
+        seed,
+        nodes: input.nodes,
+      })
+    })
+  }
+
   export async function execute(input: {
     run_id: string
     workflow: Workflow
@@ -1366,6 +1537,7 @@ export namespace WorkflowGraphRun {
     abort: AbortSignal
     seams?: Seams
     on_session?: (session_id: string | null) => void
+    on_checkpoint?: (node_id: string) => Promise<void>
   }) {
     const result = await run_steps({
       run_id: input.run_id,
@@ -1379,6 +1551,7 @@ export namespace WorkflowGraphRun {
       abort: input.abort,
       seams: input.seams,
       on_session: input.on_session,
+      on_checkpoint: input.on_checkpoint,
     })
 
     if (result.outcome === "continue") {

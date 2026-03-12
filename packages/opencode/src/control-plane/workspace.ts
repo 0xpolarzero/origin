@@ -1,11 +1,14 @@
+import path from "node:path"
 import z from "zod"
 import { Identifier } from "@/id/id"
+import { Vcs } from "@/project/vcs"
 import { fn } from "@/util/fn"
 import { Database, eq } from "@/storage/db"
 import { Project } from "@/project/project"
 import { BusEvent } from "@/bus/bus-event"
 import { GlobalBus } from "@/bus/global"
 import { Log } from "@/util/log"
+import { Filesystem } from "@/util/filesystem"
 import { WorkspaceTable } from "./workspace.sql"
 import { getAdaptor } from "./adaptors"
 import { WorkspaceInfo } from "./types"
@@ -52,6 +55,30 @@ export namespace Workspace {
     extra: Info.shape.extra,
   })
 
+  const AttachInput = z.object({
+    id: Identifier.schema("workspace").optional(),
+    projectID: Info.shape.projectID,
+    directory: z.string(),
+    branch: Info.shape.branch.optional(),
+    name: Info.shape.name.optional(),
+  })
+
+  function write(info: Info) {
+    Database.use((db) => {
+      db.insert(WorkspaceTable)
+        .values({
+          id: info.id,
+          type: info.type,
+          branch: info.branch,
+          name: info.name,
+          directory: info.directory,
+          extra: info.extra,
+          project_id: info.projectID,
+        })
+        .run()
+    })
+  }
+
   export const create = fn(CreateInput, async (input) => {
     const id = Identifier.ascending("workspace", input.id)
     const adaptor = await getAdaptor(input.type)
@@ -68,23 +95,32 @@ export namespace Workspace {
       projectID: input.projectID,
     }
 
-    Database.use((db) => {
-      db.insert(WorkspaceTable)
-        .values({
-          id: info.id,
-          type: info.type,
-          branch: info.branch,
-          name: info.name,
-          directory: info.directory,
-          extra: info.extra,
-          project_id: info.projectID,
-        })
-        .run()
-    })
-
+    write(info)
     await adaptor.create(config)
     return info
   })
+
+  export const attach = fn(AttachInput, async (input) => {
+    const directory = Filesystem.resolve(input.directory)
+    const info: Info = {
+      id: Identifier.ascending("workspace", input.id),
+      type: "worktree",
+      branch: input.branch === undefined ? ((await Vcs.branch()) ?? null) : input.branch,
+      name: input.name ?? path.basename(directory) ?? directory,
+      directory,
+      extra: {
+        local: true,
+        directory,
+      },
+      projectID: input.projectID,
+    }
+    write(info)
+    return info
+  })
+
+  function local(extra: unknown) {
+    return !!extra && typeof extra === "object" && (extra as { local?: unknown }).local === true
+  }
 
   export function list(project: Project.Info) {
     const rows = Database.use((db) =>
@@ -103,8 +139,10 @@ export namespace Workspace {
     const row = Database.use((db) => db.select().from(WorkspaceTable).where(eq(WorkspaceTable.id, id)).get())
     if (row) {
       const info = fromRow(row)
-      const adaptor = await getAdaptor(row.type)
-      adaptor.remove(info)
+      if (!local(info.extra)) {
+        const adaptor = await getAdaptor(row.type)
+        adaptor.remove(info)
+      }
       Database.use((db) => db.delete(WorkspaceTable).where(eq(WorkspaceTable.id, id)).run())
       return info
     }

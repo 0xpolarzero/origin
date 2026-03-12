@@ -14,6 +14,7 @@ import {
   getDraggableId,
   hasProjectPermissions,
   latestRootSession,
+  sortedRootSessions,
   syncWorkspaceOrder,
   workspaceKey,
 } from "./helpers"
@@ -60,7 +61,7 @@ describe("layout deep links", () => {
     }
   })
 
-  test("parses workflow and run deep links into project hrefs", () => {
+  test("parses workflow, run, workflow-edit, and history deep links into project hrefs", () => {
     const slug = base64Encode("/tmp/demo")
     expect(parseDeepLink("origin://open-project?directory=/tmp/demo&target=workflow&workflow_id=ship-it")).toEqual({
       directory: "/tmp/demo",
@@ -69,6 +70,18 @@ describe("layout deep links", () => {
     expect(parseDeepLink("origin://open-project?directory=/tmp/demo&target=run&run_id=run-123")).toEqual({
       directory: "/tmp/demo",
       href: `/${slug}/runs/run-123`,
+    })
+    expect(
+      parseDeepLink("origin://open-project?directory=/tmp/demo&target=workflow-edit&workflow_id=ship-it&edit_id=edit-123"),
+    ).toEqual({
+      directory: "/tmp/demo",
+      href: `/${slug}/workflows/ship-it?tab=history&edit_id=edit-123`,
+    })
+    expect(
+      parseDeepLink("origin://open-project?directory=/tmp/demo&target=history&edit_id=edit-123&workspace=wrk_1"),
+    ).toEqual({
+      directory: "/tmp/demo",
+      href: `/${slug}/history?tab=edits&edit_id=edit-123&workspace=wrk_1`,
     })
   })
 
@@ -215,6 +228,32 @@ describe("layout workspace helpers", () => {
     )
 
     expect(result?.id).toBe("root")
+  })
+
+  test("hides hidden sessions from root session lists", () => {
+    const result = sortedRootSessions(
+      {
+        path: { directory: "/workspace" },
+        session: [
+          session({
+            id: "hidden",
+            directory: "/workspace",
+            time: { created: 10, updated: 10, archived: undefined },
+          }),
+          session({
+            id: "visible",
+            directory: "/workspace",
+            time: { created: 20, updated: 20, archived: undefined },
+          }),
+        ],
+        session_hidden: {
+          hidden: true,
+        },
+      },
+      120_000,
+    )
+
+    expect(result.map((item) => item.id)).toEqual(["visible"])
   })
 
   test("extracts draggable id safely", () => {

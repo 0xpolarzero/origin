@@ -61,6 +61,7 @@ function createGlobalSync() {
   const booting = new Map<string, Promise<void>>()
   const sessionLoads = new Map<string, Promise<void>>()
   const sessionMeta = new Map<string, { limit: number }>()
+  const hiddenLoads = new Map<string, Promise<void>>()
 
   const [projectCache, setProjectCache, projectInit] = persisted(
     Persist.global("globalSync.project", ["globalSync.project.v1"]),
@@ -162,6 +163,10 @@ function createGlobalSync() {
       queue.clear(directory)
       sessionMeta.delete(directory)
       sdkCache.delete(directory)
+      for (const key of hiddenLoads.keys()) {
+        if (!key.startsWith(`${directory}\u0000`)) continue
+        hiddenLoads.delete(key)
+      }
     },
   })
 
@@ -174,6 +179,28 @@ function createGlobalSync() {
     })
     sdkCache.set(directory, sdk)
     return sdk
+  }
+
+  function syncHidden(directory: string, sessionID: string) {
+    const key = `${directory}\u0000${sessionID}`
+    const pending = hiddenLoads.get(key)
+    if (pending) return pending
+
+    const task = sdkFor(directory)
+      .workflow.sessionLink.get({ session_id: sessionID })
+      .then((result) => {
+        if (!active) return
+        const child = children.children[directory]
+        if (!child) return
+        child[1]("session_hidden", sessionID, result.data?.visibility === "hidden")
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        hiddenLoads.delete(key)
+      })
+
+    hiddenLoads.set(key, task)
+    return task
   }
 
   async function loadSessions(directory: string) {
@@ -304,12 +331,17 @@ function createGlobalSync() {
       push: queue.push,
       setSessionTodo,
       vcsCache: children.vcsCache.get(directory),
-      loadLsp: () => {
-        sdkFor(directory)
-          .lsp.status()
-          .then((x) => setStore("lsp", x.data ?? []))
+        loadLsp: () => {
+          sdkFor(directory)
+            .lsp.status()
+            .then((x) => setStore("lsp", x.data ?? []))
       },
     })
+
+    if (event.type === "session.created" || event.type === "session.updated") {
+      const sessionID = (event.properties as { info?: { id?: string } }).info?.id
+      if (sessionID) void syncHidden(directory, sessionID)
+    }
   })
 
   onCleanup(unsub)

@@ -46,16 +46,48 @@ const appDir = process.cwd()
 const repoDir = path.resolve(appDir, "../..")
 const opencodeDir = path.join(repoDir, "packages", "opencode")
 
-const extraArgs = (() => {
+const raw = (() => {
   const args = process.argv.slice(2)
   if (args[0] === "--") return args.slice(1)
   return args
 })()
 
+const profile = (() => {
+  const names = new Set(["fast", "integration", "desktop-smoke"])
+  const args: string[] = []
+  let name = process.env.OPENCODE_E2E_PROFILE ?? "fast"
+
+  for (let i = 0; i < raw.length; i += 1) {
+    const arg = raw[i]
+    if (arg === "--profile") {
+      const next = raw[i + 1]
+      if (!next) throw new Error("Missing value for --profile")
+      name = next
+      i += 1
+      continue
+    }
+    if (arg.startsWith("--profile=")) {
+      name = arg.slice("--profile=".length)
+      continue
+    }
+    args.push(arg)
+  }
+
+  if (!names.has(name)) {
+    throw new Error(`Unsupported e2e profile: ${name}`)
+  }
+
+  return {
+    name,
+    args,
+  }
+})()
+
 const runnerArgs = (() => {
-  const workers = extraArgs.some((arg) => arg === "--workers" || arg.startsWith("--workers="))
-  if (workers) return ["bun", "test:e2e", ...extraArgs]
-  return ["bun", "test:e2e", "--workers", process.env.PLAYWRIGHT_WORKERS ?? "1", ...extraArgs]
+  const workers = profile.args.some((arg) => arg === "--workers" || arg.startsWith("--workers="))
+  if (workers) return ["bun", "test:e2e", ...profile.args]
+  const count = profile.name === "fast" ? process.env.PLAYWRIGHT_WORKERS ?? "1" : "1"
+  return ["bun", "test:e2e", "--workers", count, ...profile.args]
 })()
 
 const [serverPort, webPort] = await Promise.all([freePort(), freePort()])
@@ -79,15 +111,19 @@ const serverEnv = {
   OPENCODE_E2E_MESSAGE: "Seeded for UI e2e",
   OPENCODE_E2E_MODEL: "opencode/gpt-5-nano",
   OPENCODE_CLIENT: "app",
+  OPENCODE_E2E_PROFILE: profile.name,
 } satisfies Record<string, string>
 
 const runnerEnv = {
   ...serverEnv,
+  OPENCODE_E2E_PROFILE: profile.name,
   PLAYWRIGHT_SERVER_HOST: "127.0.0.1",
   PLAYWRIGHT_SERVER_PORT: String(serverPort),
   VITE_OPENCODE_SERVER_HOST: "127.0.0.1",
   VITE_OPENCODE_SERVER_PORT: String(serverPort),
   PLAYWRIGHT_PORT: String(webPort),
+  PLAYWRIGHT_PROFILE: profile.name,
+  PLAYWRIGHT_FULLY_PARALLEL: process.env.PLAYWRIGHT_FULLY_PARALLEL ?? "0",
 } satisfies Record<string, string>
 
 let seed: ReturnType<typeof Bun.spawn> | undefined
@@ -148,6 +184,7 @@ try {
   if (seedExit !== 0) {
     code = seedExit
   } else {
+    console.log(`opencode e2e profile: ${profile.name}`)
     Object.assign(process.env, serverEnv)
     process.env.AGENT = "1"
     process.env.OPENCODE = "1"

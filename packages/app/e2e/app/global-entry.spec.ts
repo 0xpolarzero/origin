@@ -11,7 +11,6 @@ import {
 import { test, expect, settingsKey } from "../fixtures"
 import { listItemKeySelector, projectCloseMenuSelector, projectSwitchSelector } from "../selectors"
 import type { createSdk } from "../utils"
-import { dirSlug } from "../utils"
 
 const entryKey = "entry:start-session"
 type E2EPage = Parameters<typeof openPalette>[0]
@@ -156,11 +155,16 @@ test("entry from non-default workspace creates fresh global sessions and sends t
 test("protected global workspace cannot be removed from project actions", async ({ page }) => {
   const globalDirectory = await createTestProject()
   const resolvedGlobalDirectory = await fs.realpath(globalDirectory).catch(() => globalDirectory)
-  const slug = dirSlug(resolvedGlobalDirectory)
 
   try {
     await setGlobalWorkspace(page, resolvedGlobalDirectory)
     await page.goto("/")
+    await expect
+      .poll(async () => fs.realpath(directoryFromUrl(page.url())).catch(() => directoryFromUrl(page.url())))
+      .toBe(resolvedGlobalDirectory)
+
+    const slug = /\/([^/]+)\/session(?:\/|$)/.exec(page.url())?.[1]
+    if (!slug) throw new Error("Missing protected project slug after global workspace bootstrap")
 
     await openSidebar(page)
     await expect(page.locator(projectSwitchSelector(slug)).first()).toBeVisible()
@@ -172,7 +176,7 @@ test("protected global workspace cannot be removed from project actions", async 
       .poll(async () => (await close.getAttribute("aria-disabled")) ?? (await close.getAttribute("data-disabled")))
       .toBeTruthy()
 
-    await close.click({ force: true })
+    await page.keyboard.press("Escape")
     await expect(page.locator(projectSwitchSelector(slug)).first()).toBeVisible()
     await expect(page).toHaveURL(new RegExp(`/${slug}/session(?:/[^/]+)?$`))
   } finally {

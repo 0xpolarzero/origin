@@ -72,11 +72,47 @@ export type HistoryDraft = {
   dispatch: HistoryDraftDispatch | null
 }
 
+export type HistoryRev = {
+  id: string
+  workflow_id: string
+  file: string
+  content_hash: string
+  created_at: number
+  updated_at: number
+}
+
+export type HistoryLink = {
+  id: string
+  title: string
+  directory: string
+}
+
+export type HistoryEdit = {
+  id: string
+  workflow_id: string
+  action: string
+  session_id: string | null
+  node_id: string | null
+  note: string | null
+  created_at: number
+  updated_at: number
+  revision: HistoryRev
+  previous_revision: HistoryRev | null
+  diff: string
+  session: HistoryLink | null
+}
+
 export type HistoryRunPage = {
   endpoint: string
   items: HistoryRun[]
   next_cursor: string | null
   hidden_debug_count: number
+}
+
+export type HistoryEditPage = {
+  endpoint: string
+  items: HistoryEdit[]
+  next_cursor: string | null
 }
 
 export type HistoryOperationPage = {
@@ -375,6 +411,85 @@ const draftFrom = (value: unknown) => {
   } satisfies HistoryDraft
 }
 
+const revFrom = (value: unknown) => {
+  const row = asRecord(value)
+  if (!row) return
+
+  const id = asText(row.id)
+  const workflow_id = asText(row.workflow_id)
+  const file = asText(row.file)
+  const content_hash = asText(row.content_hash)
+  const created_at = asNumber(row.created_at)
+  const updated_at = asNumber(row.updated_at)
+
+  if (!id || !workflow_id || !file || !content_hash) return
+  if (created_at === undefined || updated_at === undefined) return
+
+  return {
+    id,
+    workflow_id,
+    file,
+    content_hash,
+    created_at,
+    updated_at,
+  } satisfies HistoryRev
+}
+
+const linkFrom = (value: unknown) => {
+  if (value === null) return null
+  const row = asRecord(value)
+  if (!row) return
+
+  const id = asText(row.id)
+  const title = asText(row.title)
+  const directory = asText(row.directory)
+  if (!id || !title || !directory) return
+
+  return {
+    id,
+    title,
+    directory,
+  } satisfies HistoryLink
+}
+
+const editFrom = (value: unknown) => {
+  const row = asRecord(value)
+  const item = asRecord(row?.edit)
+  const revision = revFrom(row?.revision)
+  const raw_prev = row?.previous_revision
+  const raw_session = row?.session
+  const previous_revision = raw_prev === undefined || raw_prev === null ? null : revFrom(raw_prev) ?? null
+  const session = raw_session === undefined || raw_session === null ? null : linkFrom(raw_session) ?? null
+  const diff = typeof row?.diff === "string" ? row.diff : undefined
+
+  const id = asText(item?.id)
+  const workflow_id = asText(item?.workflow_id)
+  const action = asText(item?.action)
+  const created_at = asNumber(item?.created_at)
+  const updated_at = asNumber(item?.updated_at)
+
+  if (!id || !workflow_id || !action) return
+  if (created_at === undefined || updated_at === undefined) return
+  if (!revision || diff === undefined) return
+  if (raw_prev !== undefined && raw_prev !== null && !previous_revision) return
+  if (raw_session !== undefined && raw_session !== null && !session) return
+
+  return {
+    id,
+    workflow_id,
+    action,
+    session_id: asNullableText(item?.session_id),
+    node_id: asNullableText(item?.node_id),
+    note: asNullableText(item?.note),
+    created_at,
+    updated_at,
+    revision,
+    previous_revision,
+    diff,
+    session,
+  } satisfies HistoryEdit
+}
+
 const reminderFrom = (value: unknown) => {
   const row = asRecord(value)
   if (!row) return
@@ -509,6 +624,20 @@ export const normalizeDraftPage = (payload: unknown) => {
     ? row.items
         .map((item) => draftFrom(item))
         .filter((item): item is HistoryDraft => !!item)
+    : []
+
+  return {
+    items,
+    next_cursor: asNullableText(row?.next_cursor),
+  }
+}
+
+export const normalizeEditPage = (payload: unknown) => {
+  const row = asRecord(payload)
+  const items = Array.isArray(row?.items)
+    ? row.items
+        .map((item) => editFrom(item))
+        .filter((item): item is HistoryEdit => !!item)
     : []
 
   return {
@@ -727,6 +856,35 @@ export const loadHistoryRuns = async (input: {
     endpoint,
     ...normalizeRunPage(result.body),
   } satisfies HistoryRunPage
+}
+
+export const loadHistoryEdits = async (input: {
+  baseUrl: string
+  directory: string
+  auth?: string
+  cursor?: string
+  limit?: number
+  fetch?: Fetcher
+}) => {
+  const endpoint = `/workflow/history/edits${append({
+    cursor: input.cursor,
+    limit: input.limit,
+  })}`
+
+  const result = await read({
+    baseUrl: input.baseUrl,
+    endpoint,
+    directory: input.directory,
+    auth: input.auth,
+    fetch: input.fetch ?? fetch,
+  })
+
+  if (result.type === "error") throw new Error(result.message)
+
+  return {
+    endpoint,
+    ...normalizeEditPage(result.body),
+  } satisfies HistoryEditPage
 }
 
 export const loadDebugReminders = async (input: {

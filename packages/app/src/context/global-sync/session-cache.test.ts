@@ -32,6 +32,7 @@ const part = (id: string, sessionID: string, messageID: string) =>
 describe("app session cache", () => {
   test("dropSessionCaches clears orphaned parts without message rows", () => {
     const store: {
+      session_hidden: Record<string, boolean | undefined>
       session_status: Record<string, SessionStatus | undefined>
       session_diff: Record<string, FileDiff[] | undefined>
       todo: Record<string, Todo[] | undefined>
@@ -40,6 +41,7 @@ describe("app session cache", () => {
       permission: Record<string, PermissionRequest[] | undefined>
       question: Record<string, QuestionRequest[] | undefined>
     } = {
+      session_hidden: { ses_1: true },
       session_status: { ses_1: { type: "busy" } as SessionStatus },
       session_diff: { ses_1: [] },
       todo: { ses_1: [] as Todo[] },
@@ -51,6 +53,7 @@ describe("app session cache", () => {
 
     dropSessionCaches(store, ["ses_1"])
 
+    expect(store.session_hidden.ses_1).toBeUndefined()
     expect(store.message.ses_1).toBeUndefined()
     expect(store.part.msg_1).toBeUndefined()
     expect(store.todo.ses_1).toBeUndefined()
@@ -63,6 +66,7 @@ describe("app session cache", () => {
   test("dropSessionCaches clears message-backed parts", () => {
     const m = msg("msg_1", "ses_1")
     const store: {
+      session_hidden: Record<string, boolean | undefined>
       session_status: Record<string, SessionStatus | undefined>
       session_diff: Record<string, FileDiff[] | undefined>
       todo: Record<string, Todo[] | undefined>
@@ -71,6 +75,7 @@ describe("app session cache", () => {
       permission: Record<string, PermissionRequest[] | undefined>
       question: Record<string, QuestionRequest[] | undefined>
     } = {
+      session_hidden: { ses_1: true },
       session_status: {},
       session_diff: {},
       todo: {},
@@ -82,6 +87,7 @@ describe("app session cache", () => {
 
     dropSessionCaches(store, ["ses_1"])
 
+    expect(store.session_hidden.ses_1).toBeUndefined()
     expect(store.message.ses_1).toBeUndefined()
     expect(store.part[m.id]).toBeUndefined()
   })

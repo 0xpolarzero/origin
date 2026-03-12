@@ -1,228 +1,146 @@
-import { test, expect } from "../fixtures"
 import type { Route } from "@playwright/test"
+import { expect, test } from "../fixtures"
 import { serverUrl } from "../utils"
 
-const workflowID = "workflow.daily"
-const runID = "run_1"
-
-const runDetail = {
-  run: {
-    id: runID,
-    status: "ready_for_integration",
-    workflow_id: workflowID,
-    workspace_id: "wrk_1",
-    session_id: "sess_followup",
-    reason_code: null,
-    failure_code: null,
-    created_at: 1,
-    started_at: 2,
-    finished_at: 3,
-    integration_candidate: {
-      changed_paths: ["src/app.tsx"],
-    },
-  },
-  snapshot: {
-    id: "snap_1",
-    workflow_id: workflowID,
-    workflow_revision_id: "rev_1",
-    workflow_hash: "hash_1",
-    workflow_text: "schema_version: 2",
-    graph_json: {
-      id: workflowID,
-      name: "Daily workflow",
-      description: "Runs every morning",
+const blocked = {
+  item: {
+    id: "workflow.blocked",
+    file: ".origin/workflows/workflow.blocked.yaml",
+    runnable: false,
+    errors: [
+      {
+        code: "workflow_not_runnable",
+        path: "$",
+        message: "workflow contains validation errors",
+      },
+    ],
+    workflow: {
+      id: "workflow.blocked",
+      name: "Blocked workflow",
+      description: "Used for blocked run-state coverage",
+      trigger: {
+        type: "manual",
+      },
+      inputs: [
+        {
+          key: "topic",
+          type: "text",
+          label: "Topic",
+          required: true,
+        },
+      ],
+      resources: [],
       steps: [
         {
-          id: "ask",
+          id: "draft",
           kind: "agent_request",
-          title: "Ask reviewer",
+          title: "Draft",
           prompt: {
             source: "inline",
-            text: "Summarize changes",
+            text: "Draft the update",
           },
-        },
-        {
-          id: "done",
-          kind: "end",
-          title: "Done",
-          result: "success",
         },
       ],
     },
-    input_json: {
-      topic: "release",
-    },
-    input_store_json: {
-      topic: "release",
-    },
-    resource_materials_json: {
-      "prompt.summary": "Summarize changes",
-    },
   },
-  revision: {
-    id: "rev_1",
-    workflow_id: workflowID,
-    content_hash: "hash_1",
+  revision_head: {
+    id: "rev_blocked",
+    workflow_id: "workflow.blocked",
+    content_hash: "hash_blocked",
     created_at: 1,
   },
-  live: {
-    current_revision_id: "rev_1",
-    has_newer_revision: false,
-  },
-  nodes: [
-    {
-      node: {
-        id: "row_ask",
-        node_id: "ask",
-        kind: "agent_request",
-        title: "Ask reviewer",
-        status: "completed",
-        skip_reason_code: null,
-        output_json: {
-          summary: "done",
-        },
-        error_json: null,
-        attempt_count: 1,
-      },
-      step: {
-        id: "ask",
-        kind: "agent_request",
-        title: "Ask reviewer",
-        prompt: {
-          source: "inline",
-          text: "Summarize changes",
-        },
-      },
-      attempts: [],
-    },
-  ],
-  events: [
-    {
-      sequence: 1,
-      event_type: "node.started",
-      payload_json: {
-        node_id: "ask",
-      },
-      run_node_id: "row_ask",
-      run_attempt_id: null,
-    },
-  ],
-  followup: {
-    link: {
-      session_id: "sess_followup",
-      role: "run_followup",
-      visibility: "visible",
-      run_id: runID,
-      run_node_id: null,
-      run_attempt_id: null,
-      readonly: false,
-    },
-    session: {
-      id: "sess_followup",
-      title: "Run follow-up",
-      directory: "/tmp/demo",
-    },
-  },
+  resources: [],
+  runs: [],
 } as const
 
-test("workflow detail renders design runs resources and opens run detail", async ({ page, withProject }) => {
+const signal = {
+  item: {
+    ...blocked.item,
+    id: "workflow.signal",
+    file: ".origin/workflows/workflow.signal.yaml",
+    runnable: true,
+    errors: [],
+    workflow: {
+      ...blocked.item.workflow,
+      id: "workflow.signal",
+      name: "Signal workflow",
+      description: "Used for trigger visibility coverage",
+      trigger: {
+        type: "signal",
+        signal: "incoming",
+      },
+    },
+  },
+  revision_head: {
+    ...blocked.revision_head,
+    workflow_id: "workflow.signal",
+  },
+  resources: [],
+  runs: [],
+} as const
+
+test("workflow run tab renders explicit blocked state for non-runnable workflows", async ({ page, withProject }) => {
   await withProject(async ({ slug }) => {
-    const workflow = async (route: Route) => {
-      const url = new URL(route.request().url())
+    const route = async (input: Route) => {
+      const url = new URL(input.request().url())
       if (url.origin !== serverUrl) {
-        await route.continue()
+        await input.continue()
         return
       }
 
-      if (url.pathname === `/workflow/workflows/${workflowID}/detail`) {
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify({
-            item: {
-              id: workflowID,
-              file: ".origin/workflows/daily.yaml",
-              runnable: true,
-              errors: [],
-              workflow: {
-                id: workflowID,
-                name: "Daily workflow",
-                description: "Runs every morning",
-                steps: runDetail.snapshot.graph_json.steps,
-                resources: [{ id: "prompt.summary" }],
-              },
-            },
-            revision_head: {
-              id: "rev_1",
-              workflow_id: workflowID,
-              content_hash: "hash_1",
-              created_at: 1,
-            },
-            resources: [
-              {
-                id: "prompt.summary",
-                source: "library",
-                kind: "prompt_template",
-                item_id: "lib.prompt.summary",
-                used_by: ["ask"],
-                errors: [],
-              },
-            ],
-            runs: [
-              {
-                id: runID,
-                status: "ready_for_integration",
-                workflow_id: workflowID,
-                workspace_id: "wrk_1",
-                created_at: 1,
-                started_at: 2,
-                finished_at: 3,
-                reason_code: null,
-                failure_code: null,
-              },
-            ],
-          }),
-        })
-        return
-      }
-
-      if (url.pathname === `/workflow/runs/${runID}/detail`) {
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify(runDetail),
-        })
-        return
-      }
-
-      await route.continue()
+      await input.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(blocked),
+      })
     }
 
-    await page.route("**/workflow/**", workflow)
+    await page.route("**/workflow/workflows/workflow.blocked/detail*", route)
+
     try {
-      await page.goto(`/${slug}/workflows/${workflowID}`)
+      await page.goto(`/${slug}/workflows/workflow.blocked?tab=run`)
 
       await expect(page.locator('[data-page="workflow-detail"]')).toBeVisible()
-      await expect(page.locator('[data-component="workflow-graph"]')).toBeVisible()
-      await expect(page.locator('[data-component="graph-node"][data-node-id="ask"]')).toBeVisible()
-
-      await page.getByRole("tab", { name: "Resources" }).click()
-      const resource = page.locator('[data-component="workflow-detail-resource-row"][data-resource-id="prompt.summary"]')
-      await expect(resource).toBeVisible()
-      await expect(resource).toContainText("lib.prompt.summary")
-      await expect(resource).toContainText("Used by: ask")
-
-      await page.getByRole("tab", { name: "Runs" }).click()
-      const row = page.locator(`[data-component="workflow-detail-run-row"][data-run-id="${runID}"]`)
-      await expect(row).toBeVisible()
-      await row.getByRole("button", { name: "Open Run" }).click()
-
-      await expect(page).toHaveURL(new RegExp(`/runs/${runID}$`))
-      await expect(page.locator('[data-page="run-detail"]')).toBeVisible()
-      await expect(page.locator('[data-component="workflow-graph"]')).toBeVisible()
+      await expect(page.locator('[data-component="workflow-run-form"]')).toBeVisible()
+      await expect(page.getByText("Run start is blocked until validation issues are resolved.")).toBeVisible()
+      await expect(page.getByRole("button", { name: "Validate Inputs" })).toBeDisabled()
+      await expect(page.getByRole("button", { name: "Start Workflow" })).toBeDisabled()
     } finally {
       if (page.isClosed()) return
-      await page.unroute("**/workflow/**", workflow)
+      await page.unroute("**/workflow/workflows/workflow.blocked/detail*", route)
+    }
+  })
+})
+
+test("workflow run tab surfaces signal trigger state for runnable workflows", async ({ page, withProject }) => {
+  await withProject(async ({ slug }) => {
+    const route = async (input: Route) => {
+      const url = new URL(input.request().url())
+      if (url.origin !== serverUrl) {
+        await input.continue()
+        return
+      }
+
+      await input.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(signal),
+      })
+    }
+
+    await page.route("**/workflow/workflows/workflow.signal/detail*", route)
+
+    try {
+      await page.goto(`/${slug}/workflows/workflow.signal?tab=run`)
+
+      await expect(page.locator('[data-page="workflow-detail"]')).toBeVisible()
+      await expect(page.locator('[data-component="workflow-run-form"]')).toBeVisible()
+      await expect(page.getByText("Trigger: signal. Validate inputs first, then start a new run from the current canonical workflow files.")).toBeVisible()
+      await expect(page.getByRole("button", { name: "Validate Inputs" })).toBeEnabled()
+      await expect(page.getByRole("button", { name: "Start Workflow" })).toBeEnabled()
+    } finally {
+      if (page.isClosed()) return
+      await page.unroute("**/workflow/workflows/workflow.signal/detail*", route)
     }
   })
 })

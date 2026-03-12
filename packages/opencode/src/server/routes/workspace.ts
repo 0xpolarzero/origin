@@ -41,6 +41,37 @@ export const WorkspaceRoutes = lazy(() =>
         return c.json(workspace)
       },
     )
+    .post(
+      "/:id",
+      validator(
+        "param",
+        z.object({
+          id: Workspace.Info.shape.id,
+        }),
+      ),
+      validator(
+        "json",
+        z.object({
+          branch: z.string().nullable().optional(),
+          config: z.object({
+            type: z.literal("worktree"),
+            directory: z.string(),
+          }),
+        }),
+      ),
+      async (c) => {
+        const { id } = c.req.valid("param")
+        const body = c.req.valid("json")
+        return c.json(
+          await Workspace.attach({
+            id,
+            projectID: Instance.project.id,
+            directory: body.config.directory,
+            branch: body.branch ?? undefined,
+          }),
+        )
+      },
+    )
     .get(
       "/",
       describeRoute({

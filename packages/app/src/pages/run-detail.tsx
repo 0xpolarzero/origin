@@ -3,11 +3,12 @@ import { Tabs } from "@opencode-ai/ui/tabs"
 import { SessionTurn } from "@opencode-ai/ui/session-turn"
 import { batch, createMemo, createResource, For, Match, Show, Switch } from "solid-js"
 import { useNavigate, useParams, useSearchParams } from "@solidjs/router"
+import { createStore } from "solid-js/store"
 import { useSDK } from "@/context/sdk"
 import { useServer } from "@/context/server"
 import { useSettings } from "@/context/settings"
 import { useSync } from "@/context/sync"
-import { loadRunDetail } from "./graph-detail-data"
+import { loadRunDetail, rerunWorkflowRun } from "./graph-detail-data"
 import { WorkflowGraph } from "./workflow-graph"
 
 const stamp = (value: number | null) => {
@@ -120,6 +121,10 @@ export default function RunDetailPage() {
   const params = useParams()
   const navigate = useNavigate()
   const [search, setSearch] = useSearchParams()
+  const [ops, setOps] = createStore({
+    busy: "" as "" | "run" | "node",
+    err: "",
+  })
 
   const auth = createMemo(() => {
     const http = server.current?.http
@@ -201,6 +206,74 @@ export default function RunDetailPage() {
     navigate(`/${params.dir}/session/${result.data.id}`)
   }
 
+  const openWorkflow = () => {
+    const workflow_id = detail()?.run.workflow_id
+    if (!workflow_id) return
+    navigate(`/${params.dir}/workflows/${workflow_id}`)
+  }
+
+  const editRerun = () => {
+    const workflow_id = detail()?.run.workflow_id
+    const run_id = detail()?.run.id
+    if (!workflow_id || !run_id) return
+    navigate(`/${params.dir}/workflows/${workflow_id}?tab=run&prefill_run=${encodeURIComponent(run_id)}`)
+  }
+
+  const openHistory = (tab: "operations" | "drafts") => {
+    const run_id = detail()?.run.id
+    const workspace_id = detail()?.run.workspace_id
+    if (!run_id || !workspace_id) return
+    navigate(`/${params.dir}/history?tab=${tab}&run_id=${encodeURIComponent(run_id)}&workspace=${encodeURIComponent(workspace_id)}`)
+  }
+
+  const rerun = async () => {
+    const run_id = detail()?.run.id
+    if (!run_id) return
+    setOps({
+      busy: "run",
+      err: "",
+    })
+
+    try {
+      const value = await rerunWorkflowRun({
+        baseUrl: sdk.url,
+        directory: sdk.directory,
+        auth: auth(),
+        run_id,
+      })
+      navigate(`/${params.dir}/runs/${value.id}`)
+    } catch (err) {
+      setOps("err", errorMessage(err))
+    } finally {
+      setOps("busy", "")
+    }
+  }
+
+  const rerunFrom = async () => {
+    const run_id = detail()?.run.id
+    const node_id = selectedNode()?.node.node_id
+    if (!run_id || !node_id) return
+    setOps({
+      busy: "node",
+      err: "",
+    })
+
+    try {
+      const value = await rerunWorkflowRun({
+        baseUrl: sdk.url,
+        directory: sdk.directory,
+        auth: auth(),
+        run_id,
+        node_id,
+      })
+      navigate(`/${params.dir}/runs/${value.id}`)
+    } catch (err) {
+      setOps("err", errorMessage(err))
+    } finally {
+      setOps("busy", "")
+    }
+  }
+
   return (
     <div data-page="run-detail" class="size-full overflow-y-auto">
       <div class="mx-auto max-w-7xl p-6 space-y-6">
@@ -225,6 +298,23 @@ export default function RunDetailPage() {
             </Show>
           </div>
           <div class="flex flex-wrap gap-2">
+            <Show when={detail()?.run.workflow_id}>
+              <Button variant="ghost" onClick={openWorkflow}>
+                Open Workflow
+              </Button>
+            </Show>
+            <Button variant="ghost" onClick={editRerun}>
+              Edit Rerun Inputs
+            </Button>
+            <Button variant="ghost" onClick={() => openHistory("operations")}>
+              View Operations
+            </Button>
+            <Button variant="ghost" onClick={() => openHistory("drafts")}>
+              View Drafts
+            </Button>
+            <Button variant="ghost" onClick={() => void rerun()} disabled={ops.busy !== ""}>
+              {ops.busy === "run" ? "Rerunning..." : "Rerun Workflow"}
+            </Button>
             <Show when={detail()?.followup?.session?.id}>
               {(sessionID) => (
                 <Button variant="ghost" onClick={() => navigate(`/${params.dir}/session/${sessionID()}`)}>
@@ -237,6 +327,14 @@ export default function RunDetailPage() {
             </Button>
           </div>
         </div>
+
+        <Show when={ops.err}>
+          {(value) => (
+            <div class="rounded-xl border border-border-weak-base bg-background-base p-4 text-13-regular text-icon-critical-base">
+              {value()}
+            </div>
+          )}
+        </Show>
 
         <Switch>
           <Match when={detail.loading}>
@@ -318,6 +416,50 @@ export default function RunDetailPage() {
                       onSelect={(step) => selectNode(step.id)}
                     />
                   </section>
+
+                  <section class="rounded-xl border border-border-weak-base bg-background-base p-4 space-y-3">
+                    <div>
+                      <div class="text-14-medium text-text-strong">Event Stream</div>
+                      <div class="text-12-regular text-text-weak">
+                        Runtime events remain inspectable and can focus the matching run node when available.
+                      </div>
+                    </div>
+                    <Show
+                      when={value().events.length > 0}
+                      fallback={
+                        <div class="rounded-lg border border-border-weak-base px-3 py-2 text-12-regular text-text-weak">
+                          No events were captured for this run.
+                        </div>
+                      }
+                    >
+                      <For each={value().events}>
+                        {(event) => (
+                          <button
+                            type="button"
+                            data-component="run-event-row"
+                            data-sequence={event.sequence}
+                            class="w-full rounded-lg border border-border-weak-base px-3 py-2 text-left"
+                            onClick={() => {
+                              if (!event.run_node_id) return
+                              const node = value().nodes.find((item) => item.node.id === event.run_node_id)
+                              if (!node) return
+                              selectNode(node.node.node_id)
+                            }}
+                          >
+                            <div class="text-13-medium text-text-strong">
+                              #{event.sequence} {event.event_type}
+                            </div>
+                            <div class="pt-1 text-12-regular text-text-weak">
+                              node {event.run_node_id ?? "-"} • attempt {event.run_attempt_id ?? "-"}
+                            </div>
+                            <pre class="pt-2 whitespace-pre-wrap break-all text-12-mono text-text-strong">
+                              {pretty(event.payload_json)}
+                            </pre>
+                          </button>
+                        )}
+                      </For>
+                    </Show>
+                  </section>
                 </div>
 
                 <section
@@ -357,7 +499,25 @@ export default function RunDetailPage() {
                           </div>
                         </div>
 
-                        <Tabs value={panel()} class="space-y-4">
+                        <Show when={detail()?.run.workflow_id}>
+                          {(workflow_id) => (
+                            <div class="flex flex-wrap gap-2">
+                              <Button
+                                variant="ghost"
+                                onClick={() => navigate(`/${params.dir}/workflows/${workflow_id()}?tab=authoring&node=${node().node.node_id}`)}
+                              >
+                                Edit Node
+                              </Button>
+                              <Show when={node().node.status !== "skipped"}>
+                                <Button variant="ghost" onClick={() => void rerunFrom()} disabled={ops.busy !== ""}>
+                                  {ops.busy === "node" ? "Rerunning..." : "Rerun from Here"}
+                                </Button>
+                              </Show>
+                            </div>
+                          )}
+                        </Show>
+
+                        <Tabs value={panel()} onChange={setPanel} class="space-y-4">
                           <Tabs.List class="flex flex-wrap gap-2">
                             <For each={["summary", "transcript", "logs", "artifacts", "attempts"]}>
                               {(item) => (

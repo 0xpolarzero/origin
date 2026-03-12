@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { loadRunDetail, loadWorkflowDetail, loadWorkflowSessionLink, type GraphStep } from "./graph-detail-data"
+import { copyLibrary, deleteLibrary, loadLibraryDetail, loadLibraryHistory, loadLibraryPage, saveLibrary } from "./library-data"
 
 const detailStep = {
   id: "ask",
@@ -85,8 +86,8 @@ describe("graph detail data", () => {
         output: undefined,
         script: undefined,
         when: undefined,
-        then: [],
-        else: [],
+        then: undefined,
+        else: undefined,
         result: undefined,
       },
     ])
@@ -466,5 +467,226 @@ describe("graph detail data", () => {
     })
 
     expect(data).toBeNull()
+  })
+})
+
+describe("library data", () => {
+  test("loads library list, detail, and history payloads", async () => {
+    const calls: Array<{ input: string | URL | Request; init?: RequestInit }> = []
+
+    const list = await loadLibraryPage({
+      baseUrl: "http://127.0.0.1:4096",
+      directory: "/tmp/demo",
+      auth: "Basic test",
+      fetch: async (input, init) => {
+        calls.push({ input, init })
+        return new Response(
+          JSON.stringify([
+            {
+              id: "lib.prompt.summary",
+              file: ".origin/library/lib.prompt.summary.yaml",
+              runnable: true,
+              errors: [],
+              used_by: ["workflow.daily"],
+              last_edited_at: 7,
+              resource: {
+                schema_version: 1,
+                id: "lib.prompt.summary",
+                name: "Summary prompt",
+                kind: "prompt_template",
+                template: "Summarize changes",
+                links: ["docs/runbook.md"],
+              },
+            },
+          ]),
+          { status: 200 },
+        )
+      },
+    })
+
+    expect(list.endpoint).toBe("/library")
+    expect(list.items[0]?.name).toBe("Summary prompt")
+    expect(list.items[0]?.used_by).toEqual(["workflow.daily"])
+    expect(calls[0]?.input).toBe("http://127.0.0.1:4096/library")
+    const headers = new Headers(calls[0]?.init?.headers)
+    expect(headers.get("x-opencode-directory")).toBe("/tmp/demo")
+    expect(headers.get("authorization")).toBe("Basic test")
+
+    const detail = await loadLibraryDetail({
+      baseUrl: "http://127.0.0.1:4096",
+      directory: "/tmp/demo",
+      item_id: "lib.prompt.summary",
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            item: {
+              id: "lib.prompt.summary",
+              file: ".origin/library/lib.prompt.summary.yaml",
+              runnable: true,
+              errors: [],
+              used_by: ["workflow.daily"],
+              last_edited_at: 7,
+              resource: {
+                schema_version: 1,
+                id: "lib.prompt.summary",
+                name: "Summary prompt",
+                kind: "prompt_template",
+                template: "Summarize changes",
+                links: ["docs/runbook.md"],
+              },
+            },
+            revision_head: {
+              id: "01958f0f-4cd2-7d59-975d-57fd8d8d42b0",
+              project_id: "project_1",
+              item_id: "lib.prompt.summary",
+              file: ".origin/library/lib.prompt.summary.yaml",
+              content_hash: "hash_1",
+              canonical_text: "name: Summary prompt",
+              created_at: 7,
+              updated_at: 8,
+            },
+            canonical_text: "name: Summary prompt",
+            used_by: [
+              {
+                workflow_id: "workflow.daily",
+                name: "Daily workflow",
+                file: ".origin/workflows/workflow.daily.yaml",
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+    })
+
+    expect(detail.item.id).toBe("lib.prompt.summary")
+    expect(detail.revision_head?.content_hash).toBe("hash_1")
+    expect(detail.used_by[0]?.workflow_id).toBe("workflow.daily")
+
+    const hist = await loadLibraryHistory({
+      baseUrl: "http://127.0.0.1:4096",
+      directory: "/tmp/demo",
+      item_id: "lib.prompt.summary",
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            items: [
+              {
+                revision: {
+                  id: "01958f0f-4cd2-7d59-975d-57fd8d8d42b0",
+                  project_id: "project_1",
+                  item_id: "lib.prompt.summary",
+                  file: ".origin/library/lib.prompt.summary.yaml",
+                  content_hash: "hash_1",
+                  canonical_text: "name: Summary prompt",
+                  created_at: 7,
+                  updated_at: 8,
+                },
+                previous_revision: null,
+                diff: "+name: Summary prompt",
+              },
+            ],
+            next_cursor: null,
+          }),
+          { status: 200 },
+        ),
+    })
+
+    expect(hist.endpoint).toBe("/library/items/lib.prompt.summary/history")
+    expect(hist.items[0]?.revision.item_id).toBe("lib.prompt.summary")
+    expect(hist.items[0]?.diff).toContain("Summary prompt")
+  })
+
+  test("saves, copies, and deletes shared library items", async () => {
+    const calls: Array<{ input: string | URL | Request; init?: RequestInit }> = []
+
+    const saved = await saveLibrary({
+      baseUrl: "http://127.0.0.1:4096",
+      directory: "/tmp/demo",
+      item_id: "lib.prompt.summary",
+      text: "name: Updated prompt",
+      fetch: async (input, init) => {
+        calls.push({ input, init })
+        return new Response(
+          JSON.stringify({
+            item: {
+              id: "lib.prompt.summary",
+              file: ".origin/library/lib.prompt.summary.yaml",
+              runnable: true,
+              errors: [],
+              used_by: [],
+              last_edited_at: 9,
+              resource: {
+                schema_version: 1,
+                id: "lib.prompt.summary",
+                kind: "prompt_template",
+                template: "Updated prompt",
+                links: [],
+              },
+            },
+            revision_head: {
+              id: "01958f0f-4cd2-7d59-975d-57fd8d8d42b1",
+              project_id: "project_1",
+              item_id: "lib.prompt.summary",
+              file: ".origin/library/lib.prompt.summary.yaml",
+              content_hash: "hash_2",
+              canonical_text: "name: Updated prompt",
+              created_at: 9,
+              updated_at: 9,
+            },
+            canonical_text: "name: Updated prompt",
+            used_by: [],
+          }),
+          { status: 200 },
+        )
+      },
+    })
+
+    expect(saved.canonical_text).toBe("name: Updated prompt")
+    const saveCall = calls[0]
+    expect(saveCall?.input).toBe("http://127.0.0.1:4096/library/items/lib.prompt.summary")
+    expect(saveCall?.init?.method).toBe("PUT")
+    expect(saveCall?.init?.body).toBe(JSON.stringify({ text: "name: Updated prompt" }))
+
+    const copied = await copyLibrary({
+      baseUrl: "http://127.0.0.1:4096",
+      directory: "/tmp/demo",
+      item_id: "lib.prompt.summary",
+      workflow_id: "workflow.daily",
+      fetch: async (input, init) => {
+        calls.push({ input, init })
+        return new Response(
+          JSON.stringify({
+            workflow_id: "workflow.daily",
+            resources: [
+              {
+                id: "prompt.summary",
+                path: "resources/prompt.summary.txt",
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      },
+    })
+
+    expect(copied.workflow_id).toBe("workflow.daily")
+    expect(copied.resources[0]?.path).toBe("resources/prompt.summary.txt")
+    const copyCall = calls[1]
+    expect(copyCall?.init?.method).toBe("POST")
+    expect(copyCall?.init?.body).toBe(JSON.stringify({ workflow_id: "workflow.daily" }))
+
+    const removed = await deleteLibrary({
+      baseUrl: "http://127.0.0.1:4096",
+      directory: "/tmp/demo",
+      item_id: "lib.prompt.summary",
+      fetch: async (input, init) => {
+        calls.push({ input, init })
+        return new Response(JSON.stringify({ deleted: true }), { status: 200 })
+      },
+    })
+
+    expect(removed.deleted).toBe(true)
+    const deleteCall = calls[2]
+    expect(deleteCall?.init?.method).toBe("DELETE")
   })
 })

@@ -82,7 +82,21 @@ test("ensure-directory failure falls back to home", async ({ page }) => {
 })
 
 test("server picker dialog opens from home", async ({ page }) => {
+  await page.route("**/path/ensure", async (route) => {
+    await route.fulfill({
+      status: 400,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: false,
+        path: "/forbidden",
+        code: "EACCES",
+        message: "permission denied",
+      }),
+    })
+  })
+
   await page.goto("/")
+  await expect(page).toHaveURL("/")
 
   const trigger = page.getByRole("button", { name: serverNamePattern })
   await expect(trigger).toBeVisible()

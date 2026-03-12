@@ -20,6 +20,7 @@ type Active = {
   node: JSX.Element
   dispose: () => void
   owner: Owner
+  focus?: HTMLElement
   onClose?: () => void
   setClosing: (closing: boolean) => void
 }
@@ -54,6 +55,11 @@ function init() {
       timer.current = undefined
       current.dispose()
       if (active()?.id === id) setActive(undefined)
+      if (current.focus?.isConnected) {
+        requestAnimationFrame(() => {
+          if (current.focus?.isConnected) current.focus.focus()
+        })
+      }
       lock.value = false
     }, 100)
   }
@@ -89,6 +95,7 @@ function init() {
     const id = Math.random().toString(36).slice(2)
     let dispose: (() => void) | undefined
     let setClosing: ((closing: boolean) => void) | undefined
+    const focus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
 
     const node = runWithOwner(owner, () =>
       createRoot((d: () => void) => {
@@ -115,7 +122,7 @@ function init() {
 
     if (!dispose || !setClosing) return
 
-    setActive({ id, node, dispose, owner, onClose, setClosing })
+    setActive({ id, node, dispose, owner, focus, onClose, setClosing })
   }
 
   return {

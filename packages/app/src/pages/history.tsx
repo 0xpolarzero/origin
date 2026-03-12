@@ -12,6 +12,7 @@ import { Persist, persisted } from "@/utils/persist"
 import {
   approveHistoryDraft,
   createHistoryDraft,
+  loadHistoryEdits,
   loadHistoryDrafts,
   loadHistoryOperations,
   loadHistoryRuns,
@@ -118,7 +119,7 @@ const tone = (value: string) => {
   return "border border-border-weak-base bg-background-base text-text-strong"
 }
 
-function DraftMeta(props: { label: string; value?: string | null }) {
+function Meta(props: { label: string; value?: string | null }) {
   return (
     <div class="space-y-1">
       <p class="text-11-medium uppercase tracking-[0.08em] text-text-weak">{props.label}</p>
@@ -273,12 +274,15 @@ export default function History() {
 
   const [prefs, setPrefs] = persisted(Persist.workspace(sdk.directory, "history.page"), createStore({ debug: false }))
 
-  const [tab, setTab] = createSignal<HistoryTab>(initial.tab ?? (initial.draft_id ? "drafts" : initial.operation_id ? "operations" : "runs"))
+  const [tab, setTab] = createSignal<HistoryTab>(
+    initial.tab ?? (initial.draft_id ? "drafts" : initial.edit_id ? "edits" : initial.operation_id ? "operations" : "runs"),
+  )
   const [draftScope, setDraftScope] = createSignal<DraftScope>(initial.scope ?? "pending")
   const [debugOverride, setDebugOverride] = createSignal<boolean | undefined>(initial.debug)
   const [includeUser, setIncludeUser] = createSignal(false)
   const [focus, setFocus] = createSignal(focusFromQuery(initial))
   const [eventDetail, setEventDetail] = createSignal<string | undefined>()
+  const [editDetail, setEditDetail] = createSignal(initial.edit_id)
 
   const [runsState, setRunsState] = createStore({
     items: [] as Awaited<ReturnType<typeof loadHistoryRuns>>["items"],
@@ -299,6 +303,15 @@ export default function History() {
     error: "",
   })
 
+  const [editsState, setEditsState] = createStore({
+    items: [] as Awaited<ReturnType<typeof loadHistoryEdits>>["items"],
+    next_cursor: null as string | null,
+    endpoint: "",
+    loading: false,
+    loadingMore: false,
+    error: "",
+  })
+
   const [draftsState, setDraftsState] = createStore({
     items: [] as Awaited<ReturnType<typeof loadHistoryDrafts>>["items"],
     next_cursor: null as string | null,
@@ -310,6 +323,7 @@ export default function History() {
 
   const [runsRefresh, setRunsRefresh] = createSignal(0)
   const [operationsRefresh, setOperationsRefresh] = createSignal(0)
+  const [editsRefresh, setEditsRefresh] = createSignal(0)
   const [draftsRefresh, setDraftsRefresh] = createSignal(0)
 
   const [draftEditor, setDraftEditor] = createStore({
@@ -325,6 +339,19 @@ export default function History() {
     kind: "" as "" | "approve" | "reject" | "send",
     loading: false,
   })
+
+  const pickTab = (next: string) => {
+    if (next !== "runs" && next !== "operations" && next !== "drafts" && next !== "edits") return
+    setTab(next)
+    setFocus(undefined)
+    query({ tab: next, scope: next === "drafts" ? draftScope() : undefined })
+  }
+
+  const pickScope = (next: string) => {
+    if (next !== "pending" && next !== "processed") return
+    setDraftScope(next)
+    query({ tab: "drafts", scope: next })
+  }
 
   const workspace = createMemo(() => {
     const value = new URLSearchParams(location.search).get("workspace")
@@ -367,6 +394,7 @@ export default function History() {
     run_id?: string
     operation_id?: string
     draft_id?: string
+    edit_id?: string
   }) => {
     const value = new URLSearchParams(location.search)
     value.set("tab", input.tab)
@@ -393,6 +421,12 @@ export default function History() {
     }
     if (!input.draft_id) {
       value.delete("draft_id")
+    }
+    if (input.edit_id) {
+      value.set("edit_id", input.edit_id)
+    }
+    if (!input.edit_id) {
+      value.delete("edit_id")
     }
     const next = value.toString()
     navigate(`${location.pathname}${next ? `?${next}` : ""}`, { replace: true })
@@ -480,6 +514,44 @@ export default function History() {
     setOperationsState("loading", false)
   }
 
+  let editsID = 0
+  const loadEdits = async (cursor?: string) => {
+    const append = !!cursor
+    const id = ++editsID
+
+    if (append) setEditsState("loadingMore", true)
+    if (!append) setEditsState("loading", true)
+
+    const result = await loadHistoryEdits({
+      baseUrl: sdk.url,
+      directory: sdk.directory,
+      auth: auth(),
+      cursor,
+    }).catch((error) => error)
+
+    if (id !== editsID) return
+
+    if (result instanceof Error) {
+      setEditsState("error", message(result))
+      if (append) setEditsState("loadingMore", false)
+      if (!append) setEditsState("loading", false)
+      return
+    }
+
+    setEditsState("error", "")
+    setEditsState("endpoint", result.endpoint)
+    setEditsState("next_cursor", result.next_cursor)
+
+    if (append) {
+      setEditsState("items", (items) => [...items, ...result.items])
+      setEditsState("loadingMore", false)
+      return
+    }
+
+    setEditsState("items", result.items)
+    setEditsState("loading", false)
+  }
+
   let draftsID = 0
   const loadDrafts = async (cursor?: string) => {
     const append = !!cursor
@@ -539,6 +611,14 @@ export default function History() {
     void loadOperations()
   }
 
+  const refreshEditsList = () => {
+    setEditsState("items", [])
+    setEditsState("next_cursor", null)
+    setEditsState("loadingMore", false)
+    setEditsState("error", "")
+    void loadEdits()
+  }
+
   const refreshDraftsList = () => {
     setDraftsState("items", [])
     setDraftsState("next_cursor", null)
@@ -592,6 +672,12 @@ export default function History() {
 
   const openRun = (run_id: string) => {
     navigate(`/${params.dir}/runs/${run_id}`)
+  }
+
+  const openWorkflow = (workflow_id: string, edit_id?: string) => {
+    navigate(
+      `/${params.dir}/workflows/${encodeURIComponent(workflow_id)}${edit_id ? `?tab=history&edit_id=${encodeURIComponent(edit_id)}` : ""}`,
+    )
   }
 
   const openDraft = (draft_id: string, scope: DraftScope) => {
@@ -750,10 +836,11 @@ export default function History() {
 
   createEffect(() => {
     const next = parseHistoryQuery(location.search)
-    setTab(next.tab ?? (next.draft_id ? "drafts" : next.operation_id ? "operations" : "runs"))
+    setTab(next.tab ?? (next.draft_id ? "drafts" : next.edit_id ? "edits" : next.operation_id ? "operations" : "runs"))
     setDraftScope(next.scope ?? "pending")
     setDebugOverride(next.debug)
     setFocus(focusFromQuery(next))
+    setEditDetail(next.edit_id)
   })
 
   createEffect(() => {
@@ -771,6 +858,13 @@ export default function History() {
     operationsRefresh()
     workspace()
     refreshOperationsList()
+  })
+
+  createEffect(() => {
+    if (tab() !== "edits") return
+    editsRefresh()
+    workspace()
+    refreshEditsList()
   })
 
   createEffect(() => {
@@ -792,7 +886,9 @@ export default function History() {
         ? `[data-component="history-run-row"][data-id="${target.id}"]`
         : target.tab === "operations"
           ? `[data-component="history-operation-row"][data-id="${target.id}"]`
-          : `[data-component="history-draft-row"][data-id="${target.id}"]`
+          : target.tab === "edits"
+            ? `[data-component="history-edit-row"][data-id="${target.id}"]`
+            : `[data-component="history-draft-row"][data-id="${target.id}"]`
 
     queueMicrotask(() => {
       const element = document.querySelector<HTMLElement>(selector)
@@ -919,14 +1015,14 @@ export default function History() {
                     </Show>
 
                     <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                      <DraftMeta label="Integration" value={item.integration_id} />
-                      <DraftMeta label="Target" value={item.target} />
-                      <DraftMeta label="Run ID" value={item.run_id} />
-                      <DraftMeta label="Material Hash" value={item.material_hash} />
-                      <DraftMeta label="Policy ID" value={item.policy_id} />
-                      <DraftMeta label="Policy Version" value={item.policy_version} />
-                      <DraftMeta label="Decision ID" value={item.decision_id} />
-                      <DraftMeta label="Decision Reason" value={item.decision_reason_code} />
+                      <Meta label="Integration" value={item.integration_id} />
+                      <Meta label="Target" value={item.target} />
+                      <Meta label="Run ID" value={item.run_id} />
+                      <Meta label="Material Hash" value={item.material_hash} />
+                      <Meta label="Policy ID" value={item.policy_id} />
+                      <Meta label="Policy Version" value={item.policy_version} />
+                      <Meta label="Decision ID" value={item.decision_id} />
+                      <Meta label="Decision Reason" value={item.decision_reason_code} />
                     </div>
 
                     <div class="rounded-md border border-border-weak-base bg-background-base p-3 space-y-3">
@@ -945,12 +1041,12 @@ export default function History() {
                       </div>
 
                       <Show when={item.dispatch}>
-                        {(dispatch) => (
+                          {(dispatch) => (
                           <div data-component="history-draft-dispatch" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                            <DraftMeta label="Attempt ID" value={dispatch().id} />
-                            <DraftMeta label="Idempotency Key" value={dispatch().idempotency_key} />
-                            <DraftMeta label="Remote Reference" value={dispatch().remote_reference} />
-                            <DraftMeta label="Dispatch Reason" value={dispatch().block_reason_code} />
+                            <Meta label="Attempt ID" value={dispatch().id} />
+                            <Meta label="Idempotency Key" value={dispatch().idempotency_key} />
+                            <Meta label="Remote Reference" value={dispatch().remote_reference} />
+                            <Meta label="Dispatch Reason" value={dispatch().block_reason_code} />
                           </div>
                         )}
                       </Show>
@@ -1066,13 +1162,16 @@ export default function History() {
           <div class="space-y-1">
             <h1 class="text-16-medium text-text-strong">History</h1>
             <p class="text-13-regular text-text-weak">
-              Runs, operations, and outbound drafts are listed with deterministic history ordering.
+              Runs, operations, outbound drafts, and workflow edits are listed with deterministic history ordering.
             </p>
             <Show when={tab() === "runs" && runsState.endpoint}>
               <p class="text-12-mono text-text-weak">source: <span>{runsState.endpoint}</span></p>
             </Show>
             <Show when={tab() === "operations" && operationsState.endpoint}>
               <p class="text-12-mono text-text-weak">source: <span>{operationsState.endpoint}</span></p>
+            </Show>
+            <Show when={tab() === "edits" && editsState.endpoint}>
+              <p class="text-12-mono text-text-weak">source: <span>{editsState.endpoint}</span></p>
             </Show>
             <Show when={tab() === "drafts" && draftsState.endpoint}>
               <p class="text-12-mono text-text-weak">source: <span>{draftsState.endpoint}</span></p>
@@ -1106,6 +1205,10 @@ export default function History() {
                 }
                 if (tab() === "operations") {
                   setOperationsRefresh((value) => value + 1)
+                  return
+                }
+                if (tab() === "edits") {
+                  setEditsRefresh((value) => value + 1)
                   return
                 }
                 setDraftsRefresh((value) => value + 1)
@@ -1146,7 +1249,7 @@ export default function History() {
           </Show>
         </div>
 
-        <Tabs value={tab()}>
+        <Tabs value={tab()} onChange={pickTab}>
           <Tabs.List>
             <Tabs.Trigger
               value="runs"
@@ -1183,6 +1286,18 @@ export default function History() {
               }}
             >
               Drafts
+            </Tabs.Trigger>
+            <Tabs.Trigger
+              value="edits"
+              data-component="history-tab-trigger"
+              data-tab="edits"
+              onClick={() => {
+                setTab("edits")
+                setFocus(undefined)
+                query({ tab: "edits" })
+              }}
+            >
+              Workflow Edits
             </Tabs.Trigger>
           </Tabs.List>
 
@@ -1429,8 +1544,175 @@ export default function History() {
             </SolidSwitch>
           </Tabs.Content>
 
+          <Tabs.Content value="edits" class="pt-4">
+            <SolidSwitch>
+              <Match when={editsState.loading}>
+                <div class="rounded-lg border border-border-weak-base p-4 text-13-regular">Loading workflow edits...</div>
+              </Match>
+              <Match when={editsState.error}>
+                <div class="rounded-lg border border-border-weak-base p-4 text-13-regular text-icon-critical-base">
+                  {editsState.error}
+                </div>
+              </Match>
+              <Match when={editsState.items.length === 0}>
+                <div class="rounded-lg border border-border-weak-base p-4 text-13-regular">
+                  No workflow edits were returned.
+                </div>
+              </Match>
+              <Match when={true}>
+                <div class="space-y-3">
+                  <For each={editsState.items}>
+                    {(item) => {
+                      const focused = () => focus()?.tab === "edits" && focus()?.id === item.id
+                      const opened = () => editDetail() === item.id
+
+                      return (
+                        <section
+                          data-component="history-edit-row"
+                          data-id={item.id}
+                          data-focused={focused() ? "true" : "false"}
+                          class="rounded-lg border border-border-weak-base bg-background-base p-4 space-y-4"
+                          classList={{
+                            "ring-1 ring-icon-info-base": focused(),
+                          }}
+                        >
+                          <div class="flex items-start justify-between gap-3">
+                            <div class="space-y-1 min-w-0">
+                              <p class="text-14-medium text-text-strong break-all">{item.workflow_id}</p>
+                              <p class="text-12-regular text-text-weak">
+                                {humanize(item.action)} • checkpoint {item.id} • {stamp(item.created_at)}
+                              </p>
+                              <Show when={item.note}>
+                                {(value) => (
+                                  <p data-component="history-edit-note" class="text-12-regular text-text-strong break-words">
+                                    {value()}
+                                  </p>
+                                )}
+                              </Show>
+                            </div>
+
+                            <div class="flex flex-wrap justify-end gap-2 shrink-0">
+                              <span
+                                data-component="history-edit-action"
+                                class="rounded-md border border-border-weak-base px-2 py-1 text-12-regular text-text-weak"
+                              >
+                                {humanize(item.action)}
+                              </span>
+                              <Show when={item.node_id}>
+                                {(value) => (
+                                  <span class="rounded-md border border-border-weak-base px-2 py-1 text-12-regular text-text-weak">
+                                    node {value()}
+                                  </span>
+                                )}
+                              </Show>
+                              <Show when={item.session}>
+                                {(value) => (
+                                  <span
+                                    data-component="history-edit-session"
+                                    class="rounded-md border border-border-weak-base px-2 py-1 text-12-regular text-text-weak"
+                                  >
+                                    {value().title}
+                                  </span>
+                                )}
+                              </Show>
+                            </div>
+                          </div>
+
+                          <div class="flex flex-wrap items-center gap-2">
+                            <Button
+                              variant="ghost"
+                              data-component="history-open-workflow"
+                              onClick={() => openWorkflow(item.workflow_id)}
+                            >
+                              Open Workflow
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              data-component="history-open-workflow-history"
+                              onClick={() => openWorkflow(item.workflow_id, item.id)}
+                            >
+                              Open Workflow History
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              data-component="history-open-checkpoint"
+                              onClick={() => {
+                                setFocus({ tab: "edits", id: item.id })
+                                setEditDetail(opened() ? undefined : item.id)
+                                query({ tab: "edits", edit_id: item.id })
+                              }}
+                            >
+                              {opened() ? "Hide Checkpoint" : "Open Checkpoint"}
+                            </Button>
+                            <Show when={item.session_id && !item.session}>
+                              <span
+                                data-component="history-link-missing"
+                                class="text-12-regular text-text-weak rounded-md border border-border-weak-base px-2 py-1"
+                              >
+                                Session link missing
+                              </span>
+                            </Show>
+                          </div>
+
+                          <Show when={opened()}>
+                            <div data-component="history-edit-detail" class="space-y-4">
+                              <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                                <Meta label="Checkpoint ID" value={item.id} />
+                                <Meta label="Workflow ID" value={item.workflow_id} />
+                                <Meta label="Revision" value={item.revision.id} />
+                                <Meta label="Previous Revision" value={item.previous_revision?.id} />
+                                <Meta label="File" value={item.revision.file} />
+                                <Meta label="Content Hash" value={item.revision.content_hash} />
+                                <Meta label="Node ID" value={item.node_id} />
+                                <Meta label="Session ID" value={item.session?.id ?? item.session_id} />
+                              </div>
+
+                              <Show when={item.session}>
+                                {(value) => (
+                                  <div class="rounded-md border border-border-weak-base bg-background-base p-3 text-12-regular text-text-strong">
+                                    Linked session: {value().title} • {value().id}
+                                  </div>
+                                )}
+                              </Show>
+
+                              <div class="rounded-md border border-border-weak-base bg-background-base p-3 space-y-2">
+                                <p class="text-11-medium uppercase tracking-[0.08em] text-text-weak">Diff</p>
+                                <pre
+                                  data-component="history-edit-diff"
+                                  class="max-h-96 overflow-auto whitespace-pre-wrap break-words font-mono text-xs text-text-strong"
+                                >
+                                  {item.diff || "No diff returned."}
+                                </pre>
+                              </div>
+                            </div>
+                          </Show>
+                        </section>
+                      )
+                    }}
+                  </For>
+
+                  <Show when={editsState.next_cursor}>
+                    {(cursor) => (
+                      <Button
+                        variant="ghost"
+                        data-component="history-load-more"
+                        data-tab="edits"
+                        onClick={() => {
+                          if (editsState.loadingMore) return
+                          void loadEdits(cursor())
+                        }}
+                      >
+                        {editsState.loadingMore ? "Loading..." : "Load More"}
+                      </Button>
+                    )}
+                  </Show>
+                </div>
+              </Match>
+            </SolidSwitch>
+          </Tabs.Content>
+
           <Tabs.Content value="drafts" class="pt-4">
-            <Tabs value={draftScope()} variant="pill" data-scope="history-drafts">
+            <Tabs value={draftScope()} onChange={pickScope} variant="pill" data-scope="history-drafts">
               <Tabs.List>
                 <Tabs.Trigger
                   value="pending"

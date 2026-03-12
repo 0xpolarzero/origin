@@ -472,7 +472,7 @@ test("toggling updates startup switch updates localStorage", async ({ page, goto
 
   const isDisabled = await toggleInput.evaluate((el: HTMLInputElement) => el.disabled)
   if (isDisabled) {
-    test.skip()
+    await expect(toggleInput).toBeDisabled()
     return
   }
 

@@ -48,6 +48,16 @@ import type {
   GlobalHealthResponses,
   GlobalImportOpencodeProvidersResponses,
   InstanceDisposeResponses,
+  LibraryItemCopyErrors,
+  LibraryItemCopyResponses,
+  LibraryItemDeleteErrors,
+  LibraryItemDeleteResponses,
+  LibraryItemDetailErrors,
+  LibraryItemDetailResponses,
+  LibraryItemHistoryErrors,
+  LibraryItemHistoryResponses,
+  LibraryItemSaveErrors,
+  LibraryItemSaveResponses,
   LibraryKnowledgeImportErrors,
   LibraryKnowledgeImportResponses,
   LibraryListResponses,
@@ -82,6 +92,7 @@ import type {
   PermissionRespondErrors,
   PermissionRespondResponses,
   PermissionRuleset,
+  PostExperimentalWorkspaceIdResponses,
   ProjectCurrentResponses,
   ProjectInitGitResponses,
   ProjectListResponses,
@@ -179,6 +190,10 @@ import type {
   TuiShowToastResponses,
   TuiSubmitPromptResponses,
   VcsGetResponses,
+  WorkflowBuildErrors,
+  WorkflowBuildResponses,
+  WorkflowCopyErrors,
+  WorkflowCopyResponses,
   WorkflowDebugKeepRunningErrors,
   WorkflowDebugKeepRunningResponses,
   WorkflowDebugRemindersResponses,
@@ -201,22 +216,35 @@ import type {
   WorkflowDraftsUpdateErrors,
   WorkflowDraftsUpdateResponses,
   WorkflowGetResponses,
+  WorkflowHideErrors,
+  WorkflowHideResponses,
   WorkflowHistoryDraftsResponses,
+  WorkflowHistoryEditsResponses,
+  WorkflowHistoryGetErrors,
+  WorkflowHistoryGetResponses,
   WorkflowHistoryOperationsResponses,
   WorkflowHistoryRunsResponses,
+  WorkflowListResponses,
   WorkflowRunCancelErrors,
   WorkflowRunCancelResponses,
   WorkflowRunDetailGetErrors,
   WorkflowRunDetailGetResponses,
   WorkflowRunGetErrors,
   WorkflowRunGetResponses,
+  WorkflowRunRerunErrors,
+  WorkflowRunRerunResponses,
   WorkflowRunStartErrors,
   WorkflowRunStartResponses,
   WorkflowRunValidateErrors,
   WorkflowRunValidateResponses,
+  WorkflowSaveErrors,
+  WorkflowSaveResponses,
   WorkflowSessionLinkGetResponses,
+  WorkflowSessionOpenErrors,
+  WorkflowSessionOpenResponses,
   WorkflowSignalIngestErrors,
   WorkflowSignalIngestResponses,
+  WorkflowStepView,
   WorkflowValidateResponses,
   WorktreeCreateErrors,
   WorktreeCreateInput,
@@ -2920,6 +2948,40 @@ export class Debug extends HeyApiClient {
 
 export class History extends HeyApiClient {
   /**
+   * List workflow edit history
+   *
+   * List persisted workflow edit checkpoints with diff-first review metadata.
+   */
+  public edits<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      cursor?: string
+      limit?: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "cursor" },
+            { in: "query", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<WorkflowHistoryEditsResponses, unknown, ThrowOnError>({
+      url: "/workflow/history/edits",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
    * List workflow runs history
    *
    * List run history with deterministic sorting, cursor pagination, and safe operation-link metadata.
@@ -3026,6 +3088,42 @@ export class History extends HeyApiClient {
     )
     return (options?.client ?? this.client).get<WorkflowHistoryDraftsResponses, unknown, ThrowOnError>({
       url: "/workflow/history/drafts",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get workflow edit history
+   *
+   * Return workflow-local edit checkpoints, diffs, and linked session metadata.
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      workflow_id: string
+      directory?: string
+      workspace?: string
+      cursor?: string
+      limit?: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workflow_id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "cursor" },
+            { in: "query", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<WorkflowHistoryGetResponses, WorkflowHistoryGetErrors, ThrowOnError>({
+      url: "/workflow/workflows/{workflow_id}/history",
       ...options,
       ...params,
     })
@@ -3313,6 +3411,55 @@ export class Drafts extends HeyApiClient {
   }
 }
 
+export class Session3 extends HeyApiClient {
+  /**
+   * Open workflow authoring session
+   *
+   * Create a hidden builder or node-edit session linked to a workflow authoring context.
+   */
+  public open<ThrowOnError extends boolean = false>(
+    parameters: {
+      workflow_id: string
+      directory?: string
+      workspace?: string
+      role?: "builder" | "node_edit"
+      node_id?: string
+      title?: string
+      text?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workflow_id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "role" },
+            { in: "body", key: "node_id" },
+            { in: "body", key: "title" },
+            { in: "body", key: "text" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<WorkflowSessionOpenResponses, WorkflowSessionOpenErrors, ThrowOnError>(
+      {
+        url: "/workflow/workflows/{workflow_id}/session",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
+  }
+}
+
 export class Detail extends HeyApiClient {
   /**
    * Get workflow detail
@@ -3386,6 +3533,45 @@ export class Detail2 extends HeyApiClient {
 }
 
 export class Run extends HeyApiClient {
+  /**
+   * Rerun a workflow
+   *
+   * Start a new manual workflow run using the frozen input payload from an earlier run.
+   */
+  public rerun<ThrowOnError extends boolean = false>(
+    parameters: {
+      run_id: string
+      directory?: string
+      workspace?: string
+      node_id?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "run_id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "node_id" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<WorkflowRunRerunResponses, WorkflowRunRerunErrors, ThrowOnError>({
+      url: "/workflow/runs/{run_id}/rerun",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
   /**
    * Validate workflow run entrypoint
    *
@@ -3574,6 +3760,280 @@ export class SessionLink extends HeyApiClient {
 
 export class Workflow extends HeyApiClient {
   /**
+   * Build a workflow draft
+   *
+   * Create a first workflow draft on disk and open a hidden builder session for further refinement.
+   */
+  public build<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      prompt?: string
+      name?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "prompt" },
+            { in: "body", key: "name" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<WorkflowBuildResponses, WorkflowBuildErrors, ThrowOnError>({
+      url: "/workflow/workflows/build",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Duplicate workflow definition
+   *
+   * Create a canonical duplicate of a workflow and its local resources.
+   */
+  public copy<ThrowOnError extends boolean = false>(
+    parameters: {
+      workflow_id: string
+      directory?: string
+      workspace?: string
+      name?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workflow_id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "name" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<WorkflowCopyResponses, WorkflowCopyErrors, ThrowOnError>({
+      url: "/workflow/workflows/{workflow_id}/copy",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Hide workflow definition
+   *
+   * Move a workflow out of the active canonical workflow index without deleting its on-disk content.
+   */
+  public hide<ThrowOnError extends boolean = false>(
+    parameters: {
+      workflow_id: string
+      directory?: string
+      workspace?: string
+      body?: {
+        [key: string]: unknown
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workflow_id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "body", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<WorkflowHideResponses, WorkflowHideErrors, ThrowOnError>({
+      url: "/workflow/workflows/{workflow_id}/hide",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * List workflow summaries
+   *
+   * Return workflow summaries with last-run and last-edit metadata for the workflows index.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<WorkflowListResponses, unknown, ThrowOnError>({
+      url: "/workflow/workflows",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Save workflow definition
+   *
+   * Persist a workflow definition and any supplied local resource materials back to canonical files.
+   */
+  public save<ThrowOnError extends boolean = false>(
+    parameters: {
+      workflow_id: string
+      directory?: string
+      workspace?: string
+      workflow?: {
+        schema_version: 2
+        id: string
+        name: string
+        description?: string
+        trigger: {
+          type: "manual"
+        }
+        inputs?: Array<
+          | {
+              key: string
+              type: "text"
+              label: string
+              required: boolean
+              default?: string
+            }
+          | {
+              key: string
+              type: "long_text"
+              label: string
+              required: boolean
+              default?: string
+            }
+          | {
+              key: string
+              type: "number"
+              label: string
+              required: boolean
+              default?: number
+            }
+          | {
+              key: string
+              type: "boolean"
+              label: string
+              required: boolean
+              default?: boolean
+            }
+          | {
+              key: string
+              type: "select"
+              label: string
+              required: boolean
+              default?: string | number | boolean | null
+              options: Array<{
+                label: string
+                value: string | number | boolean | null
+              }>
+            }
+          | {
+              key: string
+              type: "path"
+              label: string
+              required: boolean
+              default?: string
+              mode: "file" | "directory" | "either"
+            }
+        >
+        resources?: Array<
+          | {
+              id: string
+              source: "local"
+              kind: "script" | "prompt_template"
+              path: string
+            }
+          | {
+              id: string
+              source: "library"
+              kind: "script" | "prompt_template"
+              item_id: string
+            }
+        >
+        steps: Array<WorkflowStepView>
+      }
+      file?: string
+      resources?: {
+        [key: string]: string
+      }
+      action?: "builder" | "node_edit" | "graph_edit" | "duplicate" | "hide"
+      session_id?: string | null
+      node_id?: string | null
+      note?: string | null
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workflow_id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "workflow" },
+            { in: "body", key: "file" },
+            { in: "body", key: "resources" },
+            { in: "body", key: "action" },
+            { in: "body", key: "session_id" },
+            { in: "body", key: "node_id" },
+            { in: "body", key: "note" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).put<WorkflowSaveResponses, WorkflowSaveErrors, ThrowOnError>({
+      url: "/workflow/workflows/{workflow_id}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
    * Validate workflows and library
    *
    * Load workflow and library YAML definitions and return deterministic validation state.
@@ -3655,6 +4115,11 @@ export class Workflow extends HeyApiClient {
     return (this._drafts ??= new Drafts({ client: this.client }))
   }
 
+  private _session?: Session3
+  get session(): Session3 {
+    return (this._session ??= new Session3({ client: this.client }))
+  }
+
   private _detail?: Detail
   get detail(): Detail {
     return (this._detail ??= new Detail({ client: this.client }))
@@ -3720,6 +4185,186 @@ export class Knowledge extends HeyApiClient {
   }
 }
 
+export class Item extends HeyApiClient {
+  /**
+   * Delete library item
+   *
+   * Delete a shared library file when no workflows still depend on it.
+   */
+  public delete<ThrowOnError extends boolean = false>(
+    parameters: {
+      item_id: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "item_id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<LibraryItemDeleteResponses, LibraryItemDeleteErrors, ThrowOnError>({
+      url: "/library/items/{item_id}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get library item detail
+   *
+   * Load canonical library item content, usage links, and revision head for the detail surface.
+   */
+  public detail<ThrowOnError extends boolean = false>(
+    parameters: {
+      item_id: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "item_id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<LibraryItemDetailResponses, LibraryItemDetailErrors, ThrowOnError>({
+      url: "/library/items/{item_id}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Save library item
+   *
+   * Write raw canonical library YAML back to disk and return refreshed detail metadata.
+   */
+  public save<ThrowOnError extends boolean = false>(
+    parameters: {
+      item_id: string
+      directory?: string
+      workspace?: string
+      text?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "item_id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "text" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).put<LibraryItemSaveResponses, LibraryItemSaveErrors, ThrowOnError>({
+      url: "/library/items/{item_id}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Get library item history
+   *
+   * Return library revision history with diff-first review metadata.
+   */
+  public history<ThrowOnError extends boolean = false>(
+    parameters: {
+      item_id: string
+      directory?: string
+      workspace?: string
+      cursor?: string
+      limit?: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "item_id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "cursor" },
+            { in: "query", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<LibraryItemHistoryResponses, LibraryItemHistoryErrors, ThrowOnError>({
+      url: "/library/items/{item_id}/history",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Create workflow-local copy
+   *
+   * Replace shared library references inside a workflow with local resource copies.
+   */
+  public copy<ThrowOnError extends boolean = false>(
+    parameters: {
+      item_id: string
+      directory?: string
+      workspace?: string
+      workflow_id?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "item_id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "workflow_id" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<LibraryItemCopyResponses, LibraryItemCopyErrors, ThrowOnError>({
+      url: "/library/items/{item_id}/copy",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Library extends HeyApiClient {
   /**
    * Get library validation
@@ -3754,6 +4399,11 @@ export class Library extends HeyApiClient {
   private _knowledge?: Knowledge
   get knowledge(): Knowledge {
     return (this._knowledge ??= new Knowledge({ client: this.client }))
+  }
+
+  private _item?: Item
+  get item(): Item {
+    return (this._item ??= new Item({ client: this.client }))
   }
 }
 
@@ -5053,6 +5703,45 @@ export class OpencodeClient extends HeyApiClient {
   constructor(args?: { client?: Client; key?: string }) {
     super(args)
     OpencodeClient.__registry.set(this, args?.key)
+  }
+
+  public postExperimentalWorkspaceId<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+      directory?: string
+      workspace?: string
+      branch?: string | null
+      config?: {
+        type: "worktree"
+        directory: string
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "branch" },
+            { in: "body", key: "config" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<PostExperimentalWorkspaceIdResponses, unknown, ThrowOnError>({
+      url: "/experimental/workspace/{id}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
   }
 
   private _global?: Global

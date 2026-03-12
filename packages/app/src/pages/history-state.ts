@@ -1,4 +1,4 @@
-export type HistoryTab = "runs" | "operations" | "drafts"
+export type HistoryTab = "runs" | "operations" | "drafts" | "edits"
 
 export type DraftScope = "pending" | "processed"
 
@@ -9,6 +9,7 @@ export type HistoryQuery = {
   run_id?: string
   operation_id?: string
   draft_id?: string
+  edit_id?: string
 }
 
 export type DebugState = {
@@ -24,7 +25,7 @@ type Duplicate = {
   }
 }
 
-const tabs = new Set<HistoryTab>(["runs", "operations", "drafts"])
+const tabs = new Set<HistoryTab>(["runs", "operations", "drafts", "edits"])
 const scopes = new Set<DraftScope>(["pending", "processed"])
 
 const bool = (value: string | null) => {
@@ -48,6 +49,7 @@ export function parseHistoryQuery(value: string) {
   const run_id = text(params.get("run_id"))
   const operation_id = text(params.get("operation_id"))
   const draft_id = text(params.get("draft_id"))
+  const edit_id = text(params.get("edit_id"))
 
   return {
     tab: tab && tabs.has(tab as HistoryTab) ? (tab as HistoryTab) : undefined,
@@ -56,6 +58,7 @@ export function parseHistoryQuery(value: string) {
     run_id,
     operation_id,
     draft_id,
+    ...(edit_id ? { edit_id } : {}),
   } satisfies HistoryQuery
 }
 
@@ -83,6 +86,13 @@ export function focusFromQuery(input: HistoryQuery) {
     return {
       tab: "drafts" as const,
       id: input.draft_id,
+    }
+  }
+
+  if (input.edit_id) {
+    return {
+      tab: "edits" as const,
+      id: input.edit_id,
     }
   }
 

@@ -82,6 +82,20 @@ test("status popover closes on escape", async ({ page, gotoSession }) => {
   await expect(popoverBody).toHaveCount(0)
 })
 
+test("status popover restores focus to the trigger on escape", async ({ page, gotoSession }) => {
+  await gotoSession()
+
+  const btn = page.getByRole("button", { name: /status/i }).first()
+  await btn.focus()
+
+  const { popoverBody } = await openStatusPopover(page)
+  await expect(popoverBody).toBeVisible()
+
+  await page.keyboard.press("Escape")
+  await expect(popoverBody).toHaveCount(0)
+  await expect(btn).toBeFocused()
+})
+
 test("status popover closes when clicking outside", async ({ page, gotoSession }) => {
   await gotoSession()
 
