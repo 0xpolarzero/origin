@@ -20,6 +20,14 @@
 - Only load [docs/sync-fork/GUIDE.md](/Users/polarzero/code/projects/origin/docs/sync-fork/GUIDE.md) when the task explicitly asks to sync this fork with upstream.
 - Do not load `docs/sync-fork/GUIDE.md` for unrelated implementation tasks.
 
+## Child Agents
+
+- Use child agents as much as possible when relevant to preserve the current agent's context; offload independent, bounded sidecar work so the parent agent stays focused on the critical path and keeps tight, task-relevant context because context fills quickly.
+- Do not pass the `model` field to `spawn_agent`. Let child agents inherit the current agent's model automatically.
+- Prefer spawning child agents for independent, bounded sidecar work that can run in parallel.
+- Do not delegate the immediate blocking step on the critical path.
+- Do not spawn child agents for trivial tasks, single-file edits, or work that depends on tight shared context.
+
 ## Commits
 
 - Use Conventional Commits format: `<type>(<scope>): <description>` (scope optional).
