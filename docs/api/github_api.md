@@ -276,6 +276,7 @@ Recommended cache policy:
 - cache only selected bodies, diffs, and snippets as needed
 - cache cursors and ETags for incremental refresh
 - evict cold data aggressively
+- The shared polling / cursor / cache / activity-event model is defined in [provider_ingress_api.md](./provider_ingress_api.md)
 
 Polling / refresh strategy:
 

@@ -637,6 +637,11 @@ Origin should be deliberate about which domains it owns directly and which it tr
 - Canonical source remains the external service
 - Origin should keep metadata, caches, and operational state only as needed
 - Raw content should be cached selectively for performance or robustness, not persisted broadly by default
+- The v1 "subscription" model for external systems is server-owned incremental polling, not a separate first-class subscription product surface
+- Each provider keeps a saved cursor or last-successful-sync marker and polls only for new or changed state after that point
+- Provider polling updates selective local caches, emits normalized activity events, and those events are what automations react to
+- Caches are the current-state working set for context and actions; activity events are the trigger surface for reactive automation
+- The shared ingress model is defined in [provider_ingress_api.md](./api/provider_ingress_api.md)
 
 #### Email model
 
@@ -700,6 +705,7 @@ All core libraries and tools used by the system should be cloned locally into `d
 - [email_api.md](./api/email_api.md)
 - [github_api.md](./api/github_api.md)
 - [telegram_api.md](./api/telegram_api.md)
+- [provider_ingress_api.md](./api/provider_ingress_api.md)
 - [automation_api.md](./api/automation_api.md)
 - [onboarding.md](./details/onboarding.md)
 - [origin_incur_cli.ts](./api/origin_incur_cli.ts)

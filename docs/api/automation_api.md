@@ -498,9 +498,30 @@ Automations may act on:
 
 They should not require the user to manually re-state provider semantics in chat once the automation object exists.
 
+## Relationship To Provider Ingress
+
+For provider-backed reactive workflows, automations should trigger from normalized activity events emitted by provider ingress, not by diffing provider cache state directly.
+
+The intended flow is:
+
+1. a provider poller runs
+2. the selective provider cache is updated
+3. Origin emits activity events for meaningful changes
+4. matching automations trigger from those events
+5. the automation reads provider cache and linked Origin objects for execution context
+
+Examples:
+
+- `on new email` should trigger from an email ingress event such as `email.thread.received`
+- `on followed GitHub PR updated` should trigger from a GitHub ingress event
+- `on Telegram message in tracked group` should trigger from a Telegram ingress event
+
+This keeps the trigger surface edge-based and makes retries, observability, and duplicate suppression much cleaner.
+
 ## Implementation Notes
 
 - Use SQLite for operational state that is easier to query outside the CRDT store.
 - Keep the durable automation definition in replicated local-first state.
 - Keep execution logs, runs, and activity events queryable from the app.
 - Favor a small number of explicit trigger and action types over a generic workflow DSL.
+- The shared provider polling and event-ingress model is defined in [provider_ingress_api.md](./provider_ingress_api.md).

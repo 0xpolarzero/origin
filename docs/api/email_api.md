@@ -367,6 +367,7 @@ The email API should support at least the following mutations.
 - Sync should be cursor-based and provider-driven
 - If the cursor becomes invalid, Origin should be able to fall back to a broader resync of the account
 - The local email state should be treated as an evictable projection, not a durable mailbox replica
+- The shared polling / cursor / cache / activity-event model is defined in [provider_ingress_api.md](./provider_ingress_api.md)
 
 ## Activity Events
 

@@ -313,6 +313,7 @@ Search should be limited to what Origin has cached or can reasonably fetch on de
 - The cache should be selective, recent, and bounded.
 - The cache should be recoverable from Telegram if lost.
 - Local clients should read Telegram state through the server or from the server-synced local state, not by talking to Telegram directly.
+- The shared polling / cursor / cache / activity-event model is defined in [provider_ingress_api.md](./provider_ingress_api.md)
 
 ## Group Model
 
