@@ -1,0 +1,24 @@
+{
+  "name": "@origin/root",
+  "private": true,
+  "workspaces": [
+    "apps/server"
+  ],
+  "scripts": {
+    "dev": "bun run --filter @origin/server dev",
+    "start": "bun run --filter @origin/server start",
+    "lint": "oxlint .",
+    "lint:fix": "oxlint . --fix",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "typecheck": "tsc -p apps/server/tsconfig.json --noEmit",
+    "check": "bun run format:check && bun run lint && bun run typecheck"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.11",
+    "oxfmt": "0.43.0",
+    "oxlint": "1.58.0",
+    "typescript": "6.0.2"
+  },
+  "packageManager": "bun@1.3.11"
+}

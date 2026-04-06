@@ -1,0 +1,23 @@
+node_modules/
+dist/
+coverage/
+.DS_Store
+.env
+.env.local
+.env.*.local
+!.env.example
+*.log
+
+# Bun
+.bun/
+
+# Apple / Xcode
+DerivedData/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcuserdatad/
+*.xcuserstate
+
+# Editors
+.idea/
+.vscode/

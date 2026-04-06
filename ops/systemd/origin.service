@@ -1,0 +1,15 @@
+[Unit]
+Description=Origin server
+After=network.target
+
+[Service]
+Type=simple
+User=origin
+WorkingDirectory=/opt/origin
+EnvironmentFile=/opt/origin/ops/env/origin.env
+ExecStart=/usr/bin/env bun run --filter @origin/server start
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
