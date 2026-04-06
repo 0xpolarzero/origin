@@ -134,7 +134,7 @@ Origin should feel like a personal chief-of-staff that can actually operate. The
 - CLI implemented with `incur`
 - CLI should be ergonomic for both humans and agents, but optimized for agent reliability first
 - CLI is the contract between the model and the capabilities of the system
-- The detailed agent-facing CLI contract is defined in [origin_cli.ts](./api/origin_cli.ts)
+- The detailed agent-facing CLI contract is defined in [origin_incur_cli.ts](./api/origin_incur_cli.ts)
 
 ### Working Data Model
 
@@ -523,7 +523,7 @@ Origin should be deliberate about which domains it owns directly and which it tr
 - The memory file is the canonical place for important durable facts, preferences, standing instructions, and other context the agent should keep in mind
 - The app must expose this memory file directly so the user can inspect and edit it for customization
 - Agent prompts should explicitly locate this memory file and explain how the agent is expected to read from it and update it
-- Memory behavior should be governed by a protocol rather than a fixed schema; that protocol is defined in [memory_protocol.md](./memory_protocol.md)
+- Memory behavior should be governed by a protocol rather than a fixed schema; that protocol is defined in [memory_protocol.md](./details/memory_protocol.md)
 - The agent may create supporting files or datasets referenced from memory when a topic becomes recurrent, large, or worth organizing
 - The key distinction is:
   - primary sync/history layer: replicated note document history
@@ -696,13 +696,13 @@ All core libraries and tools used by the system should be cloned locally into `d
 ### Linked Specs
 
 - [calendar_tasks_api.md](./api/calendar_tasks_api.md)
-- [memory_protocol.md](./memory_protocol.md)
+- [memory_protocol.md](./details/memory_protocol.md)
 - [email_api.md](./api/email_api.md)
 - [github_api.md](./api/github_api.md)
 - [telegram_api.md](./api/telegram_api.md)
 - [automation_api.md](./api/automation_api.md)
-- [onboarding.md](./onboarding.md)
-- [origin_cli.ts](./api/origin_cli.ts)
+- [onboarding.md](./details/onboarding.md)
+- [origin_incur_cli.ts](./api/origin_incur_cli.ts)
 
 ## Security Principles
 
@@ -812,7 +812,7 @@ All core libraries and tools used by the system should be cloned locally into `d
 41. Origin should support proactive notifications through in-app surfaces and push notifications, but not through outbound email or Telegram notifications in v1.
 42. Persisted agent-authored documents should be ordinary notes in the vault organized as needed; transient one-off output should remain in chat by default.
 43. The vault is a single shared assistant workspace, not separate user and agent vault roots.
-44. Agent memory behavior is defined by [memory_protocol.md](./memory_protocol.md): `Origin/Memory.md` is the curated memory index, and the agent may create supporting files or datasets referenced from it without requiring fixed schemas upfront.
+44. Agent memory behavior is defined by [memory_protocol.md](./details/memory_protocol.md): `Origin/Memory.md` is the curated memory index, and the agent may create supporting files or datasets referenced from it without requiring fixed schemas upfront.
 45. Origin itself should use the simplest viable single-owner auth model in v1 and should not introduce an internal multi-user account system.
 46. The preferred v1 deployment target is a single Linux VPS compatible with Hetzner-style deployment, using a bare-metal / systemd-first service model rather than container-first packaging.
 47. SQLite is the chosen lightweight operational database where Origin needs relational/local metadata storage beyond the replicated Automerge state.

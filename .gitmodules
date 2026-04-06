@@ -1,0 +1,18 @@
+[submodule "docs/references/incur"]
+	path = docs/references/incur
+	url = https://github.com/wevm/incur.git
+[submodule "docs/references/pi-mono"]
+	path = docs/references/pi-mono
+	url = https://github.com/badlogic/pi-mono.git
+[submodule "docs/references/effect"]
+	path = docs/references/effect
+	url = https://github.com/Effect-TS/effect.git
+[submodule "docs/references/automerge"]
+	path = docs/references/automerge
+	url = https://github.com/automerge/automerge.git
+[submodule "docs/references/automerge-repo"]
+	path = docs/references/automerge-repo
+	url = https://github.com/automerge/automerge-repo.git
+[submodule "docs/references/automerge-swift"]
+	path = docs/references/automerge-swift
+	url = https://github.com/automerge/automerge-swift.git

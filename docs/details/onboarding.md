@@ -5,7 +5,7 @@
 - Working draft
 - Last updated: 2026-04-06
 - Scope: v1 setup and account linking flow
-- Linked from: [prd.md](./prd.md)
+- Linked from: [prd.md](../prd.md)
 
 ## Purpose
 
