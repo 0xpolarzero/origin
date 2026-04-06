@@ -185,6 +185,28 @@ Origin should emit events for meaningful changes such as:
 - new or changed Google Calendar event
 - new or changed Google Task
 
+## Durability And Dedupe
+
+Provider ingress is the canonical event source for provider-backed reactive automations.
+
+Ingress should treat cache refresh, activity-event append, and cursor advancement as one durable unit of work whenever the storage layout allows it.
+
+If these steps cannot share one physical transaction, the implementation must still preserve this logical rule:
+
+- do not advance the cursor until the emitted activity events are durably recorded
+- do not expose a cache snapshot as processed if the matching activity events were not durably recorded
+
+Each meaningful provider change should produce one stable ingress activity event id.
+
+That event id is the replay and dedupe boundary for provider-backed reactive automations.
+
+Required behavior:
+
+- retries should reuse the same activity event id for the same logical provider change whenever the provider object ref and change boundary are unchanged
+- reactive automation runs dedupe on `(automationId, activityEventId)`
+- scheduled automation runs dedupe on `(automationId, scheduledAt)`
+- rerunning a failed automation attempt should reuse the same run record rather than creating a second logical run for the same triggering event
+
 ## Automation Trigger Semantics
 
 Automations that react to provider changes should listen to activity events emitted by ingress.
@@ -197,6 +219,12 @@ Examples:
 - `on calendar item created`
 
 They should not continuously diff provider cache state directly.
+
+For provider-backed workflows, ingress activity events are the canonical trigger surface.
+
+Provider-domain docs may also define first-party object events such as `planning.task.updated` or `email.label.updated`.
+
+Those downstream domain events are useful for audit, read models, and first-party workflows, but they do not replace the ingress event surface for provider-backed reactive automation unless a domain explicitly re-emits the same logical event with the same durable event identity.
 
 Correct model:
 
@@ -221,7 +249,7 @@ Every provider ingress pass may emit:
   - `provider.ingress.started`
   - `provider.ingress.completed`
   - `provider.ingress.failed`
-- domain events
+- provider-backed domain events
   - `email.thread.received`
   - `email.thread.updated`
   - `github.issue.updated`
@@ -232,6 +260,7 @@ Every provider ingress pass may emit:
 
 Each event should include:
 
+- stable activity event id
 - provider
 - poller id
 - cursor before / after when useful
@@ -239,6 +268,7 @@ Each event should include:
 - Origin entity refs when already linked
 - activity timestamp
 - outcome status
+- shared trace id when the ingress event later causes first-party object updates or automation runs
 
 ## Failure And Retry
 

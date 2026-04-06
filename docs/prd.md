@@ -127,6 +127,7 @@ Origin should feel like a personal chief-of-staff that can actually operate. The
 - Holds the operational environment, agent-linked accounts, credentials, jobs, and mirrored working context needed for unattended execution
 - Preferred v1 shape: a single Linux VPS, compatible with Hetzner-style deployment, where Origin runs directly on the host machine
 - Preferred v1 service model: bare-metal / systemd-first rather than container-first, because the agent should be able to use the VPS like its own machine
+- If the user later moves from local to VPS mode, replicated app state syncs to the VPS, while secrets and provider operational state are re-established there instead of opaque-migrated.
 
 ### Action Surface
 
@@ -542,8 +543,7 @@ Origin should be deliberate about which domains it owns directly and which it tr
 #### Managed workspace and vault boundary
 
 - The managed workspace root is the full filesystem area Origin manages on a peer
-- The markdown vault is the synced notes subtree within that workspace
-- In v1, the vault defaults to the workspace root unless configured otherwise
+- In v1, the markdown vault is the managed workspace root itself
 - Markdown notes and note attachments inside the vault bridge into replicated note state
 - Non-note files in the managed workspace remain normal host files unless Origin explicitly imports them into managed replicated state
 

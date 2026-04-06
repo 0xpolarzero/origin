@@ -177,18 +177,24 @@ Supported forms:
 - manual start
 - hybrid schedule plus event start where needed
 
+The trigger shape is intentionally small and typed in v1.
+
 ### `actions[]`
 
 An ordered list of actions to execute.
 
-Actions are intentionally high-level in v1. They may include:
+Actions are intentionally high-level in v1, but not opaque blobs.
 
-- updating planning objects
-- sending or replying to messages
-- creating notes
-- modifying files
-- invoking external service actions
-- queuing follow-up work
+The canonical v1 shape is a small typed action object aligned with the CLI:
+
+- `type: "command"`
+- `command`
+- `args`
+- `summary`
+
+`command` names the canonical Origin command or command family to invoke.
+
+`args` must match that command's contract.
 
 ### `notificationPolicy`
 
@@ -203,9 +209,20 @@ Controls execution behavior such as:
 - whether missed schedules should catch up
 - whether actions should continue after partial failure
 
+Required v1 fields:
+
+- `allowOverlap: boolean = false`
+- `catchUp: "skip" | "one" | "all" = "skip"`
+- `continueOnError: boolean = false`
+
 ### `retryPolicy`
 
 Controls retry behavior on failure.
+
+Required v1 fields:
+
+- `maxAttempts: integer = 3`
+- `backoff: "none" | "linear" | "exponential" = "exponential"`
 
 ### `linkedTaskIds[]`, `linkedCalendarItemIds[]`, `linkedProjectIds[]`
 
@@ -247,27 +264,24 @@ Represents one execution instance of an automation.
 
 Represents a recurring schedule.
 
-Fields may include:
+Fields:
 
 - `type: "schedule"`
 - `cron`
 - `timezone`
 - `startAt`
 - `endAt`
-- `daysOfWeek[]`
-- `daysOfMonth[]`
-- `interval`
 
-Cron is the base scheduled form. Other schedule helpers may compile down to cron-like state.
+Cron is the base scheduled form in v1.
 
 ### Event Trigger
 
 Represents a workflow that starts when something happens.
 
-Fields may include:
+Fields:
 
 - `type: "event"`
-- `eventTypes[]`
+- `eventKinds[]`
 - `filters`
 - `sourceScope`
 
@@ -280,40 +294,47 @@ Event triggers are used for things like:
 - a sync event lands
 - an integration reports a notable state change
 
+For provider-backed reactive workflows, `eventKinds[]` should point at provider ingress activity kinds, not raw cache diffs.
+
 ### Manual Trigger
 
 Represents a workflow started directly by the user or the agent.
 
-Fields may include:
+Fields:
 
 - `type: "manual"`
+
+### Hybrid Trigger
+
+Represents an automation that may start either on a schedule or from matching events.
+
+Fields:
+
+- `type: "hybrid"`
+- `schedule`
+- `event`
 
 ## `AutomationAction`
 
 Actions are the work units inside an automation.
 
-The v1 action set should be simple and aligned with the CLI. Suggested forms:
+The v1 action set should stay aligned with the CLI rather than inventing a second workflow DSL.
 
-- `createTask`
-- `updateTask`
-- `createCalendarItem`
-- `updateCalendarItem`
-- `createNote`
-- `updateNote`
-- `modifyFile`
-- `sendEmail`
-- `replyEmail`
-- `postTelegramMessage`
-- `createGitHubFollowUp`
-- `callTool`
-- `queueFollowUp`
+Examples of valid command-backed actions:
 
-Each action should carry:
+- create or update a planning object
+- create or update a note
+- modify a managed file
+- send or reply to email
+- post a Telegram message
+- create or update a GitHub follow target
 
-- target reference
-- parameters
-- human-readable summary
-- success/failure result
+Each action carries:
+
+- `type`
+- `command`
+- `args`
+- `summary`
 
 ## Read Surface
 
@@ -353,6 +374,7 @@ The app and CLI should support:
 - edit trigger
 - edit actions
 - edit notification policy
+- edit run policy
 - edit retry policy
 
 Mutation behavior:
@@ -371,6 +393,9 @@ Mutation behavior:
 - A scheduled automation should not double-run if the server restarts or a peer reconnects.
 - Missed runs should follow `runPolicy`.
 - Manual runs should record the triggering actor and reason.
+- Scheduled runs dedupe on `(automationId, scheduledAt)`.
+- Reactive runs dedupe on `(automationId, activityEventId)`.
+- Retrying a failed run reuses the same logical run record and increments attempt state.
 
 ### Concurrency
 
@@ -515,6 +540,10 @@ Examples:
 - `on new email` should trigger from an email ingress event such as `email.thread.received`
 - `on followed GitHub PR updated` should trigger from a GitHub ingress event
 - `on Telegram message in tracked group` should trigger from a Telegram ingress event
+
+First-party domain events may still be emitted after reconciliation, but they are a separate audit and object-lifecycle surface.
+
+They should not become a second trigger surface for the same provider change unless the implementation explicitly preserves the same durable event identity across both surfaces.
 
 This keeps the trigger surface edge-based and makes retries, observability, and duplicate suppression much cleaner.
 

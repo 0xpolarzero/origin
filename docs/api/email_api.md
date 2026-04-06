@@ -373,13 +373,17 @@ The email API should support at least the following mutations.
 
 Origin should emit activity events for important email actions and mailbox state changes.
 
+For provider-backed reactive automations, the canonical trigger surface is the ingress-emitted email event family defined in [provider_ingress_api.md](./provider_ingress_api.md).
+
+Email-domain activity entries may still include richer message-level detail, but they should not create a second competing trigger surface for the same provider change.
+
 Examples:
 
 - `email.sync.started`
 - `email.sync.completed`
 - `email.sync.failed`
 - `email.thread.fetched`
-- `email.message.received`
+- `email.thread.received`
 - `email.message.forwarded`
 - `email.reply.sent`
 - `email.label.updated`

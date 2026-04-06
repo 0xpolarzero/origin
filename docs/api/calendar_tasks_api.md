@@ -417,11 +417,13 @@ Planning objects may keep external linkage metadata.
 ### Lifecycle rules
 
 - External links carry `syncMode: "import" | "mirror" | "detached"`
+- For recurring series, `attach` and `detach` apply at the series root; occurrences inherit the linkage and do not carry independent attach state.
 - `attach` creates or updates the stable external link for an Origin object
 - If provider object ids are supplied by the canonical CLI/runtime, `attach` may bind the Origin object to an existing Google event or Google task instead of creating a fresh external object
-- `mode = "import"` means the next pull or reconcile imports from the linked external object into the Origin object without making Google canonical
-- `mode = "mirror"` means Origin and Google sync bidirectionally through the stable external link
-- `detach` leaves the external provider object untouched and changes the local link state to `detached`
+- `mode = "import"` means the next pull or reconcile imports from the linked external object into the Origin object without making Google canonical, and it never propagates destructive local deletes or cancels outward
+- `mode = "mirror"` means Origin and Google sync bidirectionally through the stable external link, and destructive local changes propagate outward when the provider supports the corresponding remote change
+- If the linked Google object is deleted or otherwise disappears remotely, Origin preserves the local object, detaches the external link, and records the situation for review or conflict resolution
+- `detach` leaves the external provider object untouched, preserves the local object, and changes the local link state to `detached`
 
 ## Planning Relationships
 
@@ -461,7 +463,7 @@ Any command examples in this document are illustrative summaries of the canonica
 
 ### Operational ownership
 
-- Selected Google calendars are bridge surfaces configured during onboarding
+- Selected Google calendars are bridge surfaces configured during onboarding or integration setup, not ad hoc per-item attachments
 - Each selected calendar has a server-owned poller and cursor under the shared provider ingress model
 - Status and repair live on the canonical CLI; this document does not define a separate operational surface
 - Use canonical CLI surfaces such as `origin planning google-calendar status`, `origin planning google-calendar reset-cursor`, and `origin planning google-calendar repair`
@@ -488,7 +490,7 @@ Any command examples in this document are illustrative summaries of the canonica
 
 ### Operational ownership
 
-- Selected Google task lists are bridge surfaces configured during onboarding
+- Selected Google task lists are bridge surfaces configured during onboarding or integration setup, not ad hoc per-item attachments
 - Each selected task list has a server-owned poller and cursor under the shared provider ingress model
 - Status and repair live on the canonical CLI; this document does not define a separate operational surface
 - Use canonical CLI surfaces such as `origin planning google-tasks status`, `origin planning google-tasks reset-cursor`, and `origin planning google-tasks repair`
@@ -519,9 +521,15 @@ Any command examples in this document are illustrative summaries of the canonica
 - Stable linkage lives in Origin state; Google-side markers may help recovery but are not canonical metadata storage
 - Unsupported Google Tasks fields must not erase richer Origin task fields
 
-## Events For Automations
+## Planning Domain Events
 
 Planning events should be emitted for agent workflows and background jobs.
+
+These are first-party planning object events after Origin has reconciled or mutated planning state.
+
+When a workflow needs to react to Google provider changes specifically, the canonical provider-backed trigger surface remains the ingress events such as `planning.google-calendar.changed` and `planning.google-tasks.changed` from [provider_ingress_api.md](./provider_ingress_api.md).
+
+The `synced_from_google*` events below are planning-domain audit and lifecycle events, not a second competing provider-ingress trigger surface.
 
 ### Task events
 

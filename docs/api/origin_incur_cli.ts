@@ -96,6 +96,12 @@ const activityEvent = z.object({
   target: z.string().optional().describe('Primary target ref if one exists.'),
   at: isoDateTime.describe('Creation time.'),
   summary: z.string().describe('Compact human-readable event summary.'),
+  severity: z.enum(['info', 'warn', 'error']).optional().describe('Event severity when classified.'),
+  provider: z.string().optional().describe('Provider key when the event came from provider ingress.'),
+  ['poller-id']: z.string().optional().describe('Provider poller id when the event came from provider ingress.'),
+  ['source-refs']: z.array(z.string()).optional().describe('Provider-side refs or other source refs associated with the event.'),
+  ['entity-refs']: z.array(z.string()).optional().describe('Related Origin entity refs when known.'),
+  ['details-md']: markdown.optional().describe('Optional extended event details.'),
   ['trace-id']: z.string().optional().describe('Trace id that correlates related events.'),
 })
 
@@ -326,7 +332,7 @@ const queueStatus = z.object({
 const pathSummary = z.object({
   state: path.describe('Origin state directory.'),
   workspace: path.describe('Managed workspace root that contains the synced note vault plus local workspace artifacts.'),
-  vault: path.describe('Synced note subtree inside the managed workspace root.'),
+  vault: path.describe('Synced note vault path. In v1 this is the same path as the managed workspace root.'),
   sqlite: path.describe('SQLite file path.'),
   blobs: path.optional().describe('Blob/cache root when present.'),
 })
@@ -376,7 +382,7 @@ const workspaceEntry = z.object({
 
 const workspaceStatus = z.object({
   root: path.describe('Managed workspace root.'),
-  vault: path.optional().describe('Synced note subtree inside the managed workspace root when configured.'),
+  vault: path.optional().describe('Synced note vault path. In v1 this is the same path as the managed workspace root.'),
   summary: z.string().describe('Workspace health summary across the managed root, synced vault, and local workspace artifacts.'),
   ['index-status']: z.string().describe('Indexing summary.'),
   ['bridge-status']: z.string().describe('Filesystem bridge summary.'),
@@ -907,14 +913,79 @@ const telegramChatContext = z.object({
   freshness: z.string().optional().describe('Cache freshness summary.'),
 })
 
+const automationTriggerSchedule = z.object({
+  type: z.literal('schedule').describe('Scheduled trigger kind.'),
+  cron: z.string().describe('Cron expression used for schedule evaluation.'),
+  timezone: z.string().optional().describe('IANA timezone for schedule evaluation.'),
+  ['start-at']: isoDateTime.optional().describe('Optional first eligible run time.'),
+  ['end-at']: isoDateTime.optional().describe('Optional last eligible run time.'),
+})
+
+const automationTriggerEvent = z.object({
+  type: z.literal('event').describe('Reactive trigger kind.'),
+  ['event-kinds']: z.array(z.string()).describe('Canonical provider-ingress event kinds that may trigger the automation.'),
+  filters: z.record(z.string(), z.unknown()).optional().describe('Structured event filters.'),
+  ['source-scope']: z.record(z.string(), z.unknown()).optional().describe('Optional provider or entity scope constraints.'),
+})
+
+const automationTriggerManual = z.object({
+  type: z.literal('manual').describe('Manual trigger kind.'),
+})
+
+const automationTriggerHybrid = z.object({
+  type: z.literal('hybrid').describe('Schedule plus event trigger kind.'),
+  schedule: z
+    .object({
+      cron: z.string().describe('Cron expression used for schedule evaluation.'),
+      timezone: z.string().optional().describe('IANA timezone for schedule evaluation.'),
+      ['start-at']: isoDateTime.optional().describe('Optional first eligible run time.'),
+      ['end-at']: isoDateTime.optional().describe('Optional last eligible run time.'),
+    })
+    .describe('Schedule portion of the trigger.'),
+  event: z
+    .object({
+      ['event-kinds']: z.array(z.string()).describe('Canonical provider-ingress event kinds that may trigger the automation.'),
+      filters: z.record(z.string(), z.unknown()).optional().describe('Structured event filters.'),
+      ['source-scope']: z.record(z.string(), z.unknown()).optional().describe('Optional provider or entity scope constraints.'),
+    })
+    .describe('Reactive event portion of the trigger.'),
+})
+
+const automationTrigger = z.discriminatedUnion('type', [
+  automationTriggerSchedule,
+  automationTriggerEvent,
+  automationTriggerManual,
+  automationTriggerHybrid,
+])
+
+const automationAction = z.object({
+  type: z.literal('command').describe('Action kind.'),
+  command: z.string().describe('Canonical Origin command or command family to invoke.'),
+  args: z.record(z.string(), z.unknown()).optional().describe('Arguments passed to the command.'),
+  summary: z.string().optional().describe('Human-readable action summary.'),
+})
+
+const automationRunPolicy = z.object({
+  ['allow-overlap']: z.boolean().default(false).describe('Whether runs of the same automation may overlap. Defaults to false.'),
+  ['catch-up']: z.enum(['skip', 'one', 'all']).default('skip').describe('How missed scheduled runs are handled. Defaults to `skip`.'),
+  ['continue-on-error']: z.boolean().default(false).describe('Whether later actions continue after an action failure. Defaults to false.'),
+})
+
+const automationRetryPolicy = z.object({
+  ['max-attempts']: z.number().int().min(0).default(3).describe('Maximum total attempts for one logical run. Defaults to 3.'),
+  backoff: z.enum(['none', 'linear', 'exponential']).default('exponential').describe('Retry backoff strategy. Defaults to `exponential`.'),
+})
+
 const automation = z.object({
   id: id('Automation id.'),
   title: z.string().describe('Automation title.'),
   status: z.string().describe('Automation status.'),
   kind: z.string().describe('Automation kind.'),
   summary: z.string().describe('Automation summary.'),
-  trigger: z.record(z.string(), z.unknown()).optional().describe('Trigger definition.'),
-  actions: z.array(z.record(z.string(), z.unknown())).optional().describe('Action definitions.'),
+  trigger: automationTrigger.optional().describe('Typed trigger definition.'),
+  actions: z.array(automationAction).optional().describe('Ordered action definitions.'),
+  ['run-policy']: automationRunPolicy.optional().describe('Run policy.'),
+  ['retry-policy']: automationRetryPolicy.optional().describe('Retry policy.'),
 })
 
 const automationRun = z.object({
@@ -1715,12 +1786,12 @@ const setup = Cli.create('setup', {
       )
       .command(
         Cli.create('github', { description: 'GitHub setup inputs.' })
-          .command('oauth-start', doc({ description: 'Start GitHub OAuth during onboarding.', output: oauthStart }))
+          .command('oauth-start', doc({ description: 'Start the GitHub App user-authorization OAuth flow during onboarding.', output: oauthStart }))
           .command(
             'oauth-complete',
             doc({
               description:
-                'Complete GitHub OAuth during onboarding using a secure handoff ref from an operator-only browser flow. If an agent GitHub identity is already stored, the returned GitHub principal must match it or the command fails.',
+                'Complete GitHub OAuth during onboarding using a secure handoff ref from an operator-only browser flow. This flow produces the GitHub App user access token for the connected agent account. If an agent GitHub identity is already stored, the returned GitHub principal must match it or the command fails.',
               options: z.object({
                 ['code-ref']: secureRef.describe(
                   'Secure handoff ref for the GitHub authorization code returned by the operator-only browser flow.',
@@ -1749,7 +1820,7 @@ const setup = Cli.create('setup', {
   )
   .command(
     Cli.create('vault', { description: 'Managed workspace and vault setup inputs.' })
-      .command('init', doc({ description: 'Set or validate the managed workspace and synced vault root. If the target path is non-empty, Origin adopts and imports it before any export instead of silently overwriting files.', options: z.object({ path, ['create-if-missing']: z.boolean().default(true).describe('Create the vault if it does not exist.') }), output: actionResult }))
+      .command('init', doc({ description: 'Set or validate the managed workspace root. In v1 the synced vault path is the same root. If the target path is non-empty, Origin adopts and imports it before any export instead of silently overwriting files.', options: z.object({ path, ['create-if-missing']: z.boolean().default(true).describe('Create the workspace root if it does not exist.') }), output: actionResult }))
       .command('memory-bootstrap', doc({ description: 'Seed Origin/Memory.md with initial user-provided facts or preferences.', options: z.object({ content: markdown.describe('Initial memory content.') }), output: actionResult })),
   )
   .command(
@@ -2236,7 +2307,7 @@ const note = Cli.create('note', {
       .command(
         'add',
         doc({
-          description: 'Attach a workspace file to a note.',
+          description: 'Attach a file to a note. If the path is outside the managed vault, Origin imports a managed copy into the vault before linking it.',
           args: z.object({ ['note-id']: id('Note id.') }),
           options: z.object({
             path,
@@ -2478,8 +2549,8 @@ const googleCalendarCli = Cli.create('google-calendar', {
   .command('status', doc({ description: 'Inspect Google Calendar bridge status, selected calendars, and per-surface pollers.', output: googleCalendarBridgeStatus }))
   .command('pull', doc({ description: 'Import changes from Google Calendar into Origin calendar items.', options: z.object({ ['calendar-id']: z.string().optional().describe('Optional Google calendar id filter.') }), output: actionResult }))
   .command('push', doc({ description: 'Push Origin calendar-item changes to Google Calendar.', options: z.object({ ['calendar-id']: z.string().optional().describe('Optional Google calendar id filter.') }), output: actionResult }))
-  .command('reconcile', doc({ description: 'Reconcile Origin calendar items with Google Calendar state.', options: z.object({ ['calendar-id']: z.string().optional().describe('Optional Google calendar id filter.') }), output: actionResult }))
-  .command('attach', doc({ description: 'Attach one calendar item to Google Calendar mirroring or import. This may bind the local item to an existing Google event when `google-event-id` is provided.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), options: z.object({ ['calendar-id']: z.string().describe('Google calendar id.'), ['google-event-id']: z.string().optional().describe('Optional existing Google event id to bind instead of creating a new remote event.'), mode: z.enum(['import', 'mirror']).describe('Attach mode.') }), output: actionResult }))
+  .command('reconcile', doc({ description: 'Reconcile Origin calendar items with Google Calendar state. Remote deletions must surface as detached-preserved local objects for review rather than silently deleting local state.', options: z.object({ ['calendar-id']: z.string().optional().describe('Optional Google calendar id filter.') }), output: actionResult }))
+  .command('attach', doc({ description: 'Attach one calendar item to Google Calendar mirroring or import. This may bind the local item to an existing Google event when `google-event-id` is provided. For recurring series, attach the series root; occurrences keep derived remote refs only.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), options: z.object({ ['calendar-id']: z.string().describe('Google calendar id.'), ['google-event-id']: z.string().optional().describe('Optional existing Google event id to bind instead of creating a new remote event.'), mode: z.enum(['import', 'mirror']).describe('Attach mode.') }), output: actionResult }))
   .command('detach', doc({ description: 'Detach one calendar item from Google Calendar mirroring. The local calendar item is preserved, the remote Google event is left untouched, and the local link transitions to `detached`.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), output: actionResult }))
   .command('reset-cursor', doc({ description: 'Reset one Google Calendar bridge poller cursor as an explicit repair action. Local calendar items remain intact and remote Google events are not deleted.', options: z.object({ ['poller-id']: z.string().optional().describe('Specific Google Calendar poller id.'), ['calendar-id']: z.string().optional().describe('Optional selected Google calendar id.') }), output: actionResult }))
   .command('repair', doc({ description: 'Repair a degraded Google Calendar bridge poller or selected calendar surface after auth, cursor, or reconcile failures. Local calendar items remain intact and remote Google events are not deleted.', options: z.object({ ['poller-id']: z.string().optional().describe('Specific Google Calendar poller id.'), ['calendar-id']: z.string().optional().describe('Optional selected Google calendar id.') }), output: actionResult }))
@@ -2490,8 +2561,8 @@ const googleTasksCli = Cli.create('google-tasks', {
   .command('status', doc({ description: 'Inspect Google Tasks bridge status, selected task lists, and per-surface pollers.', output: googleTasksBridgeStatus }))
   .command('pull', doc({ description: 'Import changes from Google Tasks into Origin tasks.', options: z.object({ ['task-list-id']: z.string().optional().describe('Optional Google task list id filter.') }), output: actionResult }))
   .command('push', doc({ description: 'Push Origin task changes to Google Tasks.', options: z.object({ ['task-list-id']: z.string().optional().describe('Optional Google task list id filter.') }), output: actionResult }))
-  .command('reconcile', doc({ description: 'Reconcile Origin tasks with Google Tasks state.', options: z.object({ ['task-list-id']: z.string().optional().describe('Optional Google task list id filter.') }), output: actionResult }))
-  .command('attach', doc({ description: 'Attach one task to Google Tasks mirroring or import. This may bind the local task to an existing Google task when `google-task-id` is provided.', args: z.object({ ['task-id']: id('Task id.') }), options: z.object({ ['task-list-id']: z.string().describe('Google task list id.'), ['google-task-id']: z.string().optional().describe('Optional existing Google task id to bind instead of creating a new remote task.'), mode: z.enum(['import', 'mirror']).describe('Attach mode.') }), output: actionResult }))
+  .command('reconcile', doc({ description: 'Reconcile Origin tasks with Google Tasks state. Remote deletions must surface as detached-preserved local tasks for review rather than silently deleting local state.', options: z.object({ ['task-list-id']: z.string().optional().describe('Optional Google task list id filter.') }), output: actionResult }))
+  .command('attach', doc({ description: 'Attach one task to Google Tasks mirroring or import. This may bind the local task to an existing Google task when `google-task-id` is provided. For recurring series, attach the series root; occurrences keep derived remote refs only.', args: z.object({ ['task-id']: id('Task id.') }), options: z.object({ ['task-list-id']: z.string().describe('Google task list id.'), ['google-task-id']: z.string().optional().describe('Optional existing Google task id to bind instead of creating a new remote task.'), mode: z.enum(['import', 'mirror']).describe('Attach mode.') }), output: actionResult }))
   .command('detach', doc({ description: 'Detach one task from Google Tasks mirroring. The local task is preserved, the remote Google task is left untouched, and the local link transitions to `detached`.', args: z.object({ ['task-id']: id('Task id.') }), output: actionResult }))
   .command('reset-cursor', doc({ description: 'Reset one Google Tasks bridge poller cursor as an explicit repair action. Local tasks remain intact and remote Google tasks are not deleted.', options: z.object({ ['poller-id']: z.string().optional().describe('Specific Google Tasks poller id.'), ['task-list-id']: z.string().optional().describe('Optional selected Google task list id.') }), output: actionResult }))
   .command('repair', doc({ description: 'Repair a degraded Google Tasks bridge poller or selected task-list surface after auth, cursor, or reconcile failures. Local tasks remain intact and remote Google tasks are not deleted.', options: z.object({ ['poller-id']: z.string().optional().describe('Specific Google Tasks poller id.'), ['task-list-id']: z.string().optional().describe('Optional selected Google task list id.') }), output: actionResult }))
@@ -2629,8 +2700,8 @@ const github = Cli.create('github', {
       .command('get', doc({ description: 'Get one repository.', args: z.object({ ['repo-id-or-name']: z.string().describe('Stable repo id or owner/name.') }), output: githubRepository }))
       .command('search', doc({ description: 'Search repositories within the local GitHub working set.', options: z.object({ query: z.string().describe('Repository search query.'), limit: z.number().optional().describe('Maximum repo count.') }), output: list(githubRepository, 'Matching repositories.') }))
       .command('context', doc({ description: 'Get one repository with linked Origin overlay context.', args: z.object({ ['repo-id-or-name']: z.string().describe('Stable repo id or owner/name.') }), output: z.object({ repo: githubRepository, ['linked-entities']: z.array(entityRef).optional().describe('Linked Origin entities.'), ['recent-activity']: z.array(activityEvent).optional().describe('Recent related activity.') }) }))
-      .command('follow', doc({ description: 'Follow a repository locally for Origin follow-up.', args: z.object({ ['repo-id-or-name']: z.string().describe('Stable repo id or owner/name.') }), options: z.object({ reason: z.string().optional().describe('Why this repo is followed.') }), output: actionResult }))
-      .command('unfollow', doc({ description: 'Stop following a repository locally.', args: z.object({ ['repo-id-or-name']: z.string().describe('Stable repo id or owner/name.') }), output: actionResult }))
+      .command('follow', doc({ description: 'Follow a repository locally for Origin follow-up. This is sugar for creating or enabling the repo-kind GitHub follow target that defines polling scope.', args: z.object({ ['repo-id-or-name']: z.string().describe('Stable repo id or owner/name.') }), options: z.object({ reason: z.string().optional().describe('Why this repo is followed.') }), output: actionResult }))
+      .command('unfollow', doc({ description: 'Stop following a repository locally. This is sugar for clearing or disabling the repo-kind GitHub follow target that defines polling scope.', args: z.object({ ['repo-id-or-name']: z.string().describe('Stable repo id or owner/name.') }), output: actionResult }))
       .command('pin', doc({ description: 'Pin a repository in the local working set.', args: z.object({ ['repo-id-or-name']: z.string().describe('Stable repo id or owner/name.') }), output: actionResult }))
       .command('unpin', doc({ description: 'Unpin a repository from the local working set.', args: z.object({ ['repo-id-or-name']: z.string().describe('Stable repo id or owner/name.') }), output: actionResult }))
       .command('star', doc({ description: 'Star a repository on GitHub.', args: z.object({ ['repo-id-or-name']: z.string().describe('Stable repo id or owner/name.') }), output: actionResult }))
@@ -2640,9 +2711,9 @@ const github = Cli.create('github', {
     Cli.create('follow', { description: 'Fine-grained follow targets across tracked repositories.' })
       .command('list', doc({ description: 'List follow targets across repositories, issues, and pull requests.', options: z.object({ repo: z.array(z.string()).optional().describe('Repository filters.'), kind: z.array(z.string()).optional().describe('Follow-target kind filter.'), limit: z.number().optional().describe('Maximum target count.') }), output: list(githubFollowTarget, 'GitHub follow targets.') }))
       .command('get', doc({ description: 'Get one follow target.', args: z.object({ ['follow-id']: id('Follow target id.') }), output: githubFollowTarget }))
-      .command('set', doc({ description: 'Create or update a follow target.', options: z.object({ repo: z.string().describe('Repository owner/name.'), kind: z.enum(['repo', 'issue', 'pr']).describe('Follow-target kind.'), ['target-ref']: z.string().optional().describe('Issue or PR ref when applicable.'), reason: z.string().optional().describe('Why this matters.') }), output: actionResult }))
+      .command('set', doc({ description: 'Create or update a follow target. Repo-kind follow targets are the canonical GitHub working-set scope and own repository refresh cursors.', options: z.object({ repo: z.string().describe('Repository owner/name.'), kind: z.enum(['repo', 'issue', 'pr']).describe('Follow-target kind.'), ['target-ref']: z.string().optional().describe('Issue or PR ref when applicable.'), reason: z.string().optional().describe('Why this matters.') }), output: actionResult }))
       .command('clear', doc({ description: 'Clear one follow target.', args: z.object({ ['follow-id']: id('Follow target id.') }), output: actionResult }))
-      .command('dismiss', doc({ description: 'Dismiss one follow-up item after manual review.', args: z.object({ ['follow-id']: id('Follow target id.') }), output: actionResult }))
+      .command('dismiss', doc({ description: 'Suppress current attention for one follow target after manual review. This does not remove the follow target; new activity may surface it again.', args: z.object({ ['follow-id']: id('Follow target id.') }), output: actionResult }))
       .command('next', doc({ description: 'Return the next highest-signal follow-up targets.', output: list(githubFollowTarget, 'Next GitHub follow targets.') }))
       .command(
         Cli.create('task', { description: 'Link follow targets to planning tasks.' })
@@ -2765,8 +2836,8 @@ const telegram = Cli.create('telegram', {
   )
   .command(
     Cli.create('chat', { description: 'Known Telegram chats and group state.' })
-      .command('list', doc({ description: 'List known Telegram chats and groups.', options: z.object({ query: z.string().optional().describe('Search query.'), kind: z.array(z.string()).optional().describe('Chat kind filter.'), limit: z.number().optional().describe('Maximum chat count.') }), output: list(telegramChat, 'Telegram chats.') }))
-      .command('get', doc({ description: 'Get one Telegram chat.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), output: telegramChat }))
+      .command('list', doc({ description: 'List known Telegram chats and lightweight discovery state. A chat only becomes actively tracked after explicit group registration.', options: z.object({ query: z.string().optional().describe('Search query.'), kind: z.array(z.string()).optional().describe('Chat kind filter.'), limit: z.number().optional().describe('Maximum chat count.') }), output: list(telegramChat, 'Telegram chats.') }))
+      .command('get', doc({ description: 'Get one Telegram chat or lightweight discovery record.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), output: telegramChat }))
       .command('context', doc({ description: 'Get one Telegram chat with policy, cached messages, and recent activity.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), output: telegramChatContext }))
       .command('recent', doc({ description: 'List recently active Telegram chats.', options: z.object({ limit: z.number().optional().describe('Maximum chat count.') }), output: list(telegramChat, 'Recent Telegram chats.') }))
       .command('search', doc({ description: 'Search within cached recent Telegram messages.', options: z.object({ query: z.string().describe('Telegram search query.'), limit: z.number().optional().describe('Maximum match count.') }), output: list(searchHit, 'Telegram search hits.') }))
@@ -2776,7 +2847,7 @@ const telegram = Cli.create('telegram', {
     Cli.create('group', { description: 'Telegram group participation controls.' })
       .command('list', doc({ description: 'List registered Telegram groups.', output: list(telegramGroupPolicy, 'Registered Telegram group policies.') }))
       .command('get', doc({ description: 'Get one group policy.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), output: telegramGroupPolicy }))
-      .command('register', doc({ description: 'Register a group after the bot has been invited.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), output: actionResult }))
+      .command('register', doc({ description: 'Register a group after the bot has been invited. Registration is the step that turns lightweight chat discovery into active Origin tracking and policy management.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), output: actionResult }))
       .command('enable', doc({ description: 'Enable a group for observation or active bot participation. Summary policy is configured separately.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), options: z.object({ mode: z.enum(['observe', 'participate']).describe('Participation mode for the enabled group.') }), output: actionResult }))
       .command('disable', doc({ description: 'Disable a Telegram group subscription.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), output: actionResult }))
       .command(
@@ -2840,8 +2911,8 @@ const automationCli = Cli.create('automation', {
 })
   .command('list', doc({ description: 'List automations.', options: z.object({ status: z.array(z.string()).optional().describe('Automation status filter.'), trigger: z.array(z.string()).optional().describe('Trigger filter.'), ['linked-task']: z.array(z.string()).optional().describe('Linked task filter.'), limit: z.number().optional().describe('Maximum automation count.') }), output: list(automation, 'Automations.') }))
   .command('get', doc({ description: 'Get one automation.', args: z.object({ ['automation-id']: id('Automation id.') }), output: automation }))
-  .command('create', doc({ description: 'Create an automation.', options: z.object({ title: z.string().describe('Automation title.'), kind: z.string().describe('Automation kind.'), trigger: z.record(z.string(), z.unknown()).describe('Trigger definition.'), actions: z.array(z.record(z.string(), z.unknown())).describe('Action definitions.') }), output: actionResult }))
-  .command('update', doc({ description: 'Update an automation.', args: z.object({ ['automation-id']: id('Automation id.') }), options: z.object({ title: z.string().optional().describe('New title.'), trigger: z.record(z.string(), z.unknown()).optional().describe('Replacement trigger.'), actions: z.array(z.record(z.string(), z.unknown())).optional().describe('Replacement actions.'), ['notification-policy']: z.record(z.string(), z.unknown()).optional().describe('Notification policy patch.'), ['retry-policy']: z.record(z.string(), z.unknown()).optional().describe('Retry policy patch.') }), output: actionResult }))
+  .command('create', doc({ description: 'Create an automation.', options: z.object({ title: z.string().describe('Automation title.'), kind: z.string().describe('Automation kind.'), trigger: automationTrigger.describe('Typed trigger definition.'), actions: z.array(automationAction).describe('Ordered action definitions.'), ['run-policy']: automationRunPolicy.optional().describe('Run policy. Defaults to serial execution, skipped catch-up, and stop-on-error.'), ['retry-policy']: automationRetryPolicy.optional().describe('Retry policy. Defaults to three total attempts with exponential backoff.') }), output: actionResult }))
+  .command('update', doc({ description: 'Update an automation.', args: z.object({ ['automation-id']: id('Automation id.') }), options: z.object({ title: z.string().optional().describe('New title.'), trigger: automationTrigger.optional().describe('Replacement trigger.'), actions: z.array(automationAction).optional().describe('Replacement actions.'), ['notification-policy']: z.record(z.string(), z.unknown()).optional().describe('Notification policy patch.'), ['run-policy']: automationRunPolicy.partial().optional().describe('Run policy patch.'), ['retry-policy']: automationRetryPolicy.partial().optional().describe('Retry policy patch.') }), output: actionResult }))
   .command('archive', doc({ description: 'Archive an automation.', args: z.object({ ['automation-id']: id('Automation id.') }), output: actionResult }))
   .command('delete', doc({ description: 'Delete an automation.', args: z.object({ ['automation-id']: id('Automation id.') }), output: actionResult }))
   .command('enable', doc({ description: 'Enable an automation.', args: z.object({ ['automation-id']: id('Automation id.') }), output: actionResult }))

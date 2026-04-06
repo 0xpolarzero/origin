@@ -35,7 +35,7 @@ The integration is bot-based, not a Telegram user account. Telegram remains the 
 - A bot is not a normal Telegram user account.
 - The bot must be configured via a bot token obtained from BotFather.
 - Group participation depends on the bot being invited to the group.
-- Privacy mode affects what messages the bot receives in groups.
+- Privacy mode is an observed / validated constraint on what messages the bot receives in groups, not a provider mutation Origin promises to perform itself.
 - With privacy mode disabled, the bot can receive all group messages except messages sent by other bots, subject to Telegram platform rules.
 - The bot cannot behave as a human user account and cannot inherit user-account capabilities.
 - Telegram API rate limits and platform permissions must be respected.
@@ -53,6 +53,7 @@ Origin may keep the following Telegram-related local state:
 - `TelegramActivityEvent`
 
 This state is metadata and cache, not a full mirrored copy of Telegram.
+New chats discovered by polling may create lightweight `TelegramChatRef` discovery state only; they do not become actively tracked, summarized, or fully cached until the user explicitly registers the group.
 
 ## Shared Types
 
@@ -147,6 +148,7 @@ Fields:
 
 `defaultParticipationMode` controls only the default interactive behavior for enabled groups.
 Summary policy and subscription enablement are separate group-level settings.
+`allowedChatIds[]` is an operational allowlist derived from group subscriptions and bot membership, not the source of truth.
 
 ### `TelegramChatRef`
 
@@ -170,9 +172,12 @@ Fields:
 - `createdAt`
 - `updatedAt`
 
+`TelegramChatRef` is discovery and read-model state. `tracked` is derived from the canonical group subscription state; it does not authorize tracking by itself.
+
 ### `TelegramGroupSubscription`
 
 Represents Origin's local subscription state and policy for a Telegram group.
+This is the canonical tracking object for groups.
 
 Fields:
 
@@ -193,6 +198,7 @@ Normative model:
 - `participationMode` applies only when `subscriptionState=enabled` and controls interactive bot behavior.
 - `summaryEnabled` is independent of `participationMode` and controls whether summary workflows may run or post for the group.
 - `disabledAt` records when the subscription was last disabled; it is not a separate mode.
+- A discovered chat only becomes actively tracked after an explicit group registration creates or updates this subscription.
 
 ### `TelegramRecentMessageCache`
 

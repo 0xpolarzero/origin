@@ -31,9 +31,9 @@ GitHub remains canonical. Origin keeps only selective caches and operational met
 
 ## Auth Model
 
-Origin connects the pre-created agent GitHub account through the GitHub authorization flow.
+Origin connects the pre-created agent GitHub account through GitHub's authorization flow.
 
-The integration should use a user-authorized token type that can act on behalf of the connected account.
+In v1, the resulting credential is a GitHub App user access token obtained through OAuth. Repo and organization access come from installing the GitHub App on the selected repositories or organizations. The token acts on behalf of the connected account and is constrained by both the user grant and app permissions.
 
 Important implications from GitHub's docs:
 
@@ -46,6 +46,7 @@ Practical consequence:
 
 - v1 should use the connected account token for normal repo, issue, PR, comment, review, and search operations
 - v1 should track followed repositories locally rather than depending on GitHub's watch subscription endpoints as the core follow mechanism
+- repo access checks should follow the selected GitHub App installation grants, not a separate Origin-owned permission system
 
 ## Local State
 
@@ -54,7 +55,7 @@ GitHub state inside Origin should be selective and derived.
 ### Stored locally
 
 - connected account metadata
-- tracked repositories
+- repo follow targets and derived tracked repositories
 - local follow targets across repositories, issues, and pull requests
 - local cursors / last-seen markers
 - cached issue snapshots
@@ -96,6 +97,8 @@ Suggested fields:
 - `createdAt`
 - `updatedAt`
 
+`tracked` is derived from the local repo-kind follow target state, not a second source of truth.
+
 ### `GitHubFollowTarget`
 
 Represents a local Origin follow target for follow-up.
@@ -122,8 +125,10 @@ Suggested fields:
 Normative model:
 
 - Follow targets live in Origin and define the local follow-up working set.
-- Repo follow targets define poll scope for the integration.
+- Repo-kind follow targets define the canonical repository working set.
+- Repo follow targets define poll scope for the integration and own the repository cursor state.
 - Issue and PR follow targets narrow local attention within that working set.
+- Issue and PR targets may reference or inherit the repo-level cursor rather than creating a second repo cursor.
 - These follow targets do not map to GitHub's native watch / subscription state.
 
 ### `GitHubIssueSnapshot`
@@ -192,7 +197,7 @@ Suggested fields:
 
 ### `GitHubCursor`
 
-Represents a local sync cursor for a repository or query.
+Represents a local sync cursor for a repository follow target or repository-scoped query.
 
 Suggested fields:
 
@@ -271,9 +276,11 @@ The integration should support direct actions that matter for follow-up.
 ### Local workflow actions
 
 - create or update a local follow target for a repo, issue, or PR
-- dismiss or resolve cached follow-up items
+- suppress or resolve local follow-target attention after review
 - link a GitHub object to an Origin task or note
 - queue a GitHub action for retry if it fails transiently
+
+`dismiss` suppresses the current attention state for the follow target until newer activity arrives past the stored cursor. It does not create a separate persistent follow-up-item object.
 
 ## Cache Strategy
 

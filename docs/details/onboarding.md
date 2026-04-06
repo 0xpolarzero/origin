@@ -31,6 +31,9 @@ The onboarding flow should:
 - Assume the Telegram bot already exists; connect it through token entry.
 - Do not assume automated creation of external provider accounts.
 - Keep the setup path functional even if the user begins locally and later moves to VPS mode.
+- In `vps` mode, bring up the authoritative server before provider linking becomes authoritative.
+- In `vps` mode, collect only non-secret setup inputs until that server exists.
+- Provider OAuth, token storage, and server-owned pollers/cursors happen on the authoritative server.
 - Persist only what is needed to complete setup, recover it, and operate the system afterward.
 
 ## Phase 1: Start Mode
@@ -54,6 +57,7 @@ The user chooses one of two setup modes:
 
 - Origin knows whether it is setting up local mode or a remote server deployment.
 - The rest of the flow can branch accordingly.
+- If the user chose `vps`, Origin knows provider linking must wait until the server is deployed.
 
 ## Phase 2: User Identity
 
@@ -98,20 +102,25 @@ Origin sets up the identities the agent will use.
 
 ### Success criteria
 
-- Origin has the agent's Google account connected.
-- Origin has the agent's GitHub account connected.
-- Origin has the Telegram bot token connected.
-- Origin can begin using those accounts as the agent's operational identity surfaces.
+- Origin has the expected agent Google identity recorded.
+- Origin has the expected agent GitHub identity recorded.
+- Origin has the expected Telegram bot identity and secure token handoff reference recorded.
+- Later provider-link steps can validate the returned principals against these expected identities.
 
 ## Phase 4: Provider Linking
 
 Origin walks the user through provider-specific connection steps.
+
+In `local` mode, this phase runs immediately.
+
+In `vps` mode, the inputs for this phase may be gathered earlier, but the actual provider links are created only after Phase 9 has deployed the authoritative server.
 
 ### Google
 
 - Use OAuth where available.
 - Connect the pre-created agent Google account.
 - Complete OAuth through a secure callback or operator-only secure handoff that yields a stored connection reference rather than exposing raw token material to the agent CLI.
+- In `vps` mode, complete OAuth and store the resulting tokens on the authoritative server after deployment, not during pre-server setup.
 - Verify that the returned Google principal matches the pre-collected expected agent Google identity and fail linking on mismatch.
 - Request the minimum scopes required for:
   - Gmail inbox access for the agent mailbox
@@ -123,6 +132,7 @@ Origin walks the user through provider-specific connection steps.
 - Use OAuth where available.
 - Connect the pre-created agent GitHub account.
 - Complete OAuth through a secure callback or operator-only secure handoff that yields a stored connection reference rather than exposing raw token material to the agent CLI.
+- In `vps` mode, complete OAuth and store the resulting tokens on the authoritative server after deployment, not during pre-server setup.
 - Verify that the returned GitHub principal matches the pre-collected expected agent GitHub identity and fail linking on mismatch.
 - Request the minimum scopes required for:
   - follow-up workflows
@@ -134,6 +144,7 @@ Origin walks the user through provider-specific connection steps.
 - Link the pre-created Telegram bot through an operator-only secure handoff or secure credential reference, not by passing the raw token through the normal agent CLI surface.
 - Configure the bot for group participation.
 - Configure the bot for the maximum access model Telegram allows for v1, including privacy mode settings required to receive group messages.
+- In `vps` mode, store the bot token and create server-owned pollers only after the authoritative server exists.
 
 ### Required user input
 
@@ -179,6 +190,7 @@ Origin configures the agent mailbox and planning surfaces.
 - Configure the calendars/task lists that Origin should watch or manage as attached bridge surfaces.
 - Each attached calendar or task list should run through the shared ingress model with server-owned pollers and saved cursors or sync markers.
 - Establish which shared calendars belong to the agent workflow.
+- Selected calendars and task lists are setup/configuration state, not ad hoc item-level attachments.
 
 ### Required user input
 
@@ -200,6 +212,7 @@ Origin configures the agent mailbox and planning surfaces.
 - Origin can sync the selected attached calendars.
 - Origin can sync the selected attached task lists.
 - Forwarded user emails land in the same agent mailbox as ordinary messages.
+- In `vps` mode, the selected calendars and task lists are configured on the deployed server, not only in local preflight state.
 
 ## Phase 6: Telegram Group Setup
 
@@ -227,7 +240,7 @@ Origin configures the Telegram bot for group use.
 
 ## Phase 7: Workspace, Vault, And Memory
 
-Origin attaches the managed workspace root, initializes or adopts the synced vault subtree, and ensures the agent memory file exists.
+Origin attaches the managed workspace root, initializes or adopts the vault at that same root, and ensures the agent memory file exists.
 
 ### Required user input
 
@@ -237,23 +250,23 @@ Origin attaches the managed workspace root, initializes or adopts the synced vau
 
 ### First attach behavior
 
-- If the target path does not exist, Origin creates the managed workspace root, creates the synced vault subtree, and bootstraps `Origin/Memory.md`.
-- If the target path exists and is empty, Origin adopts it as the managed workspace root, initializes the synced vault subtree, and bootstraps `Origin/Memory.md`.
+- If the target path does not exist, Origin creates the managed workspace root and bootstraps `Origin/Memory.md` there.
+- If the target path exists and is empty, Origin adopts it as the managed workspace root and bootstraps `Origin/Memory.md`.
 - If the target path exists and is non-empty, Origin inspects and adopts the existing contents first.
 - A non-empty target path must be imported or adopted before Origin exports managed files into it.
 - Origin must never silently overwrite existing files, including an existing `Origin/Memory.md`, during first attach.
+- In v1, the vault is the workspace root; there is no separate vault subtree path.
 
 ### Persistence
 
 - managed workspace root
-- synced vault subtree configuration
 - `Origin/Memory.md`
 - initial note/file structure
 
 ### Success criteria
 
 - The managed workspace root is attached and writable.
-- The synced vault subtree exists and is writable.
+- The vault exists at the workspace root and is writable.
 - `Origin/Memory.md` exists and is visible in the app.
 - The agent can read and update memory through the memory protocol.
 
@@ -282,6 +295,8 @@ Origin enables in-app and push notifications.
 
 If the user selected `vps`, Origin completes the server deployment.
 
+This deployment step happens before Phases 4 through 6 become authoritative in `vps` mode.
+
 ### Required user input
 
 - Hetzner-compatible VPS host details
@@ -301,6 +316,7 @@ If the user selected `vps`, Origin completes the server deployment.
 - Origin is running on the VPS as a normal host service.
 - The server can access its managed files and the host filesystem it is allowed to use.
 - The setup matches the bare-metal / systemd-first service model.
+- Provider linking and server-owned pollers now become authoritative on the deployed server.
 
 ### Failure / recovery
 
@@ -339,6 +355,7 @@ During onboarding, Origin should persist:
 - vault and memory file location
 - notification preferences and tokens
 - VPS deployment metadata if applicable
+- If the user later moves from local to VPS mode, replicated app state syncs to the VPS, while secrets and provider operational state are re-established there instead of opaque-migrated.
 
 ## Implementation Notes
 
