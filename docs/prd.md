@@ -141,9 +141,16 @@ Origin should feel like a personal chief-of-staff that can actually operate. The
 Origin should distinguish between:
 
 - replicated app state: editable objects that must work offline on every device and sync bidirectionally when online
-- external mirrors and outboxes: local snapshots of external systems plus queued mutations waiting to be applied remotely
+- external mirrors and outboxes: selective read models of external systems plus queued mutations waiting to be applied remotely
 - materialized projections: derived views such as markdown files, search indexes, reports, or external-service updates
 - secrets: credentials and session material stored behind capability boundaries
+
+### Provider-Domain Storage Scope
+
+- First-party Origin objects remain replicated local-first state.
+- Provider ingress operational state is server-local operational state: pollers, cursors, backoff/rate-limit state, provider execution queues, and primary provider caches.
+- A domain may define explicit Origin-owned overlays or linkage metadata as replicated first-party state, but provider-derived caches are not peer-replicated source-of-truth.
+- Clients consume provider domains through server-mediated read models, activity, and targeted fetches rather than by owning full replicated provider mirrors.
 
 ### Local-First Requirement
 
@@ -200,7 +207,7 @@ Every peer, including each Apple device and the server, should have a local Orig
   - plans, routines, and tasks
   - calendar shadow objects and pending calendar mutations
   - chat threads and offline outbox messages
-  - integration metadata and sync state
+  - replicated integration linkage metadata and explicit Origin-owned overlays
   - actor-attributed change history
 
 #### 2. Projection / index database
@@ -212,7 +219,7 @@ Every peer, including each Apple device and the server, should have a local Orig
   - retrieval indexes, tags, hashes, search state, and vector indexes / embeddings where useful
 - sync bookkeeping and local bookkeeping
 - This is a materialized view, not the primary history layer
-- On the server, SQLite is also the default operational relational database for local metadata, caches, audit/activity records, and other non-CRDT state
+- On the server, SQLite is also the default operational relational database for provider pollers, cursors, backoff/rate-limit state, provider execution queues, primary provider caches, audit/activity records, and other non-CRDT state
 
 #### 2a. Retrieval model
 
@@ -248,8 +255,9 @@ Every peer, including each Apple device and the server, should have a local Orig
 
 - Every change should carry actor identity, local sequence information, and wall-clock timestamp metadata for UI display
 - Text edits should merge automatically at the collaborative-text layer
-- Structured conflicts should preserve all concurrent values until a later resolving change is written
+- Structured conflicts should preserve all concurrent values until a later resolving change selects or merges revision candidates
 - The agent may assist with conflict resolution, but resolution must always be another explicit change, never silent data loss
+- Conflict review should be expressed in actor-attributed revision candidates, not a canonical `ours/theirs` split
 - Automerge is the fine-grained history layer:
   - document history is preserved locally
   - text insertions and deletions are preserved and merged automatically
@@ -322,10 +330,12 @@ Every peer, including each Apple device and the server, should have a local Orig
 
 #### What happens for calendar, tasks, email, GitHub, and Telegram
 
-- Origin keeps a local-first shadow state for offline access and editing
-- External services remain the eventual integration targets and long-term shared systems of record
-- Local edits create pending mutations that are applied remotely when connectivity is available
-- Remote changes fetched from external services update the local shadow state on every peer
+- Tasks and calendar items remain first-party Origin planning objects and are replicated offline-first on every peer
+- Google Calendar / Google Tasks bridge linkage metadata stored on those planning objects is replicated with them
+- Google provider pollers, cursors, backoff/rate-limit state, and execution queues remain server-local operational state
+- Provider changes from Google bridges reconcile into replicated planning objects; Origin planning changes sync outward through server-owned bridge jobs
+- Email, GitHub, and Telegram remain external-service domains rather than replicated first-party object sets
+- The server owns their pollers, primary caches, and provider outboxes; clients consume them through server-mediated read models and activity, with only domain-defined first-party overlays replicated when needed
 
 ### Recommended Library Stack
 
@@ -529,13 +539,21 @@ Origin should be deliberate about which domains it owns directly and which it tr
   - primary sync/history layer: replicated note document history
   - portable/export layer: materialized markdown vault on disk
 
+#### Managed workspace and vault boundary
+
+- The managed workspace root is the full filesystem area Origin manages on a peer
+- The markdown vault is the synced notes subtree within that workspace
+- In v1, the vault defaults to the workspace root unless configured otherwise
+- Markdown notes and note attachments inside the vault bridge into replicated note state
+- Non-note files in the managed workspace remain normal host files unless Origin explicitly imports them into managed replicated state
+
 #### Recommended markdown-vault design
 
 - Canonical file representation: a markdown vault with attachments
 - Canonical file format: `.md` files plus simple YAML properties where useful
-- The vault should be treated as a single shared assistant workspace rather than split into separate user and agent vaults
+- The managed workspace should be treated as a single shared assistant workspace rather than split into separate user and agent areas
 - On filesystem-bearing peers, Origin materializes note state into this vault and treats direct file edits as a supported input path
-- Any file inside the managed vault is accessible to the agent like any other host file
+- Any file inside the managed workspace root is accessible to the agent like any other host file
 - The vault should include a stable managed memory file at `Origin/Memory.md`
 - Origin behavior:
   - edit note state through the replicated document model
@@ -571,6 +589,13 @@ Origin should be deliberate about which domains it owns directly and which it tr
 - Origin watches for external file changes and imports them back into replicated note state
 - The vault remains a materialized editable projection of replicated note state, not a separate note-history system
 
+#### Workspace attach and adoption
+
+- If the selected workspace/vault path does not exist, Origin creates it
+- If it exists and is empty, Origin initializes it
+- If it exists and is non-empty, Origin performs an adoption/import pass before any export
+- Origin must not silently clobber existing files during attach, adoption, or first export
+
 #### External editing import path
 
 - Editing notes outside Origin should be a supported workflow
@@ -589,6 +614,7 @@ Origin should be deliberate about which domains it owns directly and which it tr
 - Assume both the user and Origin may edit the same note while offline on different peers
 - The replicated note model is responsible for preserving and merging concurrent edits
 - External markdown edits are treated the same as any other authored change once imported
+- Conflict handling should be framed as choosing or merging actor-attributed revision candidates, not `ours` vs `theirs`
 
 #### Recommended folder shape
 
@@ -621,15 +647,15 @@ Origin should be deliberate about which domains it owns directly and which it tr
 
 #### Filesystem model
 
-- Origin must be able to operate on its own managed files, including the markdown vault and other Origin-owned runtime directories
+- Origin must be able to operate on its own managed files, including the managed workspace root, the markdown vault within it, and other Origin-owned runtime directories
 - Origin must also be able to operate on arbitrary files and folders that already exist on the host where the server runs
 - In local mode, this means files on the local machine that the server process can access
 - In VPS mode, this means files on the VPS that the server process can access
 - Arbitrary host-filesystem access is a first-class operational capability for the agent, not an edge case
 - These arbitrary host files are not part of the replicated local-first app state by default
-- The special thing about the managed vault is sync behavior, not access control
+- The special thing about the managed workspace/vault is sync behavior, not access control
 - Markdown notes and note attachments inside the managed vault are bridged into Origin's replicated note model and sync across peers
-- Arbitrary host files outside that managed note set remain normal host files unless Origin explicitly imports them into managed state
+- Non-note files in the managed workspace and arbitrary host files outside it remain normal host files unless Origin explicitly imports them into managed state
 - Other host files should be treated as external operational resources that Origin can inspect, modify, create, move, or organize through its CLI capability surface
 
 #### Email, GitHub, and Telegram
@@ -638,9 +664,11 @@ Origin should be deliberate about which domains it owns directly and which it tr
 - Origin should keep metadata, caches, and operational state only as needed
 - Raw content should be cached selectively for performance or robustness, not persisted broadly by default
 - The v1 "subscription" model for external systems is server-owned incremental polling, not a separate first-class subscription product surface
-- Each provider keeps a saved cursor or last-successful-sync marker and polls only for new or changed state after that point
-- Provider polling updates selective local caches, emits normalized activity events, and those events are what automations react to
+- Each provider keeps a server-local saved cursor or last-successful-sync marker and polls only for new or changed state after that point
+- Provider polling updates selective server-owned caches, emits normalized activity events, and those events are what automations react to
 - Caches are the current-state working set for context and actions; activity events are the trigger surface for reactive automation
+- Provider pollers, cursors, primary caches, and provider outboxes are server-owned operational state rather than replicated app-state
+- Domain-defined Origin-owned overlays may still be replicated when the domain makes them first-party objects
 - The shared ingress model is defined in [provider_ingress_api.md](./api/provider_ingress_api.md)
 
 #### Email model
@@ -817,7 +845,7 @@ All core libraries and tools used by the system should be cloned locally into `d
 40. Retrieval should use a hybrid model: structured filters and exact search first, with embeddings / vector retrieval as a first-class derived layer where semantic search improves context quality.
 41. Origin should support proactive notifications through in-app surfaces and push notifications, but not through outbound email or Telegram notifications in v1.
 42. Persisted agent-authored documents should be ordinary notes in the vault organized as needed; transient one-off output should remain in chat by default.
-43. The vault is a single shared assistant workspace, not separate user and agent vault roots.
+43. The managed workspace is a single shared assistant workspace; the vault is its synced notes subtree rather than a separate user/agent split.
 44. Agent memory behavior is defined by [memory_protocol.md](./details/memory_protocol.md): `Origin/Memory.md` is the curated memory index, and the agent may create supporting files or datasets referenced from it without requiring fixed schemas upfront.
 45. Origin itself should use the simplest viable single-owner auth model in v1 and should not introduce an internal multi-user account system.
 46. The preferred v1 deployment target is a single Linux VPS compatible with Hetzner-style deployment, using a bare-metal / systemd-first service model rather than container-first packaging.

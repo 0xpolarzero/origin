@@ -72,7 +72,10 @@ This state is metadata and cache, not a full mirrored copy of Telegram.
 
 - `observe`
 - `participate`
-- `summarize`
+
+### `TelegramGroupSubscriptionState`
+
+- `enabled`
 - `disabled`
 
 ### `TelegramChatKind`
@@ -142,6 +145,9 @@ Fields:
 - `lastValidatedAt`
 - `revokedAt`
 
+`defaultParticipationMode` controls only the default interactive behavior for enabled groups.
+Summary policy and subscription enablement are separate group-level settings.
+
 ### `TelegramChatRef`
 
 Represents a Telegram chat that Origin cares about.
@@ -166,12 +172,13 @@ Fields:
 
 ### `TelegramGroupSubscription`
 
-Represents Origin's participation policy for a Telegram group.
+Represents Origin's local subscription state and policy for a Telegram group.
 
 Fields:
 
 - `id`
 - `chatRefId`
+- `subscriptionState: TelegramGroupSubscriptionState`
 - `participationMode: TelegramParticipationMode`
 - `summaryEnabled`
 - `mentionTrackingEnabled`
@@ -179,6 +186,13 @@ Fields:
 - `createdAt`
 - `updatedAt`
 - `disabledAt`
+
+Normative model:
+
+- `subscriptionState` controls whether the group is actively tracked by Origin.
+- `participationMode` applies only when `subscriptionState=enabled` and controls interactive bot behavior.
+- `summaryEnabled` is independent of `participationMode` and controls whether summary workflows may run or post for the group.
+- `disabledAt` records when the subscription was last disabled; it is not a separate mode.
 
 ### `TelegramRecentMessageCache`
 
@@ -279,11 +293,15 @@ Search should be limited to what Origin has cached or can reasonably fetch on de
 ### Group participation
 
 - register a group after the bot is invited
-- enable tracking for a group
-- disable tracking for a group
+- enable a group subscription
+- disable a group subscription
+- set group participation mode
 - set group summary policy
 - set group mention tracking policy
 - set group cache policy
+
+Enable / disable is a subscription-state change.
+Participation mode and summary policy are separate settings on an enabled group.
 
 ### Message actions
 
@@ -303,21 +321,30 @@ Search should be limited to what Origin has cached or can reasonably fetch on de
 
 - refresh recent message cache for a chat
 - expire old cached windows
-- rehydrate a cached chat window from Telegram when needed
+- rehydrate a recent cached chat window from Telegram when provider state is still reachable
 
 ## Sync / Cache Strategy
 
 - Telegram remains the source of truth.
-- Origin stores bot identity, chat refs, group subscription policy, recent cached message windows, and outbound actions.
-- Origin should cache only as much as is needed for agent workflow speed, recent context, and short-lived robustness.
-- The cache should be selective, recent, and bounded.
-- The cache should be recoverable from Telegram if lost.
+- Origin stores bot identity, chat refs, group subscription policy, and outbound actions as durable Origin metadata.
+- Origin stores recent message windows as a selective, recent, bounded cache for agent workflow speed and short-lived robustness.
+- Chat refs and group policy are expected to survive cache eviction or repair.
+- Recent message caches are evictable and are not a durable history store.
+- Rehydration is best-effort for provider state that is still reachable from Telegram at refresh time; it does not guarantee reconstruction of all evicted history.
 - Local clients should read Telegram state through the server or from the server-synced local state, not by talking to Telegram directly.
 - The shared polling / cursor / cache / activity-event model is defined in [provider_ingress_api.md](./provider_ingress_api.md)
 
 ## Group Model
 
 Telegram group participation is first-class.
+
+Origin models each tracked group on separate axes:
+
+- subscription state: `enabled` or `disabled`
+- participation mode: `observe` or `participate`
+- summary policy: enabled or disabled
+
+These axes must not be collapsed into one overloaded mode field.
 
 Origin should support:
 
@@ -343,6 +370,8 @@ The Telegram integration must emit activity events for:
 - bot validation succeeded or failed
 - group invited / group linked
 - group subscription enabled or disabled
+- group participation mode changed
+- group summary policy changed
 - privacy mode changed
 - message received
 - message sent

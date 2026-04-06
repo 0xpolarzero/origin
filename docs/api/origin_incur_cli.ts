@@ -39,6 +39,11 @@ const isoDateTime = z.string().describe('ISO 8601 datetime string.')
 const duration = z.string().describe('Human-friendly duration string such as `15m` or `24h`.')
 const path = z.string().describe('Filesystem path.')
 const markdown = z.string().describe('Markdown content.')
+const secureRef = z
+  .string()
+  .describe(
+    'Opaque secure-handoff ref created by an operator-only channel. Pass refs here instead of raw secret material in the agent CLI.',
+  )
 
 const list = <const item extends z.ZodTypeAny>(item: item, itemDescription: string) =>
   z.object({
@@ -170,6 +175,47 @@ const integrationStatus = z.object({
   ['last-refreshed-at']: isoDateTime.optional().describe('Last refresh timestamp.'),
 })
 
+const providerPollerStatus = z.object({
+  id: id('Provider poller id.'),
+  provider: z.string().describe('Provider key.'),
+  scope: z.string().describe('Provider scope covered by this poller.'),
+  status: z
+    .enum(['active', 'paused', 'degraded', 'auth_failed', 'rate_limited'])
+    .describe('Current poller status.'),
+  mode: z.enum(['poll']).describe('Ingress mode.'),
+  cursor: z.string().optional().describe('Opaque provider cursor or last-successful-sync marker when known.'),
+  ['last-started-at']: isoDateTime.optional().describe('Most recent poll start time.'),
+  ['last-succeeded-at']: isoDateTime.optional().describe('Most recent successful poll completion time.'),
+  ['last-failed-at']: isoDateTime.optional().describe('Most recent failed poll completion time.'),
+  ['last-error']: z.string().optional().describe('Most recent poller error summary when known.'),
+  ['interval-seconds']: z.number().optional().describe('Nominal polling interval in seconds.'),
+  ['backoff-until']: isoDateTime.optional().describe('Backoff horizon when the poller is temporarily delayed.'),
+  ['items-seen']: z.number().optional().describe('Total items seen during the most recent relevant window.'),
+  ['items-changed']: z.number().optional().describe('Total changed items emitted during the most recent relevant window.'),
+})
+
+const providerSurfaceStatus = z.object({
+  id: id('Provider surface id.'),
+  provider: z.string().describe('Provider key.'),
+  scope: z.string().describe('Surface scope handled by this selection, such as a mailbox, tracked working set, chat set, calendar, or task list.'),
+  status: z.string().describe('Surface status.'),
+  summary: z.string().describe('Surface summary.'),
+  ['provider-ref']: z.string().optional().describe('Provider-side container ref for the surface when known.'),
+  ['display-name']: z.string().optional().describe('Display label for the surface when known.'),
+  selected: z.boolean().optional().describe('Whether this surface is currently selected for active ingress or sync.'),
+  ['cached-items']: z.number().optional().describe('Approximate cached item count for this surface.'),
+  pollers: z.array(providerPollerStatus).optional().describe('Pollers that serve this surface.'),
+})
+
+const providerIngressStatus = z.object({
+  provider: z.string().describe('Provider key.'),
+  status: z.string().describe('Overall ingress or cache status.'),
+  summary: z.string().describe('Overall ingress or cache summary.'),
+  surfaces: z.array(providerSurfaceStatus).optional().describe('Selected or known provider surfaces.'),
+  pollers: z.array(providerPollerStatus).describe('Known pollers across the provider or selected surfaces.'),
+  ['last-refreshed-at']: isoDateTime.optional().describe('Most recent provider refresh completion time when known.'),
+})
+
 const integrationConfig = z.object({
   key: z.string().describe('Integration key.'),
   values: z.record(z.string(), z.unknown()).describe('Operator-configurable integration settings.'),
@@ -215,7 +261,7 @@ const setupPhase = z.object({
 })
 
 const setupStatus = z.object({
-  mode: z.enum(['local', 'vps']).describe('Selected deployment mode.'),
+  mode: z.enum(['unselected', 'local', 'vps']).describe('Selected deployment mode, or `unselected` before setup mode is chosen.'),
   status: z.enum(['not-started', 'in-progress', 'ready']).describe('Overall setup state.'),
   summary: z.string().describe('Top-level setup summary.'),
   phases: z.array(setupPhase).describe('Current phase states.'),
@@ -279,8 +325,8 @@ const queueStatus = z.object({
 
 const pathSummary = z.object({
   state: path.describe('Origin state directory.'),
-  workspace: path.describe('Workspace root.'),
-  vault: path.describe('Managed vault root.'),
+  workspace: path.describe('Managed workspace root that contains the synced note vault plus local workspace artifacts.'),
+  vault: path.describe('Synced note subtree inside the managed workspace root.'),
   sqlite: path.describe('SQLite file path.'),
   blobs: path.optional().describe('Blob/cache root when present.'),
 })
@@ -307,26 +353,31 @@ const chatOutboxItem = z.object({
 })
 
 const memoryFile = z.object({
-  path: path.describe('Memory file path.'),
+  path: path.describe('Path to `Origin/Memory.md` inside the synced vault.'),
   content: markdown.describe('Current memory markdown content.'),
   ['linked-artifacts']: z.array(path).optional().describe('Linked supporting artifacts.'),
 })
 
 const memoryArtifact = z.object({
-  path: path.describe('Artifact path.'),
+  path: path.describe('Managed workspace path for the artifact. Non-note artifacts remain local workspace artifacts by default unless explicitly imported into replicated state.'),
   kind: z.string().describe('Artifact kind.'),
   summary: z.string().describe('Artifact purpose summary.'),
+  ['replicated-state']: z
+    .boolean()
+    .optional()
+    .describe('Whether the artifact has been explicitly imported into replicated state. Non-note artifacts default to local workspace-only storage.'),
 })
 
 const workspaceEntry = z.object({
-  path: path.describe('Workspace-relative path.'),
+  path: path.describe('Path relative to the managed workspace root.'),
   kind: z.enum(['file', 'folder']).describe('Workspace entry kind.'),
   ['last-modified-at']: isoDateTime.optional().describe('Last modification time.'),
 })
 
 const workspaceStatus = z.object({
-  root: path.describe('Workspace root.'),
-  summary: z.string().describe('Workspace health summary.'),
+  root: path.describe('Managed workspace root.'),
+  vault: path.optional().describe('Synced note subtree inside the managed workspace root when configured.'),
+  summary: z.string().describe('Workspace health summary across the managed root, synced vault, and local workspace artifacts.'),
   ['index-status']: z.string().describe('Indexing summary.'),
   ['bridge-status']: z.string().describe('Filesystem bridge summary.'),
 })
@@ -375,6 +426,28 @@ const revisionDiff = z.object({
   patch: z.string().optional().describe('Unified diff or patch summary when applicable.'),
 })
 
+const conflictRevision = z.object({
+  id: id('Conflict revision id.'),
+  source: z.string().describe('Source of the competing revision, import, or provider snapshot.'),
+  label: z.string().describe('Explicit candidate label shown to the operator or agent.'),
+  actor: z.string().optional().describe('Actor id when known.'),
+  at: isoDateTime.optional().describe('Revision or import time when known.'),
+  summary: z.string().describe('Competing revision summary.'),
+  diff: revisionDiff.optional().describe('Compact diff summary when available.'),
+})
+
+const conflictCandidate = z.object({
+  id: z.string().describe('Stable candidate id used when selecting a resolution outcome.'),
+  label: z.string().describe('Explicit candidate label such as `local-head`, `provider-import`, or `merged-preview`.'),
+  summary: z.string().describe('What adopting this candidate would do.'),
+  ['revision-id']: z.string().optional().describe('Underlying competing revision id when the candidate maps directly to one revision.'),
+})
+
+const workspaceConflictDetail = workspaceConflict.extend({
+  revisions: z.array(conflictRevision).optional().describe('Competing workspace revisions or imported candidates.'),
+  candidates: z.array(conflictCandidate).optional().describe('Explicit resolution candidates that can be selected or used as merge inputs.'),
+})
+
 const noteRevision = z.object({
   id: id('Revision id.'),
   actor: z.string().describe('Actor id that produced the revision.'),
@@ -400,11 +473,11 @@ const noteConflict = z.object({
 })
 
 const noteConflictDetail = noteConflict.extend({
-  revisions: z.array(noteRevision).optional().describe('Competing note revisions.'),
+  revisions: z.array(conflictRevision).optional().describe('Competing note revisions or imported candidates.'),
   candidates: z
-    .array(z.string())
+    .array(conflictCandidate)
     .optional()
-    .describe('Named resolution candidates such as ours, theirs, or merged.'),
+    .describe('Explicit resolution candidates that can be selected or used as merge inputs.'),
 })
 
 const fileEntry = z.object({
@@ -425,10 +498,35 @@ const fileSearchResult = z.object({
   excerpt: z.string().optional().describe('Matched excerpt when content search is enabled.'),
 })
 
-const externalLink = z.object({
-  provider: z.string().describe('Provider name.'),
-  ref: z.string().describe('Provider ref or id.'),
+const googleCalendarExternalLink = z.object({
+  provider: z.literal('google-calendar').describe('Provider name.'),
+  ref: z.string().describe('Canonical provider ref, typically `<calendar-id>/<event-id>` when the remote event exists.'),
+  ['sync-mode']: z.enum(['import', 'mirror', 'detached']).describe('Local Google Calendar linkage mode.'),
+  ['lifecycle-status']: z
+    .enum(['linked', 'detached'])
+    .describe('Lifecycle of the local link. `detached` means the local object is preserved and the remote Google event is left untouched.'),
+  ['calendar-id']: z.string().describe('Google calendar id for the linked or previously linked surface.'),
+  ['google-event-id']: z.string().optional().describe('Bound Google event id when one exists.'),
+  ['last-pulled-at']: isoDateTime.optional().describe('Most recent successful import time.'),
+  ['last-pushed-at']: isoDateTime.optional().describe('Most recent successful export time.'),
+  ['last-external-hash']: z.string().optional().describe('Last observed Google-side content hash when tracked.'),
 })
+
+const googleTasksExternalLink = z.object({
+  provider: z.literal('google-tasks').describe('Provider name.'),
+  ref: z.string().describe('Canonical provider ref, typically `<task-list-id>/<google-task-id>` when the remote task exists.'),
+  ['sync-mode']: z.enum(['import', 'mirror', 'detached']).describe('Local Google Tasks linkage mode.'),
+  ['lifecycle-status']: z
+    .enum(['linked', 'detached'])
+    .describe('Lifecycle of the local link. `detached` means the local object is preserved and the remote Google task is left untouched.'),
+  ['task-list-id']: z.string().describe('Google task list id for the linked or previously linked surface.'),
+  ['google-task-id']: z.string().optional().describe('Bound Google task id when one exists.'),
+  ['last-pulled-at']: isoDateTime.optional().describe('Most recent successful import time.'),
+  ['last-pushed-at']: isoDateTime.optional().describe('Most recent successful export time.'),
+  ['last-external-hash']: z.string().optional().describe('Last observed Google-side content hash when tracked.'),
+})
+
+const externalLink = z.discriminatedUnion('provider', [googleCalendarExternalLink, googleTasksExternalLink])
 
 const project = z.object({
   id: id('Project id.'),
@@ -447,6 +545,17 @@ const recurrence = z.object({
   rule: z.string().describe('Recurrence rule.'),
   ['start-date']: isoDate.optional().describe('Series start date.'),
   ['end-date']: isoDate.optional().describe('Series end date.'),
+  ['series-id']: z.string().optional().describe('Stable recurrence series id shared by every occurrence in the series.'),
+  ['occurrence-index']: z
+    .number()
+    .optional()
+    .describe('Zero-based index of this occurrence in the series. The series root is the occurrence whose `occurrence-index` is `0`.'),
+  ['previous-occurrence-id']: z.string().optional().describe('Previous occurrence id when this is not the series root.'),
+  ['next-occurrence-id']: z.string().optional().describe('Next occurrence id when it already exists.'),
+  ['advance-mode']: z
+    .enum(['on_completion', 'on_schedule'])
+    .optional()
+    .describe('Task-series advancement mode. This is task-specific and is omitted for calendar-only recurrence.'),
 })
 
 const task = z.object({
@@ -489,6 +598,50 @@ const calendarItem = z.object({
   recurrence: recurrence.optional().describe('Recurrence definition when present.'),
   ['task-ids']: z.array(z.string()).optional().describe('Linked task ids when present.'),
   ['external-links']: z.array(externalLink).optional().describe('Provider links.'),
+})
+
+const googleCalendarSurfaceStatus = z.object({
+  id: id('Google Calendar surface id.'),
+  provider: z.literal('google-calendar').describe('Provider key.'),
+  scope: z.string().describe('Attached Google Calendar surface scope.'),
+  status: z.string().describe('Surface status.'),
+  summary: z.string().describe('Surface summary.'),
+  ['calendar-id']: z.string().describe('Selected Google calendar id.'),
+  ['calendar-title']: z.string().optional().describe('Calendar display name when known.'),
+  selected: z.boolean().describe('Whether this calendar is selected for sync or mirroring.'),
+  ['attached-item-count']: z.number().optional().describe('Number of Origin calendar items currently linked to this calendar.'),
+  pollers: z.array(providerPollerStatus).describe('Pollers that serve this selected calendar.'),
+})
+
+const googleTasksSurfaceStatus = z.object({
+  id: id('Google Tasks surface id.'),
+  provider: z.literal('google-tasks').describe('Provider key.'),
+  scope: z.string().describe('Attached Google Tasks surface scope.'),
+  status: z.string().describe('Surface status.'),
+  summary: z.string().describe('Surface summary.'),
+  ['task-list-id']: z.string().describe('Selected Google task list id.'),
+  ['task-list-title']: z.string().optional().describe('Task list display name when known.'),
+  selected: z.boolean().describe('Whether this task list is selected for sync or mirroring.'),
+  ['attached-task-count']: z.number().optional().describe('Number of Origin tasks currently linked to this task list.'),
+  pollers: z.array(providerPollerStatus).describe('Pollers that serve this selected task list.'),
+})
+
+const googleCalendarBridgeStatus = z.object({
+  provider: z.literal('google-calendar').describe('Provider key.'),
+  status: z.string().describe('Overall Google Calendar bridge status.'),
+  summary: z.string().describe('Overall Google Calendar bridge summary.'),
+  ['selected-calendars']: z.array(googleCalendarSurfaceStatus).describe('Google calendars selected for sync, import, or mirroring.'),
+  pollers: z.array(providerPollerStatus).describe('Flattened pollers across selected Google calendars.'),
+  ['last-refreshed-at']: isoDateTime.optional().describe('Most recent Google Calendar refresh completion time when known.'),
+})
+
+const googleTasksBridgeStatus = z.object({
+  provider: z.literal('google-tasks').describe('Provider key.'),
+  status: z.string().describe('Overall Google Tasks bridge status.'),
+  summary: z.string().describe('Overall Google Tasks bridge summary.'),
+  ['selected-task-lists']: z.array(googleTasksSurfaceStatus).describe('Google task lists selected for sync, import, or mirroring.'),
+  pollers: z.array(providerPollerStatus).describe('Flattened pollers across selected Google task lists.'),
+  ['last-refreshed-at']: isoDateTime.optional().describe('Most recent Google Tasks refresh completion time when known.'),
 })
 
 const planningDayView = z.object({
@@ -713,12 +866,22 @@ const telegramChat = z.object({
   ['message-cache-state']: z.string().optional().describe('Recent message cache state.'),
 })
 
+const telegramSummaryPolicy = z.object({
+  enabled: z.boolean().describe('Whether summaries are enabled for the group.'),
+  window: duration.optional().describe('Default summary lookback or cadence when configured.'),
+})
+
 const telegramGroupPolicy = z.object({
   ['chat-id']: id('Telegram chat id.'),
-  mode: z.string().describe('Participation mode.'),
-  ['summary-enabled']: z.boolean().optional().describe('Whether summaries are enabled.'),
+  enabled: z.boolean().describe('Whether the group is enabled in Origin.'),
+  ['participation-mode']: z
+    .enum(['observe', 'participate'])
+    .optional()
+    .describe('Bot participation mode when the group is enabled.'),
+  ['summary-policy']: telegramSummaryPolicy.optional().describe('Summary policy for the group.'),
   ['mention-tracking-enabled']: z.boolean().optional().describe('Whether mention tracking is enabled.'),
   ['message-cache-enabled']: z.boolean().optional().describe('Whether recent message cache is enabled.'),
+  summary: z.string().optional().describe('Group policy summary.'),
 })
 
 const telegramMessage = z.object({
@@ -846,8 +1009,8 @@ const syncConflict = z.object({
 })
 
 const syncConflictDetail = syncConflict.extend({
-  revisions: z.array(workspaceRevision).optional().describe('Competing revisions or imports.'),
-  candidates: z.array(z.string()).optional().describe('Available resolution strategies or candidates.'),
+  revisions: z.array(conflictRevision).optional().describe('Competing revisions, provider imports, or bridge candidates.'),
+  candidates: z.array(conflictCandidate).optional().describe('Available resolution candidates that can be selected explicitly.'),
 })
 
 const syncStatus = z.object({
@@ -1240,10 +1403,13 @@ const integration = Cli.create('integration', {
           .command(
             'complete',
             doc({
-              description: 'Complete an OAuth flow after authorization.',
+              description:
+                'Complete an OAuth flow after authorization using a secure handoff ref from an operator-only browser flow. If an expected agent identity is stored for the integration, the returned provider principal must match it or the command fails.',
               args: z.object({ integration: z.string().describe('Integration key.') }),
               options: z.object({
-                code: z.string().describe('Provider authorization code.'),
+                ['code-ref']: secureRef.describe(
+                  'Secure handoff ref for the provider authorization code returned by the operator-only browser flow.',
+                ),
                 state: z.string().optional().describe('Provider state token.'),
               }),
               output: actionResult,
@@ -1254,10 +1420,13 @@ const integration = Cli.create('integration', {
         Cli.create('token', { description: 'Token-based connection flows.' }).command(
           'set',
           doc({
-            description: 'Set a provider token when the integration does not use OAuth, such as Telegram bot token setup.',
+            description:
+              'Set a provider token when the integration does not use OAuth, such as Telegram bot token setup. The token ref must come from an operator-only secure handoff rather than raw secret material typed into the agent CLI.',
             args: z.object({ integration: z.string().describe('Integration key.') }),
             options: z.object({
-              token: z.string().describe('Provider token.'),
+              ['token-ref']: secureRef.describe(
+                'Secure handoff ref for the provider token. Do not pass the raw token directly in the agent CLI.',
+              ),
             }),
             output: actionResult,
           }),
@@ -1353,9 +1522,9 @@ const integration = Cli.create('integration', {
       .command(
         'status',
         doc({
-          description: 'Inspect integration cache status.',
+          description: 'Inspect integration cache status, selected provider surfaces, and ingress pollers.',
           args: z.object({ integration: z.string().describe('Integration key.') }),
-          output: integrationStatus,
+          output: providerIngressStatus,
         }),
       )
       .command(
@@ -1529,27 +1698,63 @@ const setup = Cli.create('setup', {
       .command(
         Cli.create('google', { description: 'Google setup inputs.' })
           .command('oauth-start', doc({ description: 'Start Google OAuth during onboarding.', output: oauthStart }))
-          .command('oauth-complete', doc({ description: 'Complete Google OAuth during onboarding.', options: z.object({ code: z.string().describe('Authorization code.'), state: z.string().optional().describe('Provider state token.') }), output: actionResult })),
+          .command(
+            'oauth-complete',
+            doc({
+              description:
+                'Complete Google OAuth during onboarding using a secure handoff ref from an operator-only browser flow. If an agent Google identity is already stored, the returned Google principal must match it or the command fails.',
+              options: z.object({
+                ['code-ref']: secureRef.describe(
+                  'Secure handoff ref for the Google authorization code returned by the operator-only browser flow.',
+                ),
+                state: z.string().optional().describe('Provider state token.'),
+              }),
+              output: actionResult,
+            }),
+          ),
       )
       .command(
         Cli.create('github', { description: 'GitHub setup inputs.' })
           .command('oauth-start', doc({ description: 'Start GitHub OAuth during onboarding.', output: oauthStart }))
-          .command('oauth-complete', doc({ description: 'Complete GitHub OAuth during onboarding.', options: z.object({ code: z.string().describe('Authorization code.'), state: z.string().optional().describe('Provider state token.') }), output: actionResult })),
+          .command(
+            'oauth-complete',
+            doc({
+              description:
+                'Complete GitHub OAuth during onboarding using a secure handoff ref from an operator-only browser flow. If an agent GitHub identity is already stored, the returned GitHub principal must match it or the command fails.',
+              options: z.object({
+                ['code-ref']: secureRef.describe(
+                  'Secure handoff ref for the GitHub authorization code returned by the operator-only browser flow.',
+                ),
+                state: z.string().optional().describe('Provider state token.'),
+              }),
+              output: actionResult,
+            }),
+          ),
       )
       .command(
         Cli.create('telegram', { description: 'Telegram setup inputs.' })
-          .command('token-set', doc({ description: 'Set the pre-created Telegram bot token during onboarding.', options: z.object({ token: z.string().describe('Telegram bot token.') }), output: actionResult }))
+          .command(
+            'token-set',
+            doc({
+              description:
+                'Set the pre-created Telegram bot token during onboarding using a secure handoff ref from an operator-only channel. Do not type raw bot tokens into the agent CLI.',
+              options: z.object({
+                ['token-ref']: secureRef.describe('Secure handoff ref for the Telegram bot token.'),
+              }),
+              output: actionResult,
+            }),
+          )
           .command('configure', doc({ description: 'Persist initial Telegram onboarding configuration.', options: z.object({ ['privacy-mode']: z.enum(['enabled', 'disabled', 'unknown']).optional().describe('Observed privacy mode state.'), ['group-ids']: z.array(z.string()).optional().describe('Initial Telegram groups to register.') }), output: actionResult })),
       ),
   )
   .command(
     Cli.create('vault', { description: 'Managed workspace and vault setup inputs.' })
-      .command('init', doc({ description: 'Set or validate the managed workspace and vault root.', options: z.object({ path, ['create-if-missing']: z.boolean().default(true).describe('Create the vault if it does not exist.') }), output: actionResult }))
+      .command('init', doc({ description: 'Set or validate the managed workspace and synced vault root. If the target path is non-empty, Origin adopts and imports it before any export instead of silently overwriting files.', options: z.object({ path, ['create-if-missing']: z.boolean().default(true).describe('Create the vault if it does not exist.') }), output: actionResult }))
       .command('memory-bootstrap', doc({ description: 'Seed Origin/Memory.md with initial user-provided facts or preferences.', options: z.object({ content: markdown.describe('Initial memory content.') }), output: actionResult })),
   )
   .command(
     Cli.create('notification', { description: 'Notification setup inputs.' })
-      .command('register-device', doc({ description: 'Register a notification device during onboarding.', options: z.object({ kind: z.enum(['iphone', 'macos']).describe('Device kind.'), token: z.string().describe('Push device token or registration token.') }), output: actionResult }))
+      .command('register-device', doc({ description: 'Register a notification device during onboarding using a secure handoff ref for the device registration token.', options: z.object({ kind: z.enum(['iphone', 'macos']).describe('Device kind.'), ['token-ref']: secureRef.describe('Secure handoff ref for the push device token or registration token.') }), output: actionResult }))
       .command('preferences-set', doc({ description: 'Persist initial notification preferences during onboarding.', options: z.object({ values: z.record(z.string(), z.unknown()).describe('Notification preference payload.') }), output: actionResult })),
   )
   .command(
@@ -1877,16 +2082,27 @@ const workspace = Cli.create('workspace', {
   .command(
     Cli.create('conflict', { description: 'Inspect and resolve workspace bridge conflicts.' })
       .command('list', doc({ description: 'List workspace conflicts.', output: list(workspaceConflict, 'Workspace conflicts.') }))
-      .command('get', doc({ description: 'Get one workspace conflict.', args: z.object({ ['conflict-id']: id('Conflict id.') }), output: workspaceConflict }))
+      .command('get', doc({ description: 'Get one workspace conflict with competing revisions and explicit resolution candidates.', args: z.object({ ['conflict-id']: id('Conflict id.') }), output: workspaceConflictDetail }))
       .command(
         'resolve',
         doc({
-          description: 'Resolve a workspace conflict.',
+          description: 'Resolve a workspace conflict by selecting an explicit candidate or providing merged or replacement content.',
           args: z.object({ ['conflict-id']: id('Conflict id.') }),
-          options: z.object({
-            strategy: z.enum(['ours', 'theirs', 'merge', 'replace']).describe('Resolution strategy.'),
-            content: z.string().optional().describe('Resolved content when using merge or replace.'),
-          }),
+          options: z.discriminatedUnion('resolution', [
+            z.object({
+              resolution: z.literal('select').describe('Select one existing conflict candidate.'),
+              ['candidate-id']: z.string().describe('Candidate id from the conflict detail.'),
+            }),
+            z.object({
+              resolution: z.literal('merge').describe('Provide merged content, optionally anchored to a named candidate.'),
+              ['candidate-id']: z.string().optional().describe('Optional candidate id to use as the primary merge base.'),
+              content: z.string().describe('Merged workspace content.'),
+            }),
+            z.object({
+              resolution: z.literal('replace').describe('Replace the conflicting content with the provided content.'),
+              content: z.string().describe('Replacement workspace content.'),
+            }),
+          ]),
           output: actionResult,
         }),
       ),
@@ -1993,12 +2209,23 @@ const note = Cli.create('note', {
       .command(
         'resolve',
         doc({
-          description: 'Resolve a note conflict.',
+          description: 'Resolve a note conflict by selecting an explicit candidate or by providing merged or replacement note content.',
           args: z.object({ ['conflict-id']: id('Conflict id.') }),
-          options: z.object({
-            strategy: z.enum(['ours', 'theirs', 'merge', 'replace']).describe('Resolution strategy.'),
-            content: markdown.optional().describe('Resolved content when using merge or replace.'),
-          }),
+          options: z.discriminatedUnion('resolution', [
+            z.object({
+              resolution: z.literal('select').describe('Select one existing conflict candidate.'),
+              ['candidate-id']: z.string().describe('Candidate id from the note conflict detail.'),
+            }),
+            z.object({
+              resolution: z.literal('merge').describe('Provide merged note content, optionally anchored to a named candidate.'),
+              ['candidate-id']: z.string().optional().describe('Optional candidate id to use as the primary merge base.'),
+              content: markdown.describe('Merged note content.'),
+            }),
+            z.object({
+              resolution: z.literal('replace').describe('Replace the conflicting note content with the provided content.'),
+              content: markdown.describe('Replacement note content.'),
+            }),
+          ]),
           output: actionResult,
         }),
       ),
@@ -2185,16 +2412,16 @@ const taskCli = Cli.create('task', {
   )
   .command(
     Cli.create('recurrence', { description: 'Recurring-task series controls.' })
-      .command('set', doc({ description: 'Set recurrence on a task series root.', args: z.object({ ['task-id']: id('Task id.') }), options: z.object({ frequency: z.enum(['daily', 'weekly', 'monthly', 'yearly']).describe('Recurrence frequency.'), interval: z.number().optional().describe('Optional recurrence interval.'), ['by-weekday']: z.array(z.string()).optional().describe('Weekly weekday filters.'), ['by-month-day']: z.array(z.number()).optional().describe('Monthly day filters.'), timezone: z.string().optional().describe('Recurrence timezone.') }), output: actionResult }))
-      .command('clear', doc({ description: 'Remove recurrence metadata from a task series root.', args: z.object({ ['task-id']: id('Task id.') }), output: actionResult }))
-      .command('preview', doc({ description: 'Preview upcoming task occurrences without mutating state.', args: z.object({ ['task-id']: id('Task id.') }), options: z.object({ count: z.number().default(10).describe('Occurrence count to preview.') }), output: list(task, 'Preview task occurrences.') }))
-      .command('occurrences', doc({ description: 'List occurrences generated from a recurring task series.', args: z.object({ ['task-id']: id('Task series root id.') }), options: z.object({ from: isoDate.optional().describe('Inclusive lower bound.'), to: isoDate.optional().describe('Inclusive upper bound.'), limit: z.number().optional().describe('Maximum occurrence count.') }), output: list(task, 'Recurring task occurrences.') })),
+      .command('set', doc({ description: 'Set recurrence on a task series root. The series root is the occurrence whose `occurrence-index` is `0`.', args: z.object({ ['task-id']: id('Task series root id. The series root is the occurrence whose `occurrence-index` is `0`.') }), options: z.object({ frequency: z.enum(['daily', 'weekly', 'monthly', 'yearly']).describe('Recurrence frequency.'), interval: z.number().optional().describe('Optional recurrence interval.'), ['by-weekday']: z.array(z.string()).optional().describe('Weekly weekday filters.'), ['by-month-day']: z.array(z.number()).optional().describe('Monthly day filters.'), timezone: z.string().optional().describe('Recurrence timezone.'), ['advance-mode']: z.enum(['on_completion', 'on_schedule']).optional().describe('How the task series advances after the root or later occurrences are scheduled or completed.') }), output: actionResult }))
+      .command('clear', doc({ description: 'Remove recurrence metadata from a task series root. The series root is the occurrence whose `occurrence-index` is `0`.', args: z.object({ ['task-id']: id('Task series root id. The series root is the occurrence whose `occurrence-index` is `0`.') }), output: actionResult }))
+      .command('preview', doc({ description: 'Preview upcoming task occurrences from a task series root without mutating state. The series root is the occurrence whose `occurrence-index` is `0`.', args: z.object({ ['task-id']: id('Task series root id. The series root is the occurrence whose `occurrence-index` is `0`.') }), options: z.object({ count: z.number().default(10).describe('Occurrence count to preview.') }), output: list(task, 'Preview task occurrences.') }))
+      .command('occurrences', doc({ description: 'List occurrences generated from a recurring task series. The series root is the occurrence whose `occurrence-index` is `0`.', args: z.object({ ['task-id']: id('Task series root id. The series root is the occurrence whose `occurrence-index` is `0`.') }), options: z.object({ from: isoDate.optional().describe('Inclusive lower bound.'), to: isoDate.optional().describe('Inclusive upper bound.'), limit: z.number().optional().describe('Maximum occurrence count.') }), output: list(task, 'Recurring task occurrences.') })),
   )
   .command(
     Cli.create('conflict', { description: 'Inspect and resolve task conflicts.' })
       .command('list', doc({ description: 'List task conflicts.', output: list(syncConflict, 'Task conflicts.') }))
       .command('get', doc({ description: 'Get one task conflict.', args: z.object({ ['conflict-id']: id('Conflict id.') }), output: syncConflictDetail }))
-      .command('resolve', doc({ description: 'Resolve a task conflict.', args: z.object({ ['conflict-id']: id('Conflict id.') }), options: z.object({ strategy: z.enum(['ours', 'theirs', 'merge', 'replace']).describe('Resolution strategy.'), payload: z.record(z.string(), z.unknown()).optional().describe('Resolved task payload.') }), output: actionResult })),
+      .command('resolve', doc({ description: 'Resolve a task conflict by selecting an explicit candidate or by providing merged or replacement structured payload.', args: z.object({ ['conflict-id']: id('Conflict id.') }), options: z.discriminatedUnion('resolution', [z.object({ resolution: z.literal('select').describe('Select one existing conflict candidate.'), ['candidate-id']: z.string().describe('Candidate id from the task conflict detail.') }), z.object({ resolution: z.literal('merge').describe('Provide merged task payload, optionally anchored to a named candidate.'), ['candidate-id']: z.string().optional().describe('Optional candidate id to use as the primary merge base.'), payload: z.record(z.string(), z.unknown()).describe('Merged task payload.') }), z.object({ resolution: z.literal('replace').describe('Replace the conflicting task payload with the provided payload.'), payload: z.record(z.string(), z.unknown()).describe('Replacement task payload.') })]), output: actionResult })),
   )
 
 const calendarItemCli = Cli.create('calendar-item', {
@@ -2233,37 +2460,41 @@ const calendarItemCli = Cli.create('calendar-item', {
   )
   .command(
     Cli.create('recurrence', { description: 'Recurring calendar-series controls.' })
-      .command('set', doc({ description: 'Set recurrence on a calendar series root.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), options: z.object({ frequency: z.enum(['daily', 'weekly', 'monthly', 'yearly']).describe('Recurrence frequency.'), interval: z.number().optional().describe('Optional recurrence interval.'), ['by-weekday']: z.array(z.string()).optional().describe('Weekly weekday filters.'), ['by-month-day']: z.array(z.number()).optional().describe('Monthly day filters.'), timezone: z.string().optional().describe('Recurrence timezone.') }), output: actionResult }))
-      .command('clear', doc({ description: 'Remove recurrence metadata from a calendar series root.', args: z.object({ ['calendar-item-id']: id('Calendar series root id.') }), output: actionResult }))
-      .command('preview', doc({ description: 'Preview upcoming calendar occurrences without mutating state.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), options: z.object({ count: z.number().default(10).describe('Occurrence count to preview.') }), output: list(calendarItem, 'Preview calendar occurrences.') }))
-      .command('occurrences', doc({ description: 'List occurrences generated from a recurring calendar series.', args: z.object({ ['calendar-item-id']: id('Calendar series root id.') }), options: z.object({ from: isoDate.optional().describe('Inclusive lower bound.'), to: isoDate.optional().describe('Inclusive upper bound.'), limit: z.number().optional().describe('Maximum occurrence count.') }), output: list(calendarItem, 'Recurring calendar occurrences.') })),
+      .command('set', doc({ description: 'Set recurrence on a calendar series root. The series root is the occurrence whose `occurrence-index` is `0`.', args: z.object({ ['calendar-item-id']: id('Calendar series root id. The series root is the occurrence whose `occurrence-index` is `0`.') }), options: z.object({ frequency: z.enum(['daily', 'weekly', 'monthly', 'yearly']).describe('Recurrence frequency.'), interval: z.number().optional().describe('Optional recurrence interval.'), ['by-weekday']: z.array(z.string()).optional().describe('Weekly weekday filters.'), ['by-month-day']: z.array(z.number()).optional().describe('Monthly day filters.'), timezone: z.string().optional().describe('Recurrence timezone.') }), output: actionResult }))
+      .command('clear', doc({ description: 'Remove recurrence metadata from a calendar series root. The series root is the occurrence whose `occurrence-index` is `0`.', args: z.object({ ['calendar-item-id']: id('Calendar series root id. The series root is the occurrence whose `occurrence-index` is `0`.') }), output: actionResult }))
+      .command('preview', doc({ description: 'Preview upcoming calendar occurrences from a calendar series root without mutating state. The series root is the occurrence whose `occurrence-index` is `0`.', args: z.object({ ['calendar-item-id']: id('Calendar series root id. The series root is the occurrence whose `occurrence-index` is `0`.') }), options: z.object({ count: z.number().default(10).describe('Occurrence count to preview.') }), output: list(calendarItem, 'Preview calendar occurrences.') }))
+      .command('occurrences', doc({ description: 'List occurrences generated from a recurring calendar series. The series root is the occurrence whose `occurrence-index` is `0`.', args: z.object({ ['calendar-item-id']: id('Calendar series root id. The series root is the occurrence whose `occurrence-index` is `0`.') }), options: z.object({ from: isoDate.optional().describe('Inclusive lower bound.'), to: isoDate.optional().describe('Inclusive upper bound.'), limit: z.number().optional().describe('Maximum occurrence count.') }), output: list(calendarItem, 'Recurring calendar occurrences.') })),
   )
   .command(
     Cli.create('conflict', { description: 'Inspect and resolve calendar-item conflicts.' })
       .command('list', doc({ description: 'List calendar-item conflicts.', output: list(syncConflict, 'Calendar-item conflicts.') }))
       .command('get', doc({ description: 'Get one calendar-item conflict.', args: z.object({ ['conflict-id']: id('Conflict id.') }), output: syncConflictDetail }))
-      .command('resolve', doc({ description: 'Resolve a calendar-item conflict.', args: z.object({ ['conflict-id']: id('Conflict id.') }), options: z.object({ strategy: z.enum(['ours', 'theirs', 'merge', 'replace']).describe('Resolution strategy.'), payload: z.record(z.string(), z.unknown()).optional().describe('Resolved calendar-item payload.') }), output: actionResult })),
+      .command('resolve', doc({ description: 'Resolve a calendar-item conflict by selecting an explicit candidate or by providing merged or replacement structured payload.', args: z.object({ ['conflict-id']: id('Conflict id.') }), options: z.discriminatedUnion('resolution', [z.object({ resolution: z.literal('select').describe('Select one existing conflict candidate.'), ['candidate-id']: z.string().describe('Candidate id from the calendar-item conflict detail.') }), z.object({ resolution: z.literal('merge').describe('Provide merged calendar-item payload, optionally anchored to a named candidate.'), ['candidate-id']: z.string().optional().describe('Optional candidate id to use as the primary merge base.'), payload: z.record(z.string(), z.unknown()).describe('Merged calendar-item payload.') }), z.object({ resolution: z.literal('replace').describe('Replace the conflicting calendar-item payload with the provided payload.'), payload: z.record(z.string(), z.unknown()).describe('Replacement calendar-item payload.') })]), output: actionResult })),
   )
 
 const googleCalendarCli = Cli.create('google-calendar', {
   description: 'Google Calendar bridge for Origin calendar items.',
 })
-  .command('status', doc({ description: 'Inspect Google Calendar bridge status.', output: integrationStatus }))
+  .command('status', doc({ description: 'Inspect Google Calendar bridge status, selected calendars, and per-surface pollers.', output: googleCalendarBridgeStatus }))
   .command('pull', doc({ description: 'Import changes from Google Calendar into Origin calendar items.', options: z.object({ ['calendar-id']: z.string().optional().describe('Optional Google calendar id filter.') }), output: actionResult }))
   .command('push', doc({ description: 'Push Origin calendar-item changes to Google Calendar.', options: z.object({ ['calendar-id']: z.string().optional().describe('Optional Google calendar id filter.') }), output: actionResult }))
   .command('reconcile', doc({ description: 'Reconcile Origin calendar items with Google Calendar state.', options: z.object({ ['calendar-id']: z.string().optional().describe('Optional Google calendar id filter.') }), output: actionResult }))
-  .command('attach', doc({ description: 'Attach one calendar item to Google Calendar mirroring or import.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), options: z.object({ ['calendar-id']: z.string().describe('Google calendar id.'), mode: z.enum(['import', 'mirror']).describe('Attach mode.') }), output: actionResult }))
-  .command('detach', doc({ description: 'Detach one calendar item from Google Calendar mirroring.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), output: actionResult }))
+  .command('attach', doc({ description: 'Attach one calendar item to Google Calendar mirroring or import. This may bind the local item to an existing Google event when `google-event-id` is provided.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), options: z.object({ ['calendar-id']: z.string().describe('Google calendar id.'), ['google-event-id']: z.string().optional().describe('Optional existing Google event id to bind instead of creating a new remote event.'), mode: z.enum(['import', 'mirror']).describe('Attach mode.') }), output: actionResult }))
+  .command('detach', doc({ description: 'Detach one calendar item from Google Calendar mirroring. The local calendar item is preserved, the remote Google event is left untouched, and the local link transitions to `detached`.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), output: actionResult }))
+  .command('reset-cursor', doc({ description: 'Reset one Google Calendar bridge poller cursor as an explicit repair action. Local calendar items remain intact and remote Google events are not deleted.', options: z.object({ ['poller-id']: z.string().optional().describe('Specific Google Calendar poller id.'), ['calendar-id']: z.string().optional().describe('Optional selected Google calendar id.') }), output: actionResult }))
+  .command('repair', doc({ description: 'Repair a degraded Google Calendar bridge poller or selected calendar surface after auth, cursor, or reconcile failures. Local calendar items remain intact and remote Google events are not deleted.', options: z.object({ ['poller-id']: z.string().optional().describe('Specific Google Calendar poller id.'), ['calendar-id']: z.string().optional().describe('Optional selected Google calendar id.') }), output: actionResult }))
 
 const googleTasksCli = Cli.create('google-tasks', {
   description: 'Google Tasks bridge for Origin tasks.',
 })
-  .command('status', doc({ description: 'Inspect Google Tasks bridge status.', output: integrationStatus }))
+  .command('status', doc({ description: 'Inspect Google Tasks bridge status, selected task lists, and per-surface pollers.', output: googleTasksBridgeStatus }))
   .command('pull', doc({ description: 'Import changes from Google Tasks into Origin tasks.', options: z.object({ ['task-list-id']: z.string().optional().describe('Optional Google task list id filter.') }), output: actionResult }))
   .command('push', doc({ description: 'Push Origin task changes to Google Tasks.', options: z.object({ ['task-list-id']: z.string().optional().describe('Optional Google task list id filter.') }), output: actionResult }))
   .command('reconcile', doc({ description: 'Reconcile Origin tasks with Google Tasks state.', options: z.object({ ['task-list-id']: z.string().optional().describe('Optional Google task list id filter.') }), output: actionResult }))
-  .command('attach', doc({ description: 'Attach one task to Google Tasks mirroring or import.', args: z.object({ ['task-id']: id('Task id.') }), options: z.object({ ['task-list-id']: z.string().describe('Google task list id.'), mode: z.enum(['import', 'mirror']).describe('Attach mode.') }), output: actionResult }))
-  .command('detach', doc({ description: 'Detach one task from Google Tasks mirroring.', args: z.object({ ['task-id']: id('Task id.') }), output: actionResult }))
+  .command('attach', doc({ description: 'Attach one task to Google Tasks mirroring or import. This may bind the local task to an existing Google task when `google-task-id` is provided.', args: z.object({ ['task-id']: id('Task id.') }), options: z.object({ ['task-list-id']: z.string().describe('Google task list id.'), ['google-task-id']: z.string().optional().describe('Optional existing Google task id to bind instead of creating a new remote task.'), mode: z.enum(['import', 'mirror']).describe('Attach mode.') }), output: actionResult }))
+  .command('detach', doc({ description: 'Detach one task from Google Tasks mirroring. The local task is preserved, the remote Google task is left untouched, and the local link transitions to `detached`.', args: z.object({ ['task-id']: id('Task id.') }), output: actionResult }))
+  .command('reset-cursor', doc({ description: 'Reset one Google Tasks bridge poller cursor as an explicit repair action. Local tasks remain intact and remote Google tasks are not deleted.', options: z.object({ ['poller-id']: z.string().optional().describe('Specific Google Tasks poller id.'), ['task-list-id']: z.string().optional().describe('Optional selected Google task list id.') }), output: actionResult }))
+  .command('repair', doc({ description: 'Repair a degraded Google Tasks bridge poller or selected task-list surface after auth, cursor, or reconcile failures. Local tasks remain intact and remote Google tasks are not deleted.', options: z.object({ ['poller-id']: z.string().optional().describe('Specific Google Tasks poller id.'), ['task-list-id']: z.string().optional().describe('Optional selected Google task list id.') }), output: actionResult }))
 
 const planningCli = planning
   .command(projectCli)
@@ -2361,7 +2592,7 @@ const email = Cli.create('email', {
   .command('next', doc({ description: 'Return the next highest-signal triage targets.', output: list(emailThreadContext, 'Next email triage targets.') }))
   .command(
     Cli.create('cache', { description: 'Email cache controls.' })
-      .command('status', doc({ description: 'Inspect email cache status.', output: emailAccount }))
+      .command('status', doc({ description: 'Inspect email cache status, selected mailbox surfaces, and the pollers that hydrate them.', output: providerIngressStatus }))
       .command('warm', doc({ description: 'Warm the recent email cache.', output: actionResult }))
       .command('hydrate', doc({ description: 'Hydrate full bodies or attachments for selected threads.', options: z.object({ ['thread-id']: z.array(z.string()).optional().describe('Thread ids to hydrate.') }), output: actionResult }))
       .command('pin', doc({ description: 'Pin a thread in the local email cache.', args: z.object({ ['thread-id']: id('Thread id.') }), output: actionResult }))
@@ -2370,7 +2601,7 @@ const email = Cli.create('email', {
   )
   .command(
     Cli.create('refresh', { description: 'Email refresh and cursor controls.' })
-      .command('status', doc({ description: 'Inspect mailbox refresh status and cursors.', output: emailAccount }))
+      .command('status', doc({ description: 'Inspect mailbox refresh status, selected mailbox surfaces, pollers, and cursors.', output: providerIngressStatus }))
       .command('run', doc({ description: 'Refresh recent email state and caches.', options: z.object({ since: isoDateTime.optional().describe('Lower time bound.') }), output: actionResult }))
       .command('reset-cursor', doc({ description: 'Reset the provider refresh cursor for one mailbox.', options: z.object({ ['account-id']: z.string().optional().describe('Optional account id.') }), output: actionResult })),
   )
@@ -2500,14 +2731,14 @@ const github = Cli.create('github', {
   )
   .command(
     Cli.create('cache', { description: 'GitHub cache controls.' })
-      .command('status', doc({ description: 'Inspect GitHub cache status.', output: integrationStatus }))
+      .command('status', doc({ description: 'Inspect GitHub cache status, tracked working-set surfaces, and ingress pollers.', output: providerIngressStatus }))
       .command('refresh', doc({ description: 'Refresh cached GitHub state.', options: z.object({ repo: z.array(z.string()).optional().describe('Repository filters.') }), output: actionResult }))
       .command('hydrate', doc({ description: 'Hydrate selected GitHub snapshots with richer details.', options: z.object({ repo: z.array(z.string()).optional().describe('Repository filters.'), refs: z.array(z.string()).optional().describe('Issue or PR refs to hydrate.') }), output: actionResult }))
       .command('evict', doc({ description: 'Evict selected GitHub cached state.', options: z.object({ repo: z.array(z.string()).optional().describe('Repository filters.'), refs: z.array(z.string()).optional().describe('Issue or PR refs to evict.') }), output: actionResult })),
   )
   .command(
     Cli.create('refresh', { description: 'GitHub refresh and cursor controls.' })
-      .command('status', doc({ description: 'Inspect GitHub refresh status.', output: integrationStatus }))
+      .command('status', doc({ description: 'Inspect GitHub refresh status, tracked working-set surfaces, pollers, and cursors.', output: providerIngressStatus }))
       .command('run', doc({ description: 'Refresh followed GitHub state and caches.', options: z.object({ repo: z.array(z.string()).optional().describe('Repository filters.'), since: isoDateTime.optional().describe('Lower time bound.') }), output: actionResult }))
       .command('reset-cursor', doc({ description: 'Reset GitHub refresh cursors.', options: z.object({ repo: z.array(z.string()).optional().describe('Repository filters.') }), output: actionResult })),
   )
@@ -2526,10 +2757,10 @@ const telegram = Cli.create('telegram', {
   .command(
     Cli.create('connection', { description: 'Telegram bot connection state.' })
       .command('status', doc({ description: 'Inspect Telegram bot connection state.', output: telegramConnection }))
-      .command('set-token', doc({ description: 'Set or replace the Telegram bot token.', options: z.object({ token: z.string().describe('Bot token from BotFather.') }), output: actionResult }))
+      .command('set-token', doc({ description: 'Set or replace the Telegram bot token using a secure handoff ref from an operator-only channel. Do not type raw bot tokens into the agent CLI.', options: z.object({ ['token-ref']: secureRef.describe('Secure handoff ref for the Telegram bot token from BotFather.') }), output: actionResult }))
       .command('revoke', doc({ description: 'Revoke the stored Telegram bot token locally.', output: actionResult }))
       .command('validate', doc({ description: 'Validate the Telegram bot token and configuration.', output: validationResult }))
-      .command('configure', doc({ description: 'Configure tracked Telegram bot behavior such as privacy expectations and default participation mode.', options: z.object({ ['privacy-mode']: z.enum(['enabled', 'disabled', 'unknown']).optional().describe('Observed or intended privacy mode state.'), ['default-mode']: z.enum(['observe', 'participate', 'summarize']).optional().describe('Default participation mode.') }), output: actionResult }))
+      .command('configure', doc({ description: 'Configure tracked Telegram bot behavior such as privacy expectations and default participation mode.', options: z.object({ ['privacy-mode']: z.enum(['enabled', 'disabled', 'unknown']).optional().describe('Observed or intended privacy mode state.'), ['default-mode']: z.enum(['observe', 'participate']).optional().describe('Default participation mode for enabled groups.'), ['default-summary-enabled']: z.boolean().optional().describe('Whether summaries are enabled by default for newly registered groups.'), ['default-summary-window']: duration.optional().describe('Default summary lookback or cadence for newly registered groups when summaries are enabled.') }), output: actionResult }))
       .command('refresh-metadata', doc({ description: 'Refresh bot metadata and membership state from Telegram.', output: actionResult })),
   )
   .command(
@@ -2546,7 +2777,7 @@ const telegram = Cli.create('telegram', {
       .command('list', doc({ description: 'List registered Telegram groups.', output: list(telegramGroupPolicy, 'Registered Telegram group policies.') }))
       .command('get', doc({ description: 'Get one group policy.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), output: telegramGroupPolicy }))
       .command('register', doc({ description: 'Register a group after the bot has been invited.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), output: actionResult }))
-      .command('enable', doc({ description: 'Enable a group for observation, summaries, or participation.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), options: z.object({ mode: z.enum(['observe', 'participate', 'summarize']).describe('Participation mode.') }), output: actionResult }))
+      .command('enable', doc({ description: 'Enable a group for observation or active bot participation. Summary policy is configured separately.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), options: z.object({ mode: z.enum(['observe', 'participate']).describe('Participation mode for the enabled group.') }), output: actionResult }))
       .command('disable', doc({ description: 'Disable a Telegram group subscription.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), output: actionResult }))
       .command(
         Cli.create('mode', { description: 'Group participation mode.' }).command(
@@ -2554,14 +2785,14 @@ const telegram = Cli.create('telegram', {
           doc({
             description: 'Change the participation mode for an enabled group.',
             args: z.object({ ['chat-id']: id('Telegram chat id.') }),
-            options: z.object({ mode: z.enum(['observe', 'participate', 'summarize']).describe('New participation mode.') }),
+            options: z.object({ mode: z.enum(['observe', 'participate']).describe('New participation mode.') }),
             output: actionResult,
           }),
         ),
       )
       .command(
         Cli.create('policy', { description: 'Per-group policy controls.' })
-          .command('summary-set', doc({ description: 'Set summary policy for a group.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), options: z.object({ enabled: z.boolean().describe('Whether summaries are enabled.') }), output: actionResult }))
+          .command('summary-set', doc({ description: 'Set summary policy for a group.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), options: z.object({ enabled: z.boolean().describe('Whether summaries are enabled.'), window: duration.optional().describe('Optional summary lookback or cadence.') }), output: actionResult }))
           .command('mention-set', doc({ description: 'Set mention tracking policy for a group.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), options: z.object({ enabled: z.boolean().describe('Whether mention tracking is enabled.') }), output: actionResult }))
           .command('cache-set', doc({ description: 'Set message-cache policy for a group.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), options: z.object({ enabled: z.boolean().describe('Whether recent message caching is enabled.') }), output: actionResult })),
       ),
@@ -2584,7 +2815,7 @@ const telegram = Cli.create('telegram', {
   )
   .command(
     Cli.create('cache', { description: 'Telegram cache controls.' })
-      .command('status', doc({ description: 'Inspect Telegram cache status.', output: integrationStatus }))
+      .command('status', doc({ description: 'Inspect Telegram cache status, tracked chats, and ingress pollers.', output: providerIngressStatus }))
       .command('refresh', doc({ description: 'Refresh Telegram recent-message caches.', options: z.object({ since: isoDateTime.optional().describe('Lower time bound.') }), output: actionResult }))
       .command('rehydrate', doc({ description: 'Rehydrate cached Telegram windows from provider state when possible.', options: z.object({ ['chat-id']: z.string().optional().describe('Optional chat id.') }), output: actionResult }))
       .command('expire', doc({ description: 'Expire selected Telegram cached windows.', options: z.object({ ['chat-id']: z.string().optional().describe('Optional chat id.') }), output: actionResult }))
@@ -2592,7 +2823,7 @@ const telegram = Cli.create('telegram', {
   )
   .command(
     Cli.create('refresh', { description: 'Telegram refresh controls.' })
-      .command('status', doc({ description: 'Inspect Telegram refresh status.', output: integrationStatus }))
+      .command('status', doc({ description: 'Inspect Telegram refresh status, tracked chats, pollers, and cursors.', output: providerIngressStatus }))
       .command('run', doc({ description: 'Refresh Telegram working-set state.', output: actionResult })),
   )
   .command(
@@ -2745,7 +2976,7 @@ const sync = Cli.create('sync', {
   .command(
     Cli.create('conflict', { description: 'Inspect and resolve one sync conflict.' })
       .command('get', doc({ description: 'Get one sync conflict.', args: z.object({ ['conflict-id']: id('Conflict id.') }), output: syncConflictDetail }))
-      .command('resolve', doc({ description: 'Resolve one sync conflict.', args: z.object({ ['conflict-id']: id('Conflict id.') }), options: z.object({ strategy: z.enum(['ours', 'theirs', 'merge', 'replace']).describe('Resolution strategy.'), payload: z.record(z.string(), z.unknown()).optional().describe('Resolved structured payload.') }), output: actionResult })),
+      .command('resolve', doc({ description: 'Resolve one sync conflict by selecting an explicit candidate or by providing merged or replacement structured payload.', args: z.object({ ['conflict-id']: id('Conflict id.') }), options: z.discriminatedUnion('resolution', [z.object({ resolution: z.literal('select').describe('Select one existing conflict candidate.'), ['candidate-id']: z.string().describe('Candidate id from the sync conflict detail.') }), z.object({ resolution: z.literal('merge').describe('Provide merged structured payload, optionally anchored to a named candidate.'), ['candidate-id']: z.string().optional().describe('Optional candidate id to use as the primary merge base.'), payload: z.record(z.string(), z.unknown()).describe('Merged structured payload.') }), z.object({ resolution: z.literal('replace').describe('Replace the conflicting structured payload with the provided payload.'), payload: z.record(z.string(), z.unknown()).describe('Replacement structured payload.') })]), output: actionResult })),
   )
   .command(
     Cli.create('bridge', { description: 'Filesystem import/export watcher state.' })

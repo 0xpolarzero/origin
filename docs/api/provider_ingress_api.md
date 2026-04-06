@@ -58,6 +58,16 @@ So:
 - cache answers "what is true now?"
 - activity events answer "what just changed?"
 
+## Storage Scope
+
+- Pollers are server-owned operational state.
+- Poller state includes cursors, status, interval/backoff, rate-limit handling, and last-error metadata.
+- Provider caches are selective, evictable working sets and are usually server-local.
+- Queued provider mutations are outbox records, separate from pollers.
+- Provider caches and outboxes are not the replicated app-state layer.
+- A provider domain may define explicit Origin-owned overlay objects separately, but that does not make provider-derived caches peer-replicated source-of-truth.
+- Clients consume provider domains through server-mediated read models and activity rather than full replicated provider mirrors.
+
 ## Why This Model
 
 This is simpler and safer than a separate subscription system because:
@@ -136,12 +146,14 @@ Provider caches are:
 - recoverable
 - evictable
 - current-state oriented
+- usually server-local
 
 They are not:
 
 - the primary system of record
 - the automation trigger surface
 - a complete offline mirror
+- the replicated app-state layer
 
 The cache should usually keep:
 

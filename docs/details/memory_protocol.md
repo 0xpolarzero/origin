@@ -10,6 +10,8 @@
 
 Origin should systematize memory behavior, not prematurely systematize memory schemas.
 
+Origin has a managed workspace root. Within that workspace, the vault is the synced note subtree that participates in the replicated note model.
+
 The agent should know how to:
 
 - decide what deserves durable memory
@@ -32,11 +34,13 @@ Origin memory has three layers:
 - `Origin/Memory.md`
 - this is the canonical memory object in v1
 - it should stay high-signal and relatively concise
+- it lives inside the synced vault subtree and is part of the replicated note model
 
 3. Supporting memory artifacts
 - files, folders, or datasets created when needed
 - referenced from `Origin/Memory.md`
 - format chosen pragmatically by the agent
+- may live either inside the synced vault subtree or elsewhere in the local workspace, depending on whether Origin explicitly manages them as replicated state
 
 `Origin/Memory.md` is not meant to contain every remembered detail.
 It is the durable index and operating memory for the agent.
@@ -50,6 +54,7 @@ It is the durable index and operating memory for the agent.
 - The agent should prefer updating existing memory structures over creating duplicates.
 - Transient one-off output should stay in chat unless there is a clear reason to persist it.
 - The user must be able to inspect and edit memory directly.
+- The replication boundary must stay explicit: links from memory do not by themselves make an artifact part of replicated managed state.
 
 ## What Belongs In `Origin/Memory.md`
 
@@ -93,6 +98,14 @@ This is intentionally flexible. Possible artifacts include:
 
 The protocol does not define fixed schemas for all of these upfront.
 The agent should choose the simplest structure that serves the task.
+
+## Replication Boundary
+
+- `Origin/Memory.md`, markdown notes in the synced vault subtree, and note attachments inside that subtree are part of Origin's replicated note model.
+- Supporting markdown notes that live inside the synced vault subtree are replicated managed state.
+- Linked JSON files, CSV files, folders, and other workspace artifacts are local workspace artifacts by default, even when `Origin/Memory.md` references them.
+- A linked local workspace artifact becomes replicated managed state only if Origin explicitly imports it into the managed note set or re-materializes it from managed state.
+- Agents should treat links as references first and should not assume that every referenced artifact syncs across peers.
 
 ## Example: People Memory
 
@@ -143,25 +156,31 @@ Agents operating in Origin should follow these rules:
 7. Leave one-off content in chat unless persistence is clearly justified.
 8. Do not store raw secrets in memory files.
 9. Organize memory artifacts in whatever folders make sense for the evolving workspace.
+10. Make the replication boundary explicit when creating or linking artifacts: markdown notes and note attachments in the synced vault replicate; other linked workspace artifacts do not unless Origin explicitly manages them as replicated state.
 
 ## Prompt Contract
 
 The system prompt for Origin agents should explicitly teach:
 
 - where `Origin/Memory.md` lives
+- that the managed workspace root contains a synced vault subtree for replicated notes
 - that it is the curated durable memory index
 - that supporting files and datasets may be created and maintained
 - that schemas are not fixed upfront
+- which linked artifacts are replicated managed state versus local workspace artifacts
 - that the agent should keep memory useful, concise, and maintained over time
 
 ## User Control
 
 - The app should expose `Origin/Memory.md` directly for viewing and editing.
-- Supporting memory artifacts should be visible like other files in the workspace.
-- User edits are authoritative inputs like any other vault edit.
+- Supporting memory artifacts should be visible like other files in the managed workspace.
+- User edits to `Origin/Memory.md` and other markdown notes in the synced vault are authoritative inputs like any other vault edit.
+- Edits to linked local workspace artifacts remain local unless Origin explicitly imports or re-materializes them into replicated managed state.
 
 ## Relationship To Retrieval
 
 - Memory is not the whole retrieval system.
 - Retrieval should still draw from notes, chats, planning state, and selective external context.
-- `Origin/Memory.md` and supporting artifacts are the curated durable layer within that broader retrieval model.
+- `Origin/Memory.md` is the curated durable index within that broader retrieval model.
+- Replicated markdown notes and note attachments in the synced vault are part of the durable managed layer.
+- Linked local workspace artifacts may still be useful retrieval inputs, but they are not part of the replicated managed layer unless Origin explicitly imports or re-materializes them.

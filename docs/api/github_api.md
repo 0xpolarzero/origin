@@ -55,11 +55,11 @@ GitHub state inside Origin should be selective and derived.
 
 - connected account metadata
 - tracked repositories
-- repo follow configuration
+- local follow targets across repositories, issues, and pull requests
 - local cursors / last-seen markers
 - cached issue snapshots
 - cached pull request snapshots
-- cached comment and review snapshots for watched items
+- cached comment and review snapshots for followed items
 - lightweight search results
 - queued outbound GitHub actions
 - activity-event records for meaningful GitHub operations
@@ -98,22 +98,33 @@ Suggested fields:
 
 ### `GitHubFollowTarget`
 
-Represents a repository the user wants Origin to watch for follow-up.
+Represents a local Origin follow target for follow-up.
 
 Suggested fields:
 
 - `id`
 - `repositoryId`
-- `mode`
-  - `issues`
-  - `pull_requests`
-  - `all_activity`
+- `kind`
+  - `repo`
+  - `issue`
+  - `pr`
+- `targetRef`
+  - omitted for `repo`
+  - issue or PR ref for `issue` / `pr`
 - `enabled`
 - `pinned`
+- `reason`
 - `lastCursor`
 - `lastSyncAt`
 - `createdAt`
 - `updatedAt`
+
+Normative model:
+
+- Follow targets live in Origin and define the local follow-up working set.
+- Repo follow targets define poll scope for the integration.
+- Issue and PR follow targets narrow local attention within that working set.
+- These follow targets do not map to GitHub's native watch / subscription state.
 
 ### `GitHubIssueSnapshot`
 
@@ -259,7 +270,7 @@ The integration should support direct actions that matter for follow-up.
 
 ### Local workflow actions
 
-- mark a repo, issue, or PR as followed
+- create or update a local follow target for a repo, issue, or PR
 - dismiss or resolve cached follow-up items
 - link a GitHub object to an Origin task or note
 - queue a GitHub action for retry if it fails transiently
@@ -367,10 +378,10 @@ Official docs used for these constraints:
 The CLI should expose GitHub capabilities in a small number of composable verbs:
 
 - `github repo ...`
+- `github follow ...`
 - `github issue ...`
 - `github pr ...`
 - `github review ...`
-- `github watch ...`
 - `github search ...`
 - `github sync ...`
 
@@ -384,7 +395,7 @@ Examples:
 
 - an issue can link to a task
 - a PR can link to a note
-- a repository watch target can link to an automation or follow-up rule
+- a repository follow target can link to an automation or follow-up rule
 
 That linkage should live in Origin, not inside GitHub.
 

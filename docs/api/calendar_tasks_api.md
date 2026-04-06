@@ -20,6 +20,8 @@ This document defines the full v1 API surface for Origin's planning domain:
 
 The planning domain is first-party. Google Calendar and Google Tasks are bidirectional sync targets and import sources, not the primary internal model.
 
+`docs/api/origin_incur_cli.ts` is the canonical CLI contract for this domain. This document is normative on planning semantics and command families, but exact CLI spellings, nesting, flags, examples, and output schemas come from the canonical CLI.
+
 ## Design Principles
 
 - Origin owns the canonical planning model
@@ -269,7 +271,9 @@ Represents a unit of work in Origin's first-party planning system.
 
 - Recurrence is modeled as a series of normal task occurrences, not as one task whose due window mutates forever
 - Each recurring occurrence is still a normal task with its own status, history, links, and due window
-- Completing an occurrence advances the series by creating the next occurrence according to the recurrence rule
+- Recurrence is occurrence-based
+- The series root is the occurrence whose `occurrenceIndex = 0`
+- Series-level recurrence mutations operate on the series root task occurrence
 - This preserves clean per-occurrence history and keeps completion semantics intuitive
 
 ## `TaskRecurrence`
@@ -295,6 +299,11 @@ Represents recurrence metadata attached to a task occurrence.
 - `byWeekday[]` is only valid for weekly recurrence
 - `byMonthDay[]` is only valid for monthly recurrence
 - `timezone` is required for datetime-based recurring tasks
+- `occurrenceIndex` is zero-based within a recurrence series
+- The series root is the occurrence whose `occurrenceIndex = 0`
+- Series-level recurrence mutations operate on the series root task
+- `advanceMode = "on_completion"` means the next occurrence is created when the current occurrence is completed
+- `advanceMode = "on_schedule"` means the system creates or maintains the next occurrence according to the recurrence rule even if the current occurrence is not yet completed
 - A non-recurring task has `recurrence = null`
 
 ## `CalendarItem`
@@ -346,6 +355,9 @@ Represents a scheduled block or event in Origin's planning domain.
 - Calendar recurrence is first-party in v1
 - Recurrence is modeled as a series of normal calendar item occurrences
 - Each occurrence is still a normal calendar item with its own history, sync links, and status
+- Recurrence is occurrence-based
+- The series root is the occurrence whose `occurrenceIndex = 0`
+- Series-level recurrence mutations operate on the series root calendar item occurrence
 - The recurrence rule defines how future occurrences are generated and related
 
 ## `CalendarItemRecurrence`
@@ -370,6 +382,9 @@ Represents recurrence metadata attached to a calendar item occurrence.
 - `byWeekday[]` is only valid for weekly recurrence
 - `byMonthDay[]` is only valid for monthly recurrence
 - `timezone` is required for datetime-based recurring calendar items
+- `occurrenceIndex` is zero-based within a recurrence series
+- The series root is the occurrence whose `occurrenceIndex = 0`
+- Series-level recurrence mutations operate on the series root calendar item
 - A non-recurring calendar item has `recurrence = null`
 
 ## `ExternalLink`
@@ -399,6 +414,15 @@ Planning objects may keep external linkage metadata.
 - `lastExternalHash`
 - `syncMode: "import" | "mirror" | "detached"`
 
+### Lifecycle rules
+
+- External links carry `syncMode: "import" | "mirror" | "detached"`
+- `attach` creates or updates the stable external link for an Origin object
+- If provider object ids are supplied by the canonical CLI/runtime, `attach` may bind the Origin object to an existing Google event or Google task instead of creating a fresh external object
+- `mode = "import"` means the next pull or reconcile imports from the linked external object into the Origin object without making Google canonical
+- `mode = "mirror"` means Origin and Google sync bidirectionally through the stable external link
+- `detach` leaves the external provider object untouched and changes the local link state to `detached`
+
 ## Planning Relationships
 
 - A project can contain many tasks and calendar items
@@ -410,174 +434,66 @@ Planning objects may keep external linkage metadata.
 - A recurring task occurrence can link to a previous and next occurrence through recurrence metadata
 - A recurring calendar item occurrence can link to a previous and next occurrence through recurrence metadata
 
-## Query Surface
+## Command And Query Surface
 
-## Projects
+`docs/api/origin_incur_cli.ts` is the canonical CLI contract for planning. This document defines the domain surface and semantics; exact command spellings and flags come from the canonical CLI.
 
-- `origin planning project list`
-- `origin planning project get <project-id>`
+### Representative canonical read surface
 
-### Filters
+- Planning views: `origin planning today`, `week`, `agenda`, `window`, `inbox`, `upcoming`, `overdue`, `backlog`, `board`, `recurring`, `task-graph`
+- Projects: `origin planning project list|get|search`
+- Labels: `origin planning label list|get|search`
+- Tasks: `origin planning task list|get|search|related`
+- Calendar items: `origin planning calendar-item list|get|search|related`
 
-- `--status`
-- `--archived`
-- `--search`
+### Representative canonical mutation surface
 
-## Labels
+- Projects: `origin planning project create|update|archive|unarchive|delete|history|restore`
+- Labels: `origin planning label create|update|archive|unarchive|delete|history|restore`
+- Tasks: `origin planning task create|update|complete|reopen|cancel|archive|unarchive|delete|history|restore`
+- Task subcommands: `project set|clear`, `label add|remove|clear`, `note link|unlink`, `dependency list|add|remove|clear`, `due set|clear`, `schedule set|clear`, `recurrence set|clear|preview|occurrences`, `conflict list|get|resolve`
+- Calendar items: `origin planning calendar-item create|update|move|confirm|cancel|archive|unarchive|delete|history|restore`
+- Calendar-item subcommands: `label add|remove|clear`, `task link|unlink`, `recurrence set|clear|preview|occurrences`, `conflict list|get|resolve`
 
-- `origin planning label list`
-- `origin planning label get <label-id>`
+Any command examples in this document are illustrative summaries of the canonical CLI families, not a second source of truth for exact flags.
 
-### Filters
+## Google Calendar Bridge
 
-- `--archived`
-- `--search`
+### Operational ownership
 
-## Tasks
+- Selected Google calendars are bridge surfaces configured during onboarding
+- Each selected calendar has a server-owned poller and cursor under the shared provider ingress model
+- Status and repair live on the canonical CLI; this document does not define a separate operational surface
+- Use canonical CLI surfaces such as `origin planning google-calendar status`, `origin planning google-calendar reset-cursor`, and `origin planning google-calendar repair`
 
-- `origin planning task list`
-- `origin planning task get <task-id>`
-
-### Filters
-
-- `--status`
-- `--priority`
-- `--project`
-- `--label`
-- `--blocked-by`
-- `--is-blocked`
-- `--is-blocking`
-- `--recurring`
-- `--recurrence-series`
-- `--linked-calendar-item`
-- `--google-tasks-synced`
-- `--due-before`
-- `--due-after`
-- `--due-between`
-- `--include-archived`
-- `--search`
-
-## Calendar items
-
-- `origin planning calendar-item list`
-- `origin planning calendar-item get <calendar-item-id>`
-
-### Filters
-
-- `--kind`
-- `--status`
-- `--project`
-- `--label`
-- `--task`
-- `--recurring`
-- `--recurrence-series`
-- `--from`
-- `--to`
-- `--all-day`
-- `--include-archived`
-- `--search`
-
-## Planning views
-
-These are read models for app UI and agent reasoning.
-
-- `origin planning agenda --from <ts> --to <ts>`
-- `origin planning calendar --from <ts> --to <ts> --view day|week|month`
-- `origin planning board --group-by status|project|label`
-- `origin planning inbox`
-- `origin planning upcoming`
-- `origin planning overdue`
-- `origin planning task graph --task <task-id>`
-- `origin planning recurring --from <ts> --to <ts>`
-
-## Mutation Surface
-
-## Projects
-
-- `origin planning project create --name <name> [--slug <slug>] [--description-md <md>] [--color <color>]`
-- `origin planning project update <project-id> [--name ...] [--description-md ...] [--color ...] [--status ...]`
-- `origin planning project archive <project-id>`
-- `origin planning project unarchive <project-id>`
-- `origin planning project delete <project-id>`
-
-## Labels
-
-- `origin planning label create --name <name> [--slug <slug>] [--description-md <md>] [--color <color>]`
-- `origin planning label update <label-id> [--name ...] [--description-md ...] [--color ...]`
-- `origin planning label archive <label-id>`
-- `origin planning label unarchive <label-id>`
-- `origin planning label delete <label-id>`
-
-## Tasks
-
-- `origin planning task create --title <title> [--status <status>] [--priority <priority>] [--project <project-id>] [--label <label-id>]... [--description-md <md>] [--note <note-id>] [--due-kind date|datetime] [--due-from <value>] [--due-at <value>] [--due-timezone <tz>]`
-- `origin planning task update <task-id> [--title ...] [--status ...] [--priority ...] [--description-md ...] [--note ...]`
-- `origin planning task set-project <task-id> --project <project-id>`
-- `origin planning task clear-project <task-id>`
-- `origin planning task add-label <task-id> --label <label-id>`
-- `origin planning task remove-label <task-id> --label <label-id>`
-- `origin planning task add-dependency <task-id> --blocked-by <task-id>`
-- `origin planning task remove-dependency <task-id> --blocked-by <task-id>`
-- `origin planning task clear-dependencies <task-id>`
-- `origin planning task set-due-window <task-id> [--due-kind date|datetime] [--due-from <value>] [--due-at <value>] [--due-timezone <tz>]`
-- `origin planning task clear-due-window <task-id>`
-- `origin planning task set-recurrence <task-id> --frequency daily|weekly|monthly|yearly [--interval <n>] [--by-weekday <weekday>]... [--by-month-day <n>]... [--timezone <tz>] [--advance-mode on_completion|on_schedule]`
-- `origin planning task clear-recurrence <task-id>`
-- `origin planning task recurrence-preview <task-id> [--count <n>]`
-- `origin planning task complete <task-id>`
-- `origin planning task reopen <task-id>`
-- `origin planning task cancel <task-id>`
-- `origin planning task archive <task-id>`
-- `origin planning task unarchive <task-id>`
-- `origin planning task delete <task-id>`
-- `origin planning task link-note <task-id> --note <note-id>`
-- `origin planning task unlink-note <task-id>`
-- `origin planning task link-calendar-item <task-id> --calendar-item <calendar-item-id>`
-- `origin planning task unlink-calendar-item <task-id> --calendar-item <calendar-item-id>`
-
-## Calendar items
-
-- `origin planning calendar-item create --title <title> --kind event|time_block [--status <status>] [--project <project-id>] [--label <label-id>]... [--description-md <md>] [--task <task-id>]... [--all-day] [--start-date <date>] [--end-date-exclusive <date>] [--start-at <ts>] [--end-at <ts>] [--timezone <tz>] [--location <text>]`
-- `origin planning calendar-item update <calendar-item-id> [--title ...] [--kind ...] [--status ...] [--description-md ...] [--location ...] [schedule flags]`
-- `origin planning calendar-item set-recurrence <calendar-item-id> --frequency daily|weekly|monthly|yearly [--interval <n>] [--by-weekday <weekday>]... [--by-month-day <n>]... [--timezone <tz>]`
-- `origin planning calendar-item clear-recurrence <calendar-item-id>`
-- `origin planning calendar-item recurrence-preview <calendar-item-id> [--count <n>]`
-- `origin planning calendar-item add-label <calendar-item-id> --label <label-id>`
-- `origin planning calendar-item remove-label <calendar-item-id> --label <label-id>`
-- `origin planning calendar-item link-task <calendar-item-id> --task <task-id>`
-- `origin planning calendar-item unlink-task <calendar-item-id> --task <task-id>`
-- `origin planning calendar-item cancel <calendar-item-id>`
-- `origin planning calendar-item archive <calendar-item-id>`
-- `origin planning calendar-item unarchive <calendar-item-id>`
-- `origin planning calendar-item delete <calendar-item-id>`
-
-## Google Calendar Sync Surface
-
-## Sync bridge rules
+### Domain rules
 
 - The Google Calendar bridge syncs Origin calendar items with Google Calendar events
 - Imported Google events create or update Origin calendar items
 - Exported Origin calendar items push to Google Calendar through stable external links
-- Recurring Google events should reconcile into first-party recurring calendar item series
-- Recurring Origin calendar item series should be exportable back to Google Calendar
+- Recurring Google events reconcile into first-party recurring calendar item series
+- Recurring Origin calendar item series remain Origin-canonical even when mirrored to Google Calendar
+- Google Calendar only sees events; Origin keeps the richer planning semantics
 
-### Mental model
-
-- Google Calendar only sees events
-- Origin syncs calendar items to Google Calendar
-
-## Commands
+### Representative canonical bridge commands
 
 - `origin planning google-calendar status`
-- `origin planning google-calendar pull [--calendar-id <id>]`
-- `origin planning google-calendar push [--calendar-id <id>]`
-- `origin planning google-calendar reconcile [--calendar-id <id>]`
-- `origin planning google-calendar attach <calendar-item-id> --calendar-id <id> [--mode import|mirror]`
-- `origin planning google-calendar detach <calendar-item-id>`
+- `origin planning google-calendar pull`
+- `origin planning google-calendar push`
+- `origin planning google-calendar reconcile`
+- `origin planning google-calendar attach`
+- `origin planning google-calendar detach`
 
-## Google Tasks Sync Surface
+## Google Tasks Bridge
 
-## Sync bridge rules
+### Operational ownership
+
+- Selected Google task lists are bridge surfaces configured during onboarding
+- Each selected task list has a server-owned poller and cursor under the shared provider ingress model
+- Status and repair live on the canonical CLI; this document does not define a separate operational surface
+- Use canonical CLI surfaces such as `origin planning google-tasks status`, `origin planning google-tasks reset-cursor`, and `origin planning google-tasks repair`
+
+### Domain rules
 
 - The Google Tasks bridge syncs Origin tasks with Google Tasks tasks
 - Imported Google Tasks entries create or update Origin tasks
@@ -585,28 +501,23 @@ These are read models for app UI and agent reasoning.
 - Google Tasks limitations do not reduce Origin's canonical task model
 - Fields unsupported by Google Tasks remain Origin-only metadata
 
-## Commands
+### Representative canonical bridge commands
 
 - `origin planning google-tasks status`
-- `origin planning google-tasks pull [--task-list-id <id>]`
-- `origin planning google-tasks push [--task-list-id <id>]`
-- `origin planning google-tasks reconcile [--task-list-id <id>]`
-- `origin planning google-tasks attach <task-id> --task-list-id <id> [--mode import|mirror]`
-- `origin planning google-tasks detach <task-id>`
+- `origin planning google-tasks pull`
+- `origin planning google-tasks push`
+- `origin planning google-tasks reconcile`
+- `origin planning google-tasks attach`
+- `origin planning google-tasks detach`
 
-## Sync conflict semantics
+## Bridge Conflict Semantics
 
-- External Google changes are imported as normal Origin changes authored by `sync:google-calendar`
-- Local Origin changes remain in local-first state even while offline
-- Reconciliation should preserve data and prefer explicit conflict recording over silent overwrite
-- Stable linkage lives in Origin state; a small opaque marker in the Google event description is allowed for recovery but is not canonical metadata storage
-
-## Google Tasks conflict semantics
-
+- External Google Calendar changes are imported as normal Origin changes authored by `sync:google-calendar`
 - External Google Tasks changes are imported as normal Origin changes authored by `sync:google-tasks`
 - Local Origin changes remain in local-first state even while offline
 - Reconciliation should preserve data and prefer explicit conflict recording over silent overwrite
-- Stable linkage lives in Origin state; unsupported Google Tasks fields do not erase richer Origin task fields
+- Stable linkage lives in Origin state; Google-side markers may help recovery but are not canonical metadata storage
+- Unsupported Google Tasks fields must not erase richer Origin task fields
 
 ## Events For Automations
 

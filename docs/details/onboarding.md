@@ -87,14 +87,14 @@ Origin sets up the identities the agent will use.
 - agent display name
 - agent Google account email or OAuth target
 - agent GitHub account email or OAuth target
-- Telegram bot token
+- Telegram bot username plus an operator-only secure handoff for the bot token
 - any initial account naming or handle preferences
 
 ### Persistence
 
 - agent account references
 - OAuth connection metadata
-- Telegram bot token reference or encrypted credential reference
+- Telegram bot credential handle or encrypted credential reference
 
 ### Success criteria
 
@@ -111,6 +111,8 @@ Origin walks the user through provider-specific connection steps.
 
 - Use OAuth where available.
 - Connect the pre-created agent Google account.
+- Complete OAuth through a secure callback or operator-only secure handoff that yields a stored connection reference rather than exposing raw token material to the agent CLI.
+- Verify that the returned Google principal matches the pre-collected expected agent Google identity and fail linking on mismatch.
 - Request the minimum scopes required for:
   - Gmail inbox access for the agent mailbox
   - Google Calendar read/write
@@ -120,6 +122,8 @@ Origin walks the user through provider-specific connection steps.
 
 - Use OAuth where available.
 - Connect the pre-created agent GitHub account.
+- Complete OAuth through a secure callback or operator-only secure handoff that yields a stored connection reference rather than exposing raw token material to the agent CLI.
+- Verify that the returned GitHub principal matches the pre-collected expected agent GitHub identity and fail linking on mismatch.
 - Request the minimum scopes required for:
   - follow-up workflows
   - repository observation
@@ -127,7 +131,7 @@ Origin walks the user through provider-specific connection steps.
 
 ### Telegram
 
-- Use token entry for the pre-created Telegram bot.
+- Link the pre-created Telegram bot through an operator-only secure handoff or secure credential reference, not by passing the raw token through the normal agent CLI surface.
 - Configure the bot for group participation.
 - Configure the bot for the maximum access model Telegram allows for v1, including privacy mode settings required to receive group messages.
 
@@ -135,13 +139,13 @@ Origin walks the user through provider-specific connection steps.
 
 - OAuth approval for Google
 - OAuth approval for GitHub
-- Telegram bot token
+- secure operator handoff or credential reference for the Telegram bot token
 - confirmation of Telegram bot group/privacy configuration
 
 ### Persistence
 
 - provider connection records
-- encrypted access tokens or token references
+- encrypted token material or secure token references
 - provider-specific scope grants
 - Telegram bot configuration state
 
@@ -150,11 +154,13 @@ Origin walks the user through provider-specific connection steps.
 - Google is connected and usable by Origin.
 - GitHub is connected and usable by Origin.
 - Telegram bot is connected and usable by Origin in groups.
+- No provider link is accepted if the returned Google or GitHub principal does not match the expected pre-collected agent identity.
 
 ### Failure / recovery
 
 - If OAuth fails, the user retries the provider flow.
-- If a token is invalid, Origin reports the failure and re-prompts for the bot token.
+- If OAuth completes against the wrong Google or GitHub account, Origin rejects the link, reports the mismatch, and asks the user to retry with the expected agent account or correct the expected identity first.
+- If a secure token handoff is invalid, Origin reports the failure and re-prompts for the secure credential handoff.
 - If a required scope is missing, Origin restarts the corresponding provider authorization flow.
 
 ## Phase 5: Email / Calendar / Tasks Access
@@ -170,7 +176,8 @@ Origin configures the agent mailbox and planning surfaces.
 ### Calendar and Tasks
 
 - Grant access to Google Calendar and Google Tasks.
-- Configure the calendars/task lists that Origin should watch or manage.
+- Configure the calendars/task lists that Origin should watch or manage as attached bridge surfaces.
+- Each attached calendar or task list should run through the shared ingress model with server-owned pollers and saved cursors or sync markers.
 - Establish which shared calendars belong to the agent workflow.
 
 ### Required user input
@@ -182,15 +189,16 @@ Origin configures the agent mailbox and planning surfaces.
 ### Persistence
 
 - mailbox connection state
-- calendar/task sync configuration
-- shared calendar identifiers
+- calendar/task bridge attachment configuration
+- shared calendar and task-list identifiers
+- server-owned poller and cursor state for attached bridge surfaces
 - forwarding configuration references if used
 
 ### Success criteria
 
 - Origin can read/write the agent mailbox.
-- Origin can sync the selected calendars.
-- Origin can sync the selected tasks.
+- Origin can sync the selected attached calendars.
+- Origin can sync the selected attached task lists.
 - Forwarded user emails land in the same agent mailbox as ordinary messages.
 
 ## Phase 6: Telegram Group Setup
@@ -217,25 +225,35 @@ Origin configures the Telegram bot for group use.
 
 - If group permissions are insufficient, Origin explains the missing settings and asks the user to adjust the group or bot configuration.
 
-## Phase 7: Vault And Memory
+## Phase 7: Workspace, Vault, And Memory
 
-Origin sets up the managed vault and the agent memory file.
+Origin attaches the managed workspace root, initializes or adopts the synced vault subtree, and ensures the agent memory file exists.
 
 ### Required user input
 
-- confirmation of the vault location
+- confirmation of the managed workspace root / attach path
 - any preferred initial folder names
 - any initial memory facts or preferences the user wants stored immediately
 
+### First attach behavior
+
+- If the target path does not exist, Origin creates the managed workspace root, creates the synced vault subtree, and bootstraps `Origin/Memory.md`.
+- If the target path exists and is empty, Origin adopts it as the managed workspace root, initializes the synced vault subtree, and bootstraps `Origin/Memory.md`.
+- If the target path exists and is non-empty, Origin inspects and adopts the existing contents first.
+- A non-empty target path must be imported or adopted before Origin exports managed files into it.
+- Origin must never silently overwrite existing files, including an existing `Origin/Memory.md`, during first attach.
+
 ### Persistence
 
-- vault root location
+- managed workspace root
+- synced vault subtree configuration
 - `Origin/Memory.md`
 - initial note/file structure
 
 ### Success criteria
 
-- The vault exists and is writable.
+- The managed workspace root is attached and writable.
+- The synced vault subtree exists and is writable.
 - `Origin/Memory.md` exists and is visible in the app.
 - The agent can read and update memory through the memory protocol.
 
