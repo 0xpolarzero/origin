@@ -1,0 +1,167 @@
+# Origin Memory Protocol
+
+## Status
+
+- Working draft
+- Last updated: 2026-04-06
+- Purpose: define how agents should use memory in Origin without requiring rigid schemas
+
+## Goal
+
+Origin should systematize memory behavior, not prematurely systematize memory schemas.
+
+The agent should know how to:
+
+- decide what deserves durable memory
+- keep memory concise and useful
+- create supporting files or datasets when a topic becomes large or recurrent
+- link those supporting artifacts from memory
+- avoid turning transient context into noisy persistent state
+
+## Core Model
+
+Origin memory has three layers:
+
+1. Raw working context
+- chats
+- notes
+- tasks, calendar items, projects, labels
+- selectively cached external context
+
+2. Curated memory index
+- `Origin/Memory.md`
+- this is the canonical memory object in v1
+- it should stay high-signal and relatively concise
+
+3. Supporting memory artifacts
+- files, folders, or datasets created when needed
+- referenced from `Origin/Memory.md`
+- format chosen pragmatically by the agent
+
+`Origin/Memory.md` is not meant to contain every remembered detail.
+It is the durable index and operating memory for the agent.
+
+## Protocol Principles
+
+- Memory should store durable, useful context, not everything the agent sees.
+- Memory should be curated, not a dump.
+- Schemas should emerge only when the information actually needs structure.
+- Supporting artifacts are allowed and encouraged when they improve maintenance, retrieval, or clarity.
+- The agent should prefer updating existing memory structures over creating duplicates.
+- Transient one-off output should stay in chat unless there is a clear reason to persist it.
+- The user must be able to inspect and edit memory directly.
+
+## What Belongs In `Origin/Memory.md`
+
+- stable user preferences
+- standing instructions
+- durable identity facts
+- recurring patterns the agent should remember
+- important long-lived context
+- links to supporting files or datasets
+- short summaries of maintained memory structures
+
+Examples:
+
+- preferred meeting habits
+- recurring travel constraints
+- known important people or groups
+- persistent project context
+- how the user likes the agent to behave
+
+## What Should Not Go In `Origin/Memory.md`
+
+- ephemeral observations
+- raw copies of long emails or chats
+- one-off answers that are unlikely to matter later
+- large tables or datasets
+- verbose logs
+- secrets that should stay in the secrets store
+
+## Supporting Files And Datasets
+
+When a memory topic becomes recurrent, large, or structurally useful, the agent may create a supporting artifact and link it from `Origin/Memory.md`.
+
+This is intentionally flexible. Possible artifacts include:
+
+- ordinary markdown notes
+- folders of related notes
+- markdown tables
+- JSON files
+- CSV files
+- other simple local file formats
+
+The protocol does not define fixed schemas for all of these upfront.
+The agent should choose the simplest structure that serves the task.
+
+## Example: People Memory
+
+Origin should not need a first-class `people` object in v1.
+
+However, if the agent repeatedly interacts with or reasons about the same people, it should recognize that this deserves durable structure.
+
+In that case the agent may:
+
+- add a concise summary and reference in `Origin/Memory.md`
+- create and maintain a supporting people dataset or folder
+- update that artifact as new interactions happen
+
+The exact structure is not fixed upfront. It may start as:
+
+- a single markdown note
+- a folder of person notes
+- a structured dataset if the information becomes large enough
+
+## When To Persist Something
+
+Persist information when it is likely to matter again.
+
+Strong signals for persistence:
+
+- it affects future behavior
+- it is a recurring preference or rule
+- it helps identify people, places, or projects over time
+- it is useful beyond the current chat
+- it would be costly or annoying to rediscover repeatedly
+
+Weak signals for persistence:
+
+- it was only useful to answer one question
+- it is easy to recompute or refetch
+- it is incidental detail with no expected future value
+
+## Agent Behavior Contract
+
+Agents operating in Origin should follow these rules:
+
+1. Read `Origin/Memory.md` when memory is relevant.
+2. Keep `Origin/Memory.md` concise and high-signal.
+3. Update existing memory entries before creating new overlapping ones.
+4. Create supporting artifacts when a topic becomes recurrent, large, or easier to manage with structure.
+5. Link supporting artifacts from `Origin/Memory.md`.
+6. Prefer simple file formats first.
+7. Leave one-off content in chat unless persistence is clearly justified.
+8. Do not store raw secrets in memory files.
+9. Organize memory artifacts in whatever folders make sense for the evolving workspace.
+
+## Prompt Contract
+
+The system prompt for Origin agents should explicitly teach:
+
+- where `Origin/Memory.md` lives
+- that it is the curated durable memory index
+- that supporting files and datasets may be created and maintained
+- that schemas are not fixed upfront
+- that the agent should keep memory useful, concise, and maintained over time
+
+## User Control
+
+- The app should expose `Origin/Memory.md` directly for viewing and editing.
+- Supporting memory artifacts should be visible like other files in the workspace.
+- User edits are authoritative inputs like any other vault edit.
+
+## Relationship To Retrieval
+
+- Memory is not the whole retrieval system.
+- Retrieval should still draw from notes, chats, planning state, and selective external context.
+- `Origin/Memory.md` and supporting artifacts are the curated durable layer within that broader retrieval model.
