@@ -134,6 +134,7 @@ Origin should feel like a personal chief-of-staff that can actually operate. The
 - CLI implemented with `incur`
 - CLI should be ergonomic for both humans and agents, but optimized for agent reliability first
 - CLI is the contract between the model and the capabilities of the system
+- The detailed agent-facing CLI contract is defined in [origin_cli.ts](./api/origin_cli.ts)
 
 ### Working Data Model
 
@@ -461,7 +462,7 @@ Origin should be deliberate about which domains it owns directly and which it tr
 
 - Origin should own the primary planning model for tasks and calendar items
 - The planning model should feel closer to Linear than to a thin calendar wrapper
-- The detailed v1 planning contract is defined in [calendar_tasks_api.md](./calendar_tasks_api.md)
+- The detailed v1 planning contract is defined in [calendar_tasks_api.md](./api/calendar_tasks_api.md)
 - Core first-party planning objects should include:
   - tasks
   - calendar items
@@ -649,7 +650,7 @@ Origin should be deliberate about which domains it owns directly and which it tr
 - Gmail or the relevant mail provider remains canonical
 - Origin should fetch on demand and keep only selective recent caches when that improves agent performance, reduces repeated fetch cost, or supports short-lived workflow robustness
 - If Origin tracks email-specific operational state at all, it should stay minimal and workflow-oriented rather than trying to recreate a mailbox
-- The detailed v1 email surface is defined in [email_api.md](./email_api.md)
+- The detailed v1 email surface is defined in [email_api.md](./api/email_api.md)
 
 #### GitHub model
 
@@ -658,7 +659,7 @@ Origin should be deliberate about which domains it owns directly and which it tr
 - V1 should not build a full offline mirrored GitHub state model
 - GitHub remains canonical
 - Origin should fetch on demand and keep only selective caches plus lightweight workflow metadata needed for agent follow-up, summaries, and automation
-- The detailed v1 GitHub surface is defined in [github_api.md](./github_api.md)
+- The detailed v1 GitHub surface is defined in [github_api.md](./api/github_api.md)
 
 #### Telegram model
 
@@ -671,13 +672,13 @@ Origin should be deliberate about which domains it owns directly and which it tr
 - Origin should target the maximum Telegram bot access model available, including group participation and reading all group messages where Telegram allows it
 - Default expectation: the bot is configured for group use with privacy mode disabled so it can receive all group messages except messages sent by other bots
 - Telegram bot constraints still apply: a bot is not identical to a normal user account, cannot initiate conversations with users on its own, and cannot see messages from other bots
-- The detailed v1 Telegram surface is defined in [telegram_api.md](./telegram_api.md)
+- The detailed v1 Telegram surface is defined in [telegram_api.md](./api/telegram_api.md)
 
 #### Automation model
 
 - Automations are first-class Origin objects
 - They are chat-first to create but may also be reviewed and edited through structured UI
-- The detailed v1 automation surface is defined in [automation_api.md](./automation_api.md)
+- The detailed v1 automation surface is defined in [automation_api.md](./api/automation_api.md)
 
 ### References / LLM Coding Context
 
@@ -694,13 +695,14 @@ All core libraries and tools used by the system should be cloned locally into `d
 
 ### Linked Specs
 
-- [calendar_tasks_api.md](./calendar_tasks_api.md)
+- [calendar_tasks_api.md](./api/calendar_tasks_api.md)
 - [memory_protocol.md](./memory_protocol.md)
-- [email_api.md](./email_api.md)
-- [github_api.md](./github_api.md)
-- [telegram_api.md](./telegram_api.md)
-- [automation_api.md](./automation_api.md)
+- [email_api.md](./api/email_api.md)
+- [github_api.md](./api/github_api.md)
+- [telegram_api.md](./api/telegram_api.md)
+- [automation_api.md](./api/automation_api.md)
 - [onboarding.md](./onboarding.md)
+- [origin_cli.ts](./api/origin_cli.ts)
 
 ## Security Principles
 
@@ -789,7 +791,7 @@ All core libraries and tools used by the system should be cloned locally into `d
 20. Google Tasks is a bidirectional sync target and import surface for Origin tasks, not the primary internal planning model.
 21. Agent workflows should generally operate against Origin planning objects rather than directly against Google provider semantics.
 22. Tasks support an optional `dueFrom` in addition to `dueAt`, allowing due windows that can span multiple days in planning views.
-23. The full v1 calendar/tasks API surface is specified in [calendar_tasks_api.md](./calendar_tasks_api.md).
+23. The full v1 calendar/tasks API surface is specified in [calendar_tasks_api.md](./api/calendar_tasks_api.md).
 24. Tasks support dependency edges and recurring task series in v1.
 25. Calendar items also support first-party recurrence in v1.
 26. Email remains an external-service domain in v1; Origin does not build a full offline mailbox and only keeps selective caches/operational metadata for agent workflows.
