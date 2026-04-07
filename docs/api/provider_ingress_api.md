@@ -70,6 +70,115 @@ So:
 - Clients never enqueue provider outbox records directly. They sync Origin-owned intent or overlay mutations, and the server materializes provider-specific outbox records from those replicated changes before dispatch.
 - Clients consume provider domains through server-mediated read models and activity rather than full replicated provider mirrors.
 
+## Provider Authority Contract
+
+Provider ingress and provider outbox dispatch are single-writer per provider account-set scope.
+
+Canonical authority object: `ProviderAuthorityRecord`
+
+Required v1 fields:
+
+- `id`
+- `provider`
+- `accountSetScope`
+  - exact provider authority boundary for lease, fencing, and dedupe
+  - choose the smallest stable provider surface that Origin can lease independently; this may be the connected provider account itself or one explicitly selected provider sub-surface
+  - never derive it from mutable Origin-local working-set or attachment state such as GitHub follow targets, Telegram group subscriptions, or per-object Google bridge links
+  - if a provider exposes multiple independently selected sub-surfaces, Origin creates one `ProviderAuthorityRecord` per selected sub-surface rather than one scope keyed by the whole current selection set
+  - v1 examples: mailbox id; connected GitHub account + one selected installation grant `installationId`; connected Telegram bot identity; connected Google account + one selected calendar id; connected Google account + one selected task-list id
+- `authoritativePeerId`
+- `authorityEpoch`
+  - monotonic fencing token; all provider cursor advances and provider write paths must verify it
+- `leaseStatus`
+  - `active`
+  - `grace`
+  - `expired`
+  - `transferring`
+  - `standby`
+- `leaseGrantedAt`
+- `leaseHeartbeatAt`
+- `leaseDurationSeconds`
+- `leaseGraceSeconds`
+- `lastHandoffRequestedAt`
+- `lastHandoffStartedAt`
+- `lastHandoffCompletedAt`
+- `takeoverReason`
+  - `bootstrap`
+  - `planned_cutover`
+  - `operator_forced`
+  - `peer_unhealthy`
+  - `credential_relink`
+  - `repair`
+- `takeoverHistory[]`
+  - append-only handoff/takeover records with `fromPeerId`, `toPeerId`, `fromEpoch`, `toEpoch`, `reason`, `actor`, `requestedAt`, `startedAt`, `completedAt`, `outcome`
+- `updatedAt`
+
+`accountSetScope` is the exact authority boundary. A peer may hold authority for one scope and standby for another. The durable coordination-store home and serialized encoding remain implementation-defined; only the logical boundary above is normative. CLI/API surfaces expose the boundary as an opaque exact-match `scope-ref`.
+
+## Authority Runtime Semantics
+
+### Enforceable single-writer rule
+
+Provider pollers, provider cursor advancement, and provider outbox dispatch for a scope may run only when all are true:
+
+- local peer id equals `authoritativePeerId`
+- `leaseStatus=active`
+- heartbeat freshness is within `leaseDurationSeconds + leaseGraceSeconds`
+- the executing operation carries the current `authorityEpoch` and passes fencing verification
+
+Any failed check must fence the operation and surface an authority error.
+
+### Cutover semantics
+
+Cutover is a durable state transition, not a best-effort sequence.
+
+Required order:
+
+1. write transfer intent (`lastHandoffRequestedAt`, target peer, reason)
+2. atomically increment `authorityEpoch` and set `authoritativePeerId` to target with `leaseStatus=transferring`
+3. old peer observes higher/non-local epoch and fences itself (stop pollers, stop outbox dispatch, reject provider writes)
+4. target peer proves readiness, starts heartbeat, and transitions lease to `active`
+5. record `lastHandoffCompletedAt` and append takeover history entry with outcome
+
+Stop-before-start remains recommended operationally, but epoch fencing is the hard split-brain prevention contract.
+
+### Restart semantics
+
+- Restart must not restore authority from process memory.
+- On startup, a peer must read `ProviderAuthorityRecord` from durable storage before starting any provider workers.
+- If local peer is authoritative, it must renew heartbeat and re-validate epoch fencing before resuming pollers/outbox.
+- If local peer is not authoritative or lease is stale, it must enter standby and expose recovery status only.
+
+### Bootstrap conflict behavior
+
+If multiple peers bootstrap concurrently for the same `accountSetScope`:
+
+- authority acquisition must be atomic on `(provider, accountSetScope)`
+- only one peer may commit the next epoch
+- losers must enter `standby` and must not run provider workers for that scope
+- if conflicting stale workers are detected, provider writes/cursor advances with stale epoch must fail fencing checks and become no-ops
+
+## Authority Control Surface
+
+Authority is runtime-operable through CLI/API.
+
+Required inspect/operate surface in v1 (documentation-first; implementation may land incrementally):
+
+- `provider authority list`
+- `provider authority get --provider <provider> --scope-ref <scope-ref>`
+- `provider authority history --provider <provider> --scope-ref <scope-ref>`
+- `provider authority transfer --provider <provider> --scope-ref <scope-ref> --to-peer <peer-id> --reason <reason>`
+- `provider authority renew --provider <provider> --scope-ref <scope-ref>`
+- `provider authority fence --provider <provider> --scope-ref <scope-ref> [--peer <peer-id>]`
+
+Minimum behavior:
+
+- `get` returns the canonical `ProviderAuthorityRecord`
+- `history` returns the append-only takeover history for the scope
+- `transfer` performs epoch-incremented durable handoff semantics
+- `renew` updates lease heartbeat only for the active authoritative peer
+- `fence` forces local worker stop and marks lease non-active until a valid renew/transfer path completes
+
 ## Offline Intent Handoff
 
 When a device is offline and the user or agent requests an external action:
@@ -442,7 +551,7 @@ Event-kind granularity rule in v1:
 
 Array-valued filters are exact-match intersection checks against the normalized event payload. Scalar filter fields such as `attributes.status`, `reviewDecision`, `summaryTriggerKind`, and `authorRole` match when one requested filter value exactly equals the normalized event value.
 
-`planning.google-calendar.changed` and `planning.google-tasks.changed` intentionally remain coarse event kinds in v1. Consumers must disambiguate them with `changeKinds[]`, `sourceRefs[]`, and `entityRefs[]` rather than inventing ad hoc planning event names.
+`planning.google-calendar.changed` and `planning.google-tasks.changed` intentionally remain coarse event kinds in v1. Consumers must disambiguate them with `changeKinds[]`, `sourceScope`, and provider object refs rather than inventing ad hoc planning event names. `sourceRefs[]` and `entityRefs[]` remain contextual read fields, not additional trigger keys.
 
 When available, `actor` should preserve the Origin-attributed source of the change, such as a user, agent, sync actor, or external peer identity.
 
@@ -503,17 +612,19 @@ The important contract is:
 
 ### GitHub
 
-- one poller over the local followed working set
-- follow targets define Origin's local scope and attention model
+- one logical poller pass per selected GitHub installation-grant authority scope over the followed repos covered by that grant
+- follow targets define Origin's local working set and attention model within those grant scopes
 - cache stores selected repo / issue / PR / review state
 - server pollers own repository cursors and refresh state
+- follow-target dismissal is overlay state, not cache state: `dismissedThroughCursor` stores the repo refresh cursor watermark, and automatic resurfacing requires a later refresh beyond that watermark plus newer matching target activity
 - events drive things like `on followed PR updated`
 
 ### Telegram
 
-- one bot update / tracked-chat poller
+- one bot-update poller per Telegram bot authority scope; tracked chats narrow work inside that scope
 - cache stores recent tracked messages plus server read models for bot/chat state
 - `TelegramGroupSubscription` is the replicated overlay for tracked-group policy; connection state, recent message caches, and outgoing actions remain server-owned operational state
+- summary lifecycle events are downstream Telegram-domain activity emitted after automation or outbox work, not alternate provider-ingress message events
 - events drive things like `on Telegram message in tracked group`
 
 ### Google Calendar / Google Tasks
@@ -530,17 +641,17 @@ Instead:
 
 - integration-specific `refresh` commands control ingress
 - integration-specific `cache` commands control current-state caches
+- `provider authority ...` inspects and controls provider account-set authority leases and transfers
 - automations target normalized activity-event triggers
 - `sync intent ...` inspects, retries, and cancels the replicated external-intent layer that feeds provider outboxes
 
 Examples:
-
 - `email refresh status|run|reset-cursor`
 - `github refresh status|run|reset-cursor`
 - `telegram chat refresh`
 - `telegram connection refresh-metadata`
-- `google-calendar status|pull|push|reconcile`
-- `google-tasks status|pull|push|reconcile`
+- `planning google-calendar status|pull|push|reconcile`
+- `planning google-tasks status|pull|push|reconcile`
 
 ## Summary
 

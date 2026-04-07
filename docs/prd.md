@@ -128,7 +128,12 @@ Origin should feel like a personal chief-of-staff that can actually operate. The
 - Preferred v1 shape: a single Linux VPS, compatible with Hetzner-style deployment, where Origin runs directly on the host machine
 - Preferred v1 service model: bare-metal / systemd-first rather than container-first, because the agent should be able to use the VPS like its own machine
 - If the user later moves from local to VPS mode, replicated app state syncs to the VPS first, while secrets and provider operational state are re-established there instead of opaque-migrated.
-- Provider authority then cuts over in order: validate the VPS peer, re-link provider credentials there, stop provider pollers/cursors/outbound workers on the old peer for that account set, and only then start them on the VPS. At most one peer is authoritative for a provider account set at a time.
+- Provider authority cutover follows the provider-ingress authority contract, not only process ordering.
+- Cutover requires a durable authority transfer record for the provider account set scope, monotonic authority epoch increment, and lease handoff timestamps before the new peer may start pollers or provider outbox dispatch.
+- A peer may execute provider ingress or provider outbox work only while it holds the active authority lease for that exact provider account set scope.
+- Every provider write path and cursor advance must carry and verify the active authority epoch as a fencing token.
+- Bootstrap or restart on any peer must perform authority-lease verification first; if another peer holds authority, the restarting peer stays standby and must not run provider workers for that scope.
+- At most one peer is authoritative for a provider account set at a time, enforced by authority epoch + lease fencing rather than stop-before-start ordering alone.
 
 ### Action Surface
 
@@ -136,7 +141,7 @@ Origin should feel like a personal chief-of-staff that can actually operate. The
 - CLI implemented with `incur`
 - CLI should be ergonomic for both humans and agents, but optimized for agent reliability first
 - CLI is the contract between the model and the capabilities of the system
-- The detailed agent-facing CLI contract is defined in [origin_incur_cli.ts](./api/origin_incur_cli.ts)
+- The detailed agent-facing CLI contract is defined at the stable docs entrypoint [origin_incur_cli.ts](./api/origin_incur_cli.ts), which re-exports the app-owned CLI spec from `apps/server/src/cli/spec.ts`
 
 ### Working Data Model
 
@@ -161,8 +166,68 @@ Origin should distinguish between:
 - `succeeded`, `failed`, and `canceled` are durable terminal states for the logical intent itself, even if the underlying provider outbox has its own attempt history.
 - The authoritative server must materialize at most one logical provider or job action per intent id plus provider scope, and every derived outbox record carries that same intent id forward as its origin link and dedupe root.
 - The CLI must expose inspect and repair surfaces for these intents rather than hiding them entirely behind provider-specific outboxes, including `sync intent list|get|retry|cancel`.
-- The shared schema, lifecycle, and trigger-facing event contract for these intents and provider ingress are defined in [provider_ingress_api.md](./api/provider_ingress_api.md) and surfaced canonically through [spec.ts](../apps/server/src/cli/spec.ts).
+- The shared schema, lifecycle, and trigger-facing event contract for these intents and provider ingress are defined in [provider_ingress_api.md](./api/provider_ingress_api.md) and surfaced through the stable CLI docs entrypoint [origin_incur_cli.ts](./api/origin_incur_cli.ts), which re-exports the app-owned spec at `apps/server/src/cli/spec.ts`.
 - Clients consume provider domains through server-mediated read models, activity, and targeted fetches rather than by owning full replicated provider mirrors.
+
+### Provider Authority Contract (Global)
+
+Provider ingress and provider outbox dispatch are single-writer per provider account-set scope.
+
+Canonical authority record: `ProviderAuthorityRecord`
+
+- `id`
+- `provider`
+- `accountSetScope`
+  - exact provider authority boundary. It uses the smallest stable provider surface Origin can lease independently, never mutable local follow/tracking/attachment state. If a provider exposes multiple independently selected sub-surfaces, Origin uses one authority record per selected sub-surface. V1 examples: mailbox id; connected GitHub account + one selected installation grant `installationId`; connected Telegram bot identity; connected Google account + one selected calendar id; connected Google account + one selected task-list id.
+- `authoritativePeerId`
+- `authorityEpoch`
+  - monotonic fencing token; every provider cursor advance and provider write must verify this epoch
+- `leaseStatus`
+  - `active|grace|expired|transferring|standby`
+- `leaseGrantedAt`
+- `leaseHeartbeatAt`
+- `leaseDurationSeconds`
+- `leaseGraceSeconds`
+- `lastHandoffRequestedAt`
+- `lastHandoffStartedAt`
+- `lastHandoffCompletedAt`
+- `takeoverReason`
+  - `bootstrap|planned_cutover|operator_forced|peer_unhealthy|credential_relink|repair`
+- `takeoverHistory[]`
+  - append-only handoff/takeover log including prior peer id, next peer id, old/new epoch, reason, actor, and timestamps
+- `updatedAt`
+
+Required semantics:
+
+- Provider workers run only when `authoritativePeerId` matches the local peer, `leaseStatus=active`, and the lease heartbeat is fresh within `leaseDurationSeconds + leaseGraceSeconds`.
+- Cutover requires durable transfer intent + epoch increment + lease activation on the new peer before any provider worker starts there.
+- The old peer must fence itself immediately once it observes a higher epoch or non-local authority record.
+- Stop-before-start is operational guidance only; epoch fencing is the hard safety boundary.
+- Bootstrap conflict rule: if multiple peers start at once, only the peer that atomically acquires the next epoch for the scope becomes authoritative; all others enter standby and must not run provider workers until an explicit transfer or lease expiry path succeeds.
+- Restart rule: process restart never restores authority implicitly from local memory; the peer must re-read and validate the durable authority record and reacquire/renew heartbeat before resuming provider workers.
+
+Runtime/API control surface requirement:
+
+- Authority state must be inspectable and operable through explicit CLI/API surfaces, including status, history, transfer, renew, and emergency fence operations.
+- The canonical command family is `provider authority ...` and is specified in [provider_ingress_api.md](./api/provider_ingress_api.md).
+
+### Provider-Domain Offline/Client Residency Minimums (Global)
+
+Provider domains are server-canonical operational domains with bounded client-visible minimums.
+
+Minimum global guarantees:
+
+- Clients always retain replicated first-party overlays and `ExternalActionIntent` history offline.
+- Clients can always inspect the last synced provider read-model snapshot they already have for each configured domain.
+- Clients can always queue new provider-targeted intent offline; execution waits for authoritative server sync.
+- Clients are not guaranteed full provider-history search or full raw-content availability offline.
+- Server-owned provider caches are recoverable/evictable; they are not peer-replicated source-of-truth mirrors.
+
+Per-domain minimum offline/client contracts are normative in:
+
+- [email_api.md](./api/email_api.md)
+- [github_api.md](./api/github_api.md)
+- [telegram_api.md](./api/telegram_api.md)
 
 ### Local-First Requirement
 
@@ -589,17 +654,20 @@ Origin should be deliberate about which domains it owns directly and which it tr
 - Origin must therefore treat file changes as authoritative inputs to local note state on any peer that hosts a vault
 - The system must not assume all note edits pass through an Origin API
 
-#### Note bridge model
+#### Filesystem bridge model (notes)
 
-- Every peer that hosts a markdown vault runs a note bridge
-- The note bridge is responsible for:
+- Every peer that hosts a markdown vault runs a filesystem bridge for managed note content
+- The filesystem bridge is responsible for:
   - exporting replicated note state to markdown files
   - watching filesystem changes in the vault
   - diffing changed files against the last exported version
   - applying those diffs as text operations into local Automerge note documents
-  - recording actor/source metadata for the imported change
+  - recording canonical actor attribution and source metadata for each imported change
   - preventing export/import echo loops
-- The note bridge automatically imports markdown note edits. Non-markdown files do not become replicated managed state just by existing in the workspace or being linked from a note.
+- Terminology contract:
+  - `filesystem bridge` is the canonical subsystem name in docs and CLI
+  - `importer` refers only to the bridge's internal import stage, not a separate actor or service
+- The filesystem bridge automatically imports markdown note edits. Non-markdown files do not become replicated managed state just by existing in the workspace or being linked from a note.
 - Explicitly managed note attachments sync only through explicit attach/import/replace flows; ordinary local workspace artifacts are outside the bridge's replicated import path in v1.
 - Peers sync note state through Automerge, not by sharing the vault filesystem directly
 - This means concurrent file edits on different peers still reconcile through the replicated note model
@@ -617,11 +685,17 @@ Origin should be deliberate about which domains it owns directly and which it tr
 - If it exists and is empty, Origin initializes it
 - If it exists and is non-empty, Origin performs an adoption/import pass before any export
 - First-attach adoption applies only when the profile does not already have replicated note state for another workspace
+- Managed markdown note paths are unique within the workspace root. `Origin/Memory.md` is the reserved managed path for the canonical memory note.
 - During first-attach adoption, existing `.md` files in the workspace root are imported as managed notes with their relative paths preserved
 - Existing `Origin/Memory.md` is adopted in place as the canonical memory file and must not be overwritten
 - Existing non-markdown files remain ordinary local workspace artifacts unless the user or agent later explicitly imports or attaches them into managed state
 - If a profile already has replicated note state and the target path is already populated, attach must go through an explicit reconcile/repair flow instead of silently importing or overwriting
 - That reconcile flow must show the existing replicated note state and on-disk contents side by side, then require an explicit choice to adopt the target path, keep the current managed root, or replace the target path from an exported managed copy before any write occurs
+- During `setup vault reconcile apply --resolution adopt`, relative markdown path is the collision key:
+  - if an on-disk `.md` path matches an existing replicated managed note path, Origin retains that note id and imports the disk file as a new filesystem-authored revision for that note rather than creating a duplicate note
+  - if an on-disk `.md` path does not match any replicated managed note path, Origin creates a new managed note at that path
+  - if a replicated managed note path is absent on disk, that note remains in replicated state and is re-materialized into the adopted root after reconcile
+  - if the colliding path is `Origin/Memory.md`, the canonical memory note keeps its stable note identity and the disk file imports into that note rather than creating, deleting, or renaming a second memory note
 - The machine-actionable contract is: `setup vault init` stops with a stable reconcile id when such a choice is required, and `setup vault reconcile apply` performs the chosen `adopt`, `keep-current`, or `replace-target` path before any write occurs
 - Origin must not silently clobber existing files during attach, adoption, or first export
 
@@ -630,14 +704,20 @@ Origin should be deliberate about which domains it owns directly and which it tr
 - Editing notes outside Origin should be a supported workflow
 - External edits do not bypass the replicated model; they are imported into it
 - Automatic external-edit import applies to managed markdown note files
+- Once a workspace is attached, a newly created `.md` file under the managed workspace root becomes a new managed note on the next bridge import unless its relative path already belongs to another managed note, in which case the bridge must surface a conflict instead of silently replacing or duplicating state
+- A filesystem rename or move of a managed `.md` file preserves the note id and history when the bridge can attribute the new path uniquely to one existing managed note; if the move is not uniquely attributable, the bridge must surface a workspace conflict instead of guessing
+- A filesystem delete of a managed `.md` file imports as a managed note delete when that delete is not part of a matched rename or move
+- `Origin/Memory.md` is a reserved managed path. Content edits to that file import normally, but filesystem rename or delete of `Origin/Memory.md` must surface a workspace conflict instead of silently moving or removing the canonical memory note
 - Mere presence of a local file, or linking to it from `Origin/Memory.md` or another note, does not promote it into replicated managed state
 - Explicitly managed note attachments may be replaced or re-imported through managed attachment flows, but ordinary local workspace artifacts are not opportunistically imported into replicated state
-- Each imported file change becomes a normal replicated change authored by an actor such as:
-  - `user:<device-id>:external`
-  - `agent:<server-session-id>:external`
-  - `external:<peer-id>:<os-user>`
-- The importer should track the last exported note revision and file hash for each note
-- When a file changes, the importer should compute a text diff against the last exported content and apply that change into the replicated note document
+- Canonical attribution contract for filesystem-imported edits:
+  - Actor identity and source metadata are separate fields
+  - `actor` identifies who authored the replicated change and is always derived by Origin, never taken from free-form file content or a free-form CLI value
+  - `source` metadata describes where the content came from (for example `source.kind=filesystem`, path, file hash, and import trigger)
+  - Automatic watcher import uses actor `bridge:<peer-id>` and source trigger `watcher`
+  - Manual `sync bridge import` / `workspace bridge import` uses the authenticated CLI invoker as actor (for example user or agent principal for that session) and source trigger `manual-cli`
+- The filesystem bridge importer stage should track the last exported note revision and file hash for each note
+- When a file changes, the importer stage computes a text diff against the last exported content and applies that change into the replicated note document
 - Once imported, the change syncs normally to other peers and back to the server
 - The server then re-materializes its local markdown vault from the replicated note state
 
@@ -715,7 +795,9 @@ Origin should be deliberate about which domains it owns directly and which it tr
 - V1 should therefore not build a full offline mirrored mailbox inside the replicated local-first state model
 - Gmail or the relevant mail provider remains canonical
 - Origin should fetch on demand and keep only selective recent caches when that improves agent performance, reduces repeated fetch cost, or supports short-lived workflow robustness
-- If Origin tracks email-specific operational state at all, it should stay minimal and workflow-oriented rather than trying to recreate a mailbox
+- The replicated email overlay should stay minimal: triage state, follow-up time, linked task, and internal triage note
+- Provider unread, starred, label, and archive state remain provider-derived mailbox read-model state rather than replicated email overlay state
+- Email cache retention controls such as local pinning are cache behavior only and do not become replicated triage state
 - The detailed v1 email surface is defined in [email_api.md](./api/email_api.md)
 
 #### GitHub model
@@ -725,6 +807,7 @@ Origin should be deliberate about which domains it owns directly and which it tr
 - V1 should not build a full offline mirrored GitHub state model
 - GitHub remains canonical
 - Origin should fetch on demand and keep only selective caches plus lightweight workflow metadata needed for agent follow-up, summaries, and automation
+- Dismissing a GitHub follow target suppresses local attention only; it stores the current repo refresh cursor watermark and the target resurfaces on newer matching GitHub activity or when the follow target is explicitly updated again
 - The detailed v1 GitHub surface is defined in [github_api.md](./api/github_api.md)
 
 #### Telegram model
@@ -736,7 +819,7 @@ Origin should be deliberate about which domains it owns directly and which it tr
 - Origin should fetch on demand and keep only selective caches plus lightweight workflow metadata needed for summaries, reactions, and agent participation
 - The Telegram bot must be able to be added to groups and operate there as a supported workflow
 - Origin should target the maximum Telegram bot access model available, including group participation and reading all group messages where Telegram allows it
-- Default expectation: the bot is configured for group use with privacy mode disabled so it can receive all group messages except messages sent by other bots
+- In v1, tracked-group workflows require the bot to validate with privacy mode disabled so it can receive the group traffic needed for summaries and participation
 - Telegram bot constraints still apply: a bot is not identical to a normal user account, cannot initiate conversations with users on its own, and cannot see messages from other bots
 - The detailed v1 Telegram surface is defined in [telegram_api.md](./api/telegram_api.md)
 

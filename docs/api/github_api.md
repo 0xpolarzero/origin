@@ -78,6 +78,19 @@ GitHub state inside Origin should be selective and derived.
 - a complete mirrored notifications inbox
 - broad historical copies of all repo traffic by default
 
+### Minimum offline/client contract (v1)
+
+GitHub remains provider-canonical, but Origin guarantees the following minimum client-visible/offline surface for the tracked working set:
+
+- Replicated overlay durability: all `GitHubFollowTarget` objects and related `ExternalActionIntent` records are fully available offline on every synced client.
+- Scope visibility floor: the last successful snapshot of selected installation grants and derived actionable repo coverage remains client-visible offline.
+- Repository snapshot floor: at least metadata for the most recent 100 tracked repositories (or all tracked repositories when fewer than 100) remains offline-visible from the last sync.
+- Issue/PR snapshot floor: for each tracked repository, at least the most recent 50 cached issue/PR snapshots touched in the last 30 days remain offline-visible, including title/state/labels/assignees/review-decision summaries.
+- Discussion snapshot floor: for each cached issue/PR snapshot, at least the most recent 20 comments/reviews remain offline-visible as cached summaries/snippets.
+- Outbound intent floor: offline GitHub mutations are durably captured as replicated intent plus server outbox linkage and replay once the authoritative server regains connectivity and valid grant scope.
+
+Outside these minimums, colder provider-derived snapshots may be evicted and re-fetched from GitHub.
+
 ## Core Objects
 
 ### `GitHubInstallationGrant`
@@ -130,6 +143,12 @@ Required behavior:
 - local repo tracking may exist before a matching grant is selected, but provider-backed repo reads and writes must remain blocked until scope is valid
 - if scope later shrinks, Origin preserves the local repo/follow objects, marks the affected repo as out of provider scope, and stops direct GitHub actions until the operator refreshes or changes grant selection
 - validation should explain which selected grants are active, which are revoked or stale, and which repositories currently fall outside actionable scope
+
+Authority-scope rule under the shared provider ingress contract:
+
+- GitHub authority scope is per selected `GitHubInstallationGrant`, keyed by the connected GitHub account plus `installationId`.
+- `selectedRepositories[]`, derived `accessibleRepositories[]`, and `GitHubFollowTarget` objects narrow work inside that grant scope, but they do not redefine `accountSetScope`.
+- If multiple grants are selected, Origin represents them as multiple GitHub authority scopes, one per selected grant.
 
 Required grant-management surface:
 
@@ -194,7 +213,11 @@ Normative model:
 - Issue and PR follow targets narrow local attention within that working set.
 - Issue and PR targets may reference or inherit the repo-level polling scope rather than creating a second repo cursor.
 - These follow targets do not map to GitHub's native watch / subscription state.
-- `dismissedThroughCursor` is the durable attention watermark for `dismiss`; when activity advances past that cursor, the target can resurface automatically.
+- `dismissedThroughCursor` is the durable attention watermark for `dismiss`; `dismiss` stores the current repository refresh cursor for the target's repository as that watermark.
+- A dismissed target remains queryable in Origin and does not lose links, pinning, or follow membership; dismissal only suppresses attention-oriented surfacing.
+- Repo-kind targets resurface after a later refresh for that repository advances beyond `dismissedThroughCursor` and observes any newer GitHub provider change in that repository.
+- Issue and PR targets resurface only after a later refresh advances beyond `dismissedThroughCursor` and observes newer provider change for that same issue or PR ref.
+- Updating or re-enabling an existing dismissed target clears `dismissedAt`, `dismissedByActor`, and `dismissedThroughCursor`.
 
 ### `GitHubIssueSnapshot`
 
@@ -355,7 +378,7 @@ The integration should support direct actions that matter for follow-up.
 - link a GitHub object to an Origin task or note
 - queue a GitHub action for retry if it fails transiently
 
-`dismiss` suppresses the current attention state for the follow target until newer activity arrives past the stored cursor. It does not create a separate persistent follow-up-item object.
+`dismiss` suppresses the current attention state for the follow target until newer matching activity arrives past the stored cursor. It stores the current repository refresh cursor as `dismissedThroughCursor`, does not remove the follow target, and does not create a separate persistent follow-up-item object.
 
 ## Cache Strategy
 
@@ -390,7 +413,7 @@ That canonical ingress family is:
 - issue changes: `github.issue.created`, `github.issue.updated`, `github.issue.commented`, `github.issue.closed`, `github.issue.reopened`
 - pull-request changes: `github.pr.created`, `github.pr.updated`, `github.pr.commented`, `github.pr.review_requested`, `github.pr.review_submitted`, `github.pr.merged`, `github.pr.closed`, `github.pr.reopened`
 
-Repo tracking changes, local follow-target dismiss or restore actions, and outbound write outcomes may still appear in GitHub-domain activity, but they are Origin-owned overlay or outbox events rather than alternate provider-ingress trigger kinds for the same upstream GitHub change.
+Repo tracking changes, local follow-target dismiss or resurface state changes, and outbound write outcomes may still appear in GitHub-domain activity, but they are Origin-owned overlay or outbox events rather than alternate provider-ingress trigger kinds for the same upstream GitHub change.
 
 The activity log should record:
 
@@ -411,7 +434,7 @@ Each activity event should include:
 - outcome status
 - error details when relevant
 
-Refresh bookkeeping may be coalesced internally, but visible activity should preserve object-family granularity. Repo tracking changes, issue changes, PR changes, review requests, review submissions, comment changes, and follow-dismiss state changes should not collapse into one generic `updated` event.
+Refresh bookkeeping may be coalesced internally, but visible activity should preserve object-family granularity. Repo tracking changes, issue changes, PR changes, review requests, review submissions, comment changes, and follow-dismiss or resurface state changes should not collapse into one generic `updated` event.
 
 ## Failure / Retry Semantics
 

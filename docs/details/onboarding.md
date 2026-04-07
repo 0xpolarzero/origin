@@ -34,7 +34,7 @@ The onboarding flow should:
 - In `vps` mode, bring up the authoritative server before provider linking becomes authoritative.
 - In `vps` mode, collect only non-secret setup inputs until that server exists.
 - Provider OAuth, token storage, and server-owned pollers/cursors happen on the authoritative server.
-- At most one peer/instance may be authoritative for a given provider account set at a time; cutover must stop the old peer's provider workers before the new peer's workers start.
+- At most one peer/instance may be authoritative for a given provider account set at a time. Stop-before-start remains the operational goal during cutover, but the hard safety contract is provider-authority lease plus epoch fencing rather than process ordering alone.
 - The managed workspace root and vault path are scoped to the active Origin peer/instance, not shared as a profile-global path.
 - When a local deployment later migrates to VPS, replicated app state moves to the VPS but provider authority moves only after the VPS is deployed and rehydrated.
 - Persist only what is needed to complete setup, recover it, and operate the system afterward.
@@ -148,9 +148,12 @@ In `vps` mode, the inputs for this phase may be gathered earlier, but the actual
 ### Telegram
 
 - Link the pre-created Telegram bot through an operator-only secure handoff or secure credential reference, not by passing the raw token through the normal agent CLI surface.
+- Canonical CLI mutation: `telegram connection set-token --token-ref <secure-handoff-ref>`.
+- `token-ref` is required; raw bot token strings are rejected on the normal agent CLI surface.
+- The mutation stores `TelegramBotConnection.botTokenSecretRef` as the durable credential reference used by runtime validation and polling.
 - Configure the bot for group participation.
 - Configure the bot for the maximum access model Telegram allows for v1, including privacy mode settings required to receive group messages. Origin validates the observed privacy mode state; it does not mutate BotFather privacy settings itself.
-- In `vps` mode, store the bot token and create server-owned pollers only after the authoritative server exists.
+- In `vps` mode, store the bot token reference and create server-owned pollers only after the authoritative server exists.
 
 ### Required user input
 
@@ -167,6 +170,7 @@ In `vps` mode, the inputs for this phase may be gathered earlier, but the actual
 - provider-specific scope grants
 - GitHub App installation grant metadata and selected repo/org scope
 - Telegram bot configuration state
+- stored Telegram `botTokenSecretRef` created from the secure `token-ref` handoff
 
 ### Success criteria
 
@@ -245,12 +249,13 @@ Origin configures the Telegram bot for group use.
 ### Success criteria
 
 - The bot is usable inside the selected groups.
+- In v1, the bot validates with privacy mode `disabled` for tracked-group workflows.
 - The bot can receive the group traffic needed for summaries and participation.
 - Each selected group has an active Origin registration/subscription record, not just a raw bot membership reference.
 
 ### Failure / recovery
 
-- If group permissions are insufficient, Origin explains the missing settings and asks the user to adjust the group or bot configuration.
+- If group permissions are insufficient or privacy mode remains enabled, Origin explains the missing settings and asks the user to adjust the group or bot configuration.
 
 ## Phase 7: Workspace, Vault, And Memory
 
@@ -272,10 +277,12 @@ In `vps` mode, this phase configures the current peer only. After Phase 9 deploy
 - If the profile already contains replicated note state for another attached workspace, Origin enters an explicit reconcile/repair flow instead of attaching silently.
 - The managed workspace root is per-peer/instance state; a local peer and a VPS peer may each have their own attached root.
 - On a non-empty target path, Origin classifies the existing files before it writes anything.
+- Managed markdown note paths are unique within the workspace root. `Origin/Memory.md` is the reserved managed path for the canonical memory note.
 - During first-attach adoption, existing markdown files are imported as managed notes with their relative paths preserved and stable note ids assigned during import.
 - If `Origin/Memory.md` already exists, Origin adopts it in place as the canonical memory file rather than overwriting it.
 - Existing non-markdown files remain ordinary local workspace artifacts unless later imported or attached into managed note state explicitly.
 - The reconcile/repair flow must show the existing replicated note state and the on-disk contents side by side, then require the user to choose one of three explicit paths before any write occurs: adopt the target path as the managed workspace root and import compatible markdown notes, keep the current managed root and leave the target path untouched, or replace the target path from an exported managed copy after explicit overwrite confirmation.
+- Under `adopt`, relative markdown path is the collision key: an existing replicated note at the same path keeps its stable note id and imports the disk file as a new revision, a disk-only `.md` path becomes a new managed note, a managed-only path is re-materialized after reconcile, and `Origin/Memory.md` always resolves to the single canonical memory note rather than creating a duplicate memory file.
 - The machine-actionable contract for that decision is: `setup vault init` inspects and returns a stable reconcile id when a populated target needs operator choice, then `setup vault reconcile apply --resolution adopt|keep-current|replace-target` applies the chosen path. `replace-target` requires explicit overwrite confirmation.
 - A non-empty target path must be imported or adopted before Origin exports managed files into it, and Origin must never write to that path before the user has chosen a reconcile path.
 - Origin must never silently overwrite existing files, including an existing `Origin/Memory.md`, during first attach.
@@ -342,7 +349,7 @@ This deployment step happens before Phases 4 through 6 become authoritative in `
 - The server can access its managed files and the host filesystem it is allowed to use.
 - The setup matches the bare-metal / systemd-first service model.
 - Provider linking and server-owned pollers become authoritative on the deployed server only after the replicated app state has been rehydrated and the provider links have been re-established there.
-- Any local instance stops running provider pollers, cursors, and outbound provider actions for the same account set before the VPS peer is marked authoritative.
+- Any local instance fences and stops provider pollers, cursors, and outbound provider actions for the same account set before the VPS peer is marked authoritative.
 - Exactly one peer may be authoritative for a provider account set at a time.
 - Local-only workspace artifacts are not treated as migrated replicated state unless they were explicitly imported.
 
@@ -382,7 +389,7 @@ During onboarding, Origin should persist:
 - agent account connection records
 - OAuth scopes and token references
 - GitHub App installation grant metadata and selected repo/org scope
-- Telegram bot token reference
+- Telegram `botTokenSecretRef` credential reference
 - selected calendars, tasks, and mailbox configuration
 - peer-local vault and memory file locations
 - notification preferences and tokens

@@ -56,6 +56,19 @@ Origin should keep enough local state to:
 
 but it should not attempt to duplicate the full mailbox into offline state.
 
+### Minimum offline/client contract (v1)
+
+Email remains provider-canonical, but Origin guarantees the following minimum client-visible/offline surface per connected mailbox account:
+
+- Replicated overlay durability: all `EmailTriageRecord` objects and related `ExternalActionIntent` records are fully available offline on every synced client.
+- Thread snapshot floor: at least the most recent 250 thread headers (`subject`, participants, snippet, triage projection, unread/label/archive state, latest timestamps) remain client-visible from the last successful sync.
+- Message snapshot floor: for those cached threads, at least the most recent 1,000 message envelopes (`from/to/subject/sentAt/snippet/labels`) remain client-visible from the last successful sync.
+- Body residency floor: full message body content is guaranteed offline only for messages explicitly opened, composed against, or fetched by Origin in the last 30 days, up to at least 200 bodies per account.
+- Attachment residency floor: attachment bytes are offline-guaranteed only for files the user or agent explicitly downloaded/imported through Origin; metadata refs may exist without local bytes.
+- Outbound intent floor: offline send/reply/archive/triage requests are durably captured as replicated intent/overlay updates and are replayed by the authoritative server after sync; provider side effects are not guaranteed until replay succeeds.
+
+Outside these minimums, older or colder provider-derived cache entries may be evicted and re-fetched from the provider.
+
 ### Object identity
 
 Every email-domain object should have:
@@ -126,8 +139,6 @@ Represents a mail thread as Origin sees it.
 - `labels[]`
 - `triageState`
 - `followUpAt`
-- `importance`
-- `pinnedAt`
 - `archivedAt`
 - `lastSyncedAt`
 - `provenance`
@@ -138,6 +149,9 @@ Represents a mail thread as Origin sees it.
 
 - A thread is the primary object for triage
 - Thread triage fields are derived projections of the canonical `EmailTriageRecord`
+- In v1, the thread read model projects only `triageState` and `followUpAt` from the triage overlay
+- Provider unread, starred, label, and archive state remain provider-derived mailbox read-model state rather than triage-overlay state
+- Cache pinning / retention is separate cache residency state and is not part of `EmailTriageRecord`
 - `archivedAt` reflects the provider mailbox archive state, which is distinct from Origin triage `archived`
 - The thread cache can be partial and should be evictable
 
@@ -241,12 +255,9 @@ Represents lightweight operational metadata that Origin keeps for a thread.
 - `id`
 - `threadId`
 - `triageState`
-- `priority`
 - `followUpAt`
 - `linkedTaskId`
 - `notesMd`
-- `lastAgentActionAt`
-- `lastHumanActionAt`
 - `createdAt`
 - `updatedAt`
 
@@ -265,6 +276,7 @@ Represents lightweight operational metadata that Origin keeps for a thread.
 - This is the canonical Origin-owned triage overlay for the thread
 - It does not replace the provider mailbox
 - It gives the agent a stable place to track follow-up and triage without duplicating the entire inbox
+- `notesMd` is part of the canonical triage overlay even when the CLI exposes note mutation through a dedicated helper command
 - `archived` here means Origin triage archived, not provider mailbox archive state
 - `archived` is set through triage state management, not through provider mailbox archive / unarchive actions
 
@@ -372,18 +384,25 @@ The email API should support at least the following mutations.
 
 - archive
 - unarchive
-
-### Triage actions
-
 - mark read
 - mark unread
 - star
 - unstar
 - apply or remove labels
+
+### Triage actions
+
 - set triage state
 - set follow-up time
 - link to a planning task
 - add or update internal triage notes
+
+### Cache residency actions
+
+- warm recent cache
+- hydrate selected bodies or attachments
+- pin or unpin a thread in the local cache to retain residency
+- evict cached state for a thread or account when needed
 
 ### Sync actions
 
@@ -405,6 +424,12 @@ The email API should support at least the following mutations.
 - The cache should prefer recent headers, snippets, triage state, and only the bodies that matter
 - Full bodies should be fetched on demand when not already cached
 - Attachments should be cached selectively
+- `EmailTriageRecord` is the only replicated Origin-owned overlay for a thread and owns exactly `triageState`, `followUpAt`, `linkedTaskId`, and `notesMd`
+- `EmailAccount`, `EmailThread`, `EmailMessage`, unread/starred/label/archive mailbox state, and cache residency metadata are provider-derived server read models or server-local cache state, not replicated overlay state
+- Unread, starred, label, and archive state are provider-derived mailbox state carried in the read models, not `EmailTriageRecord` fields
+- Cache pinning affects eviction / retention only and is not replicated triage state
+- Cache controls such as warm, hydrate, pin, unpin, and evict affect cache materialization or retention only; they must not create, clear, or mutate `EmailTriageRecord`
+- Provider mailbox actions such as archive, unarchive, read, unread, star, unstar, and label changes update provider state and derived read models only; they must not implicitly change Origin triage state. `triageState = "archived"` remains a separate Origin-owned overlay state
 - Sync should be cursor-based and provider-driven
 - If the cursor becomes invalid, Origin should be able to fall back to a broader resync of the account
 - The account, sync, and thread state exposed through Origin should be treated as server-side read models derived from provider ingress
@@ -488,12 +513,17 @@ The email API should be straightforward to expose through the CLI.
 
 Recommended conceptual verbs:
 
-- `email.accounts.*`
-- `email.threads.*`
-- `email.messages.*`
-- `email.drafts.*`
+- `email.account.*`
+- `email.thread.*`
+- `email.message.*`
+- `email.draft.*`
 - `email.triage.*`
-- `email.sync.*`
+- `email.triage-note.*`
+- `email.follow-up.*`
+- `email.task.*`
+- `email.cache.*`
+- `email.refresh.*`
+- `email.outbox.*`
 
 The exact command names can be adjusted later, but the underlying model should stay stable.
 

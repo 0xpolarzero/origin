@@ -202,7 +202,7 @@ The canonical v1 shape is a small typed action object aligned with the CLI:
 
 - `type: "command"`
 - `command`
-- `args`
+- `args[]`
 - `options`
 - `summary`
 
@@ -273,9 +273,10 @@ Represents one execution instance of an automation.
 - `errorMd`
 - `retryCount`
 - `attemptNumber`
-- `activityEventIds[]`
 - `createdAt`
 - `updatedAt`
+
+`activityEventId` is a singular stable trigger-event reference for reactive runs. v1 does not support multiple trigger event ids per run.
 
 ## `AutomationTrigger`
 
@@ -366,14 +367,16 @@ Matching semantics in v1:
 
 Array-valued filters are exact-match intersection checks against the event payload. Scalar normalized fields such as `attributes.status`, `reviewDecision`, `summaryTriggerKind`, and `authorRole` match when one requested value exactly equals the event value.
 
-`summaryTriggerKinds[]` is for Telegram summary-job style events only. Supported v1 values are:
+For coarse Google bridge ingress events such as `planning.google-calendar.changed` and `planning.google-tasks.changed`, v1 consumers should narrow matches with `filters.changeKinds[]` and `sourceScope.calendarId` / `taskListId` / `entityId`. Fields such as `sourceRefs[]` and `entityRefs[]` may still appear on activity events for inspection, but they are not extra trigger keys in v1.
+
+`summaryTriggerKinds[]` is valid only for Telegram summary lifecycle events `telegram.summary.generated` and `telegram.summary.posted`. Those events carry `attributes.summaryTriggerKind`. Supported v1 values are:
 
 - `manual`
 - `scheduled`
 - `mention`
 - `agent_decision`
 
-Telegram automatic summaries are still ordinary automations. Their schedule or event trigger lives here; Telegram group policy only gates whether summary automation may run or post for a group and provides default lookback context.
+Telegram automatic summaries are still ordinary automations. Their schedule or event trigger lives here; Telegram group policy only gates whether summary automation may run or post for a group and provides default lookback context. The filter does not apply to `telegram.message.received` or `telegram.message.mentioned`.
 
 Unknown filter keys should be rejected by the canonical CLI/runtime rather than treated as silently ignored hints.
 
@@ -410,12 +413,13 @@ Examples of valid command-backed actions:
 - post a Telegram message
 - create or update a GitHub follow target
 
-Each action carries:
+Each action carries the canonical CLI-backed shape:
 
-- `type`
-- `command`
-- `args`
-- `summary`
+- `type: "command"`
+- `command` (exact canonical Origin CLI command path)
+- `args[]` (ordered positional arguments)
+- `options` (named CLI options/flags object)
+- `summary` (optional human-readable intent note)
 
 ## Read Surface
 
@@ -475,8 +479,8 @@ Mutation behavior:
 - Missed runs should follow `runPolicy`.
 - Manual runs should record the triggering actor and reason.
 - Scheduled runs dedupe on `(automationId, scheduledAt)`.
-- Reactive runs dedupe on `(automationId, activityEventId)`.
-- `scheduledAt` and `activityEventId` are the logical run identity anchors when present.
+- Reactive runs dedupe on `(automationId, activityEventId)` where `activityEventId` is exactly one canonical triggering event id.
+- `scheduledAt` and `activityEventId` are the logical run identity anchors when present; no multi-event trigger-id list is part of the run identity model in v1.
 - Retrying a failed run reuses the same logical run record and increments attempt state.
 
 ### Concurrency

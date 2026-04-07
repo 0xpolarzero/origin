@@ -109,6 +109,8 @@ The agent should choose the simplest structure that serves the task.
 
 - `Origin/Memory.md`, markdown notes in the managed workspace root, and note attachments inside that root are part of Origin's replicated note model.
 - Once a workspace is attached, markdown files that live in the managed workspace root are managed notes, not generic local artifacts.
+- Managed markdown note paths are unique within the workspace root. `Origin/Memory.md` is the reserved canonical path for the memory note.
+- After attach, a newly created `.md` file at a new relative path becomes a managed note on bridge import. A `.md` file that appears at a path already owned by another managed note is a conflict, not an implicit overwrite or duplicate note.
 - Replicated note attachments only become replicated through an explicit attachment or import flow; mere presence in the workspace root does not make a file replicated.
 - Referencing a file from `Origin/Memory.md` or linking to it from another note does not by itself promote that file into replicated managed state.
 - Linked JSON files, CSV files, folders, and other non-markdown workspace artifacts are local workspace artifacts by default, even when they live inside the managed workspace root and `Origin/Memory.md` references them.
@@ -183,6 +185,7 @@ The system prompt for Origin agents should explicitly teach:
 - The app should expose `Origin/Memory.md` directly for viewing and editing.
 - Supporting memory artifacts should be visible like other files in the managed workspace.
 - User edits to `Origin/Memory.md` and other markdown notes in the managed workspace root are authoritative inputs like any other vault edit.
+- Rename or delete of `Origin/Memory.md` through the filesystem is not an implicit move or delete of the canonical memory note; it must surface as a conflict on that reserved path.
 - Edits to linked local workspace artifacts remain local unless Origin explicitly imports or re-materializes them into replicated managed state.
 - If a peer moves from local to VPS, replicated markdown notes and explicit note attachments are re-materialized on the VPS peer; linked local workspace artifacts stay on the original host unless they are explicitly imported or re-materialized for the VPS peer.
 

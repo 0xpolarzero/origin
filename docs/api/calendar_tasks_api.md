@@ -4,7 +4,7 @@
 
 - Working draft
 - Scope: v1 planning domain
-- Linked from: [prd.md](./prd.md)
+- Linked from: [prd.md](../prd.md)
 
 ## Purpose
 
@@ -20,7 +20,7 @@ This document defines the full v1 API surface for Origin's planning domain:
 
 The planning domain is first-party. Google Calendar and Google Tasks are bidirectional sync targets and import sources, not the primary internal model.
 
-`docs/api/origin_incur_cli.ts` is the canonical CLI contract for this domain. This document is normative on planning semantics and command families, but exact CLI spellings, nesting, flags, examples, and output schemas come from the canonical CLI.
+`docs/api/origin_incur_cli.ts` is the stable documentation entrypoint for the canonical CLI contract for this domain. That file re-exports the app-owned CLI spec from `apps/server/src/cli/spec.ts`. This document is normative on planning semantics and command families, but exact CLI spellings, nesting, flags, examples, and output schemas come from the canonical CLI contract.
 
 ## Design Principles
 
@@ -172,7 +172,7 @@ The distinction between `external:macbook:filesystem` and `external:server:files
   - `occurrenceIndex`
   - `materializationKind`
 - `rule` is an RRULE-style cadence expression for the series. Series bounds live in `startDate` and `endDate`, not inside the rule itself.
-- `startDate` and `endDate` are local series-date bounds. For timed series, the time-of-day still comes from the root task due fields or the root calendar item's scheduled start/end fields.
+- `startDate` and `endDate` are local series-date bounds. For timed task series, the time-of-day comes from the root task's datetime due-window fields (`dueFrom` and/or `dueAt` with `dueKind = "datetime"`). For timed calendar-item series, it comes from the root calendar item's scheduled `startAt` / `endAt` fields.
 - There is no separate hidden series header in v1. The series root occurrence is both the canonical series definition and the first scheduled occurrence.
 
 ## Object Model
@@ -324,7 +324,7 @@ Represents recurrence metadata attached to a task occurrence.
 - `startDate` is the canonical local series start bound
 - `endDate` is optional and bounds a finite series in v1 when present; no occurrence whose scheduled local series date falls after `endDate` belongs to the series
 - `timezone` is required for datetime-based recurring tasks
-- For timed recurring tasks, the root task's due/schedule fields carry the canonical time-of-day; the recurrence object carries the cadence and local date bounds
+- For timed recurring tasks, the root task's datetime due-window fields carry the canonical time-of-day; the recurrence object carries the cadence and local date bounds
 - `occurrenceKey` is the canonical occurrence identity for exceptions, bridge reconciliation, and history joins
 - `occurrenceKey` is a recurrence-id-style slot key derived from the occurrence's original scheduled local slot before exception edits:
   - date-based series use `YYYY-MM-DD`
@@ -334,6 +334,7 @@ Represents recurrence metadata attached to a task occurrence.
 - Explicit exceptions use `materializationKind = "exception"` and are keyed by `occurrenceKey`
 - Generated occurrences use `materializationKind = "derived"` and do not introduce a second canonical record
 - Series-level recurrence mutations operate on the series root task
+- `occurrenceKey` is immutable once assigned. Series-level edits never rebase an explicit exception by `occurrenceIndex`, nearest date, or rewritten cadence
 - Root-level provider linkage and hashes live in the task's stable `externalLinks[]`
 - `providerRef` and `providerHash` are only populated on explicit exception occurrences when the attached provider exposes per-occurrence remote objects
 - `advanceMode = "on_completion"` means the next occurrence is created when the current occurrence is completed
@@ -406,6 +407,8 @@ Represents a scheduled block or event in Origin's planning domain.
 - For tasks, single-occurrence completion, due window, schedule, or status changes are stored as task-occurrence exceptions
 - For calendar items, single-occurrence time or status changes are stored as calendar-item-occurrence exceptions
 - Series-level edits update the root recurrence rule and apply to future generated occurrences; existing explicit exceptions remain exceptions unless edited directly
+- Series projection is the root rule/bounds expansion plus explicit exceptions keyed by `occurrenceKey`. An explicit exception replaces the generated occurrence with the same `occurrenceKey`
+- If the updated rule or bounds no longer generate an existing exception's `occurrenceKey`, that explicit exception remains as a preserved out-of-pattern exception in the series until edited or deleted directly
 - A canceled or skipped occurrence is represented as an explicit exception, not by deleting the whole series
 
 ## `CalendarItemRecurrence`
@@ -479,20 +482,30 @@ Planning objects may keep external linkage metadata.
 - External links carry `syncMode: "import" | "mirror" | "detached"`
 - For recurring series, `attach` and `detach` apply at the series root; explicit exception occurrences may additionally carry per-occurrence `providerRef` / `providerHash` in recurrence metadata when the provider exposes distinct remote exception objects
 - `attach` creates or updates the stable external link for an Origin object
+- `attach` targets a selected Google bridge surface. If the referenced calendar or task list is not already selected as an active bridge surface, the canonical CLI/runtime must refuse the attach and require explicit surface selection first rather than silently creating an implicit bridge scope
 - If provider object ids are supplied by the canonical CLI/runtime, `attach` may bind the Origin object to an existing Google event or Google task instead of creating a fresh external object
 - The planning object remains the source of truth for its own external-link metadata; the selected Google calendar or task list is the server-owned bridge surface that defines where that link may dispatch
-- If `attach`, `detach`, `pull`, `push`, or `reconcile` is requested while a peer is offline, Origin records the requested bridge state locally first and treats provider dispatch as pending until the server-owned bridge job applies it
+- `attach`, `detach`, `pull`, `push`, and `reconcile` are server-owned provider actions even when they are requested from another peer. If one is requested while a peer is offline, Origin records the requested bridge state locally first and treats provider dispatch as pending until the authoritative server-owned bridge job applies it under the shared provider-authority contract
 - `syncMode = "import"` binds to an existing external object or selected bridge surface and imports shared external fields into Origin on the next pull or reconcile; it does not create a new remote object and it never propagates destructive local deletes or cancels outward
 - `syncMode = "mirror"` means Origin and Google sync bidirectionally through the stable external link, and a remote object may be created if no provider object id is already bound
+- Pull or reconcile must match a remote Google object to an existing Origin object by stable bridge linkage first. If no stable link exists, the bridge creates a new Origin object rather than heuristically merging by title, time, or other fuzzy fields; binding an existing local object to that remote object requires explicit attach or repair flow
 - For recurring Google Calendar events, the Google master maps to the Origin series root and a Google exception instance maps to an explicit Origin exception keyed by `occurrenceKey`
 - The series root's Google master id and hash stay in `externalLinks[]`; per-occurrence Google exception ids and hashes stay on explicit exception recurrence metadata
 - Mirror mode exports explicit Origin calendar exceptions back as Google Calendar exceptions when the provider supports them
 - Import mode keeps Origin canonical; Google Calendar exceptions are read as external representations of Origin exceptions, not as a separate series branch
 - Google Tasks v1 does not model or mirror a remote recurring master/exception graph; recurring Origin tasks remain Origin-only series and any linked Google task is a lossy root/current-task projection
+- For recurring Origin tasks linked to Google Tasks, the stable `google-tasks` external link remains on the series root in `externalLinks[]`; explicit exception and derived occurrences do not get separate Google Tasks linkage in v1
 - Google Tasks recurrence linking never creates per-occurrence provider refs or hashes in v1 because the bridge has no recurring master/exception identity model there
 - If a provider deletes one occurrence of a recurring series, Origin preserves the series root and records that occurrence as an explicit canceled or skipped exception
 - If the linked Google object is deleted or otherwise disappears remotely, Origin preserves the local object, detaches the external link, and records the situation for review or conflict resolution
 - `detach` leaves the external provider object untouched, preserves the local object, and changes the local link state to `detached`
+- `syncMode = "detached"` is an inert local preservation state. Detached links are excluded from automatic pull/push until an explicit attach or repair action re-binds them to a selected bridge surface
+
+Authority-scope rule under the shared provider ingress contract:
+
+- Google Calendar authority is per selected calendar bridge surface, keyed by the connected Google account plus `calendarId`
+- Google Tasks authority is per selected task-list bridge surface, keyed by the connected Google account plus `taskListId`
+- Individual `attach` / `detach` operations and planning-object `externalLinks[]` route through an existing selected bridge surface; they never create, split, or rename provider authority scope
 
 ## Planning Relationships
 
@@ -507,7 +520,7 @@ Planning objects may keep external linkage metadata.
 
 ## Command And Query Surface
 
-`docs/api/origin_incur_cli.ts` is the canonical CLI contract for planning. This document defines the domain surface and semantics; exact command spellings and flags come from the canonical CLI.
+`docs/api/origin_incur_cli.ts` is the stable documentation entrypoint for the canonical planning CLI contract, re-exporting the app-owned spec at `apps/server/src/cli/spec.ts`. This document defines the domain surface and semantics; exact command spellings and flags come from the canonical CLI.
 
 ### Representative canonical read surface
 
@@ -534,6 +547,7 @@ Any command examples in this document are illustrative summaries of the canonica
 
 - Selected Google calendars are bridge surfaces configured during onboarding or integration setup, not ad hoc per-item attachments
 - Each selected calendar has a server-owned poller and cursor under the shared provider ingress model
+- Bridge pollers, cursor advancement, and outbound Google Calendar writes run only on the peer that currently holds provider authority for that selected calendar scope
 - Origin planning objects stay canonical; the selected Google calendar is the external bridge surface that feeds or receives those objects
 - Status and repair live on the canonical CLI; this document does not define a separate operational surface
 - Use canonical CLI surfaces such as `origin planning google-calendar status`, `origin planning google-calendar reset-cursor`, and `origin planning google-calendar repair`
@@ -565,6 +579,7 @@ Any command examples in this document are illustrative summaries of the canonica
 
 - Selected Google task lists are bridge surfaces configured during onboarding or integration setup, not ad hoc per-item attachments
 - Each selected task list has a server-owned poller and cursor under the shared provider ingress model
+- Bridge pollers, cursor advancement, and outbound Google Tasks writes run only on the peer that currently holds provider authority for that selected task-list scope
 - Origin planning objects stay canonical; the selected Google task list is the external bridge surface that feeds or receives those objects
 - Status and repair live on the canonical CLI; this document does not define a separate operational surface
 - Use canonical CLI surfaces such as `origin planning google-tasks status`, `origin planning google-tasks reset-cursor`, and `origin planning google-tasks repair`
@@ -610,6 +625,8 @@ Planning events should be emitted for agent workflows and background jobs.
 These are first-party planning object events after Origin has reconciled or mutated planning state.
 
 When a workflow needs to react to Google provider changes specifically, the canonical provider-backed trigger surface remains the ingress events such as `planning.google-calendar.changed` and `planning.google-tasks.changed` from [provider_ingress_api.md](./provider_ingress_api.md).
+
+For those coarse Google bridge ingress events, v1 automation matching is narrowed by `filters.changeKinds[]` plus `sourceScope.calendarId` / `taskListId` / `entityId` from [automation_api.md](./automation_api.md). Activity `sourceRefs[]` and `entityRefs[]` remain contextual read fields, not additional trigger keys.
 
 The `synced_from_google*` events below are planning-domain audit and lifecycle events, not a second competing provider-ingress trigger surface.
 

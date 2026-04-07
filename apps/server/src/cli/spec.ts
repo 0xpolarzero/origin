@@ -135,8 +135,8 @@ const activityEvent = z.object({
   provider: z.string().optional().describe('Provider key when the event came from provider ingress.'),
   ['poller-id']: z.string().optional().describe('Provider poller id when the event came from provider ingress.'),
   ['source-scope']: activitySourceScope.optional().describe('Canonical provider or entity scope that produced the event.'),
-  ['source-refs']: z.array(z.string()).optional().describe('Provider-side refs or other source refs associated with the event.'),
-  ['entity-refs']: z.array(z.string()).optional().describe('Related Origin entity refs when known.'),
+  ['source-refs']: z.array(z.string()).optional().describe('Provider-side refs or other source refs associated with the event. Context for inspection and debugging; not part of the typed automation trigger contract.'),
+  ['entity-refs']: z.array(z.string()).optional().describe('Related Origin entity refs when known. Context for inspection and debugging; not part of the typed automation trigger contract.'),
   ['upstream-change-boundary']: z
     .string()
     .optional()
@@ -263,6 +263,57 @@ const providerIngressStatus = z.object({
   surfaces: z.array(providerSurfaceStatus).optional().describe('Selected or known provider surfaces.'),
   pollers: z.array(providerPollerStatus).describe('Known pollers across the provider or selected surfaces.'),
   ['last-refreshed-at']: isoDateTime.optional().describe('Most recent provider refresh completion time when known.'),
+})
+
+const providerAuthorityLeaseStatus = z.enum([
+  'active',
+  'grace',
+  'expired',
+  'transferring',
+  'standby',
+])
+
+const providerAuthorityTakeoverReason = z.enum([
+  'bootstrap',
+  'planned_cutover',
+  'operator_forced',
+  'peer_unhealthy',
+  'credential_relink',
+  'repair',
+])
+
+const providerAuthorityHistoryEntry = z.object({
+  ['from-peer-id']: z.string().optional().describe('Prior authoritative peer when one existed.'),
+  ['to-peer-id']: z.string().describe('Next authoritative peer.'),
+  ['from-epoch']: z.number().optional().describe('Prior authority epoch when one existed.'),
+  ['to-epoch']: z.number().describe('New authority epoch recorded for the handoff or takeover.'),
+  reason: providerAuthorityTakeoverReason.describe('Why the handoff or takeover occurred.'),
+  actor: z.string().describe('Actor that requested or confirmed the handoff.'),
+  ['requested-at']: isoDateTime.optional().describe('When the handoff was first requested.'),
+  ['started-at']: isoDateTime.optional().describe('When the handoff began.'),
+  ['completed-at']: isoDateTime.optional().describe('When the handoff finished.'),
+  outcome: z.string().describe('Terminal outcome such as completed, fenced, or failed.'),
+  summary: z.string().describe('Human-readable handoff summary.'),
+})
+
+const providerAuthorityRecord = z.object({
+  id: id('Provider authority record id.'),
+  provider: z.string().describe('Provider key.'),
+  ['scope-ref']: z.string().describe('Opaque exact-match provider authority scope ref emitted by Origin.'),
+  ['authoritative-peer-id']: z.string().describe('Peer currently allowed to run provider workers for this scope.'),
+  ['authority-epoch']: z.number().describe('Current monotonic fencing token for this authority scope.'),
+  ['lease-status']: providerAuthorityLeaseStatus.describe('Current authority lease state.'),
+  ['lease-granted-at']: isoDateTime.optional().describe('When the current lease became active.'),
+  ['lease-heartbeat-at']: isoDateTime.optional().describe('When the active peer last renewed its heartbeat.'),
+  ['lease-duration-seconds']: z.number().optional().describe('Nominal authority-lease duration in seconds.'),
+  ['lease-grace-seconds']: z.number().optional().describe('Additional grace period for lease freshness in seconds.'),
+  ['last-handoff-requested-at']: isoDateTime.optional().describe('When the latest handoff was requested.'),
+  ['last-handoff-started-at']: isoDateTime.optional().describe('When the latest handoff began.'),
+  ['last-handoff-completed-at']: isoDateTime.optional().describe('When the latest handoff completed.'),
+  ['takeover-reason']: providerAuthorityTakeoverReason.optional().describe('Most recent takeover reason when known.'),
+  ['takeover-history']: z.array(providerAuthorityHistoryEntry).optional().describe('Append-only authority handoff history for this scope.'),
+  ['updated-at']: isoDateTime.optional().describe('Most recent authority record update time.'),
+  summary: z.string().describe('Authority summary.'),
 })
 
 const integrationConfig = z.object({
@@ -806,6 +857,7 @@ const emailTriageRecord = z.object({
   state: z.string().describe('Origin triage state.'),
   ['follow-up-at']: isoDateTime.optional().describe('Scheduled follow-up time.'),
   ['linked-task-id']: z.string().optional().describe('Linked task id.'),
+  ['notes-md']: markdown.optional().describe('Internal triage note stored on the canonical email triage record.'),
 })
 
 const emailThread = z.object({
@@ -862,7 +914,7 @@ const githubFollowTarget = z.object({
   reason: z.string().optional().describe('Why this follow target exists.'),
   ['dismissed-at']: isoDateTime.optional().describe('When the current attention state was dismissed.'),
   ['dismissed-by-actor']: z.string().optional().describe('Actor that last dismissed the current attention state.'),
-  ['dismissed-through-cursor']: z.string().optional().describe('Repository refresh cursor boundary through which attention is suppressed. The target resurfaces only after newer activity advances beyond this cursor.'),
+  ['dismissed-through-cursor']: z.string().optional().describe('Repository refresh cursor boundary through which attention is suppressed. `github follow dismiss` stores the containing repo refresh cursor here. Dismissed repo targets resurface after newer GitHub activity in that repo, while dismissed issue or PR targets resurface only after newer activity for the same target ref. Activity elsewhere in the repository does not resurface a dismissed issue or PR target.'),
   ['last-refreshed-at']: isoDateTime.optional().describe('Most recent refresh time for this follow target when known.'),
 })
 
@@ -939,7 +991,7 @@ const githubPullRequestContext = z.object({
 const telegramConnection = z.object({
   status: z.string().describe('Connection status.'),
   ['bot-username']: z.string().optional().describe('Connected bot username.'),
-  ['privacy-mode']: z.string().optional().describe('Observed privacy mode state used for validation.'),
+  ['privacy-mode']: z.string().optional().describe('Observed privacy mode state used for validation. Tracked-group workflows require `disabled` in v1; `enabled` is a recovery/degraded state only.'),
   ['default-mode']: z.enum(['observe', 'participate']).optional().describe('Default participation mode seeded onto newly enabled groups.'),
   ['default-summary-enabled']: z.boolean().optional().describe('Whether summaries are enabled by default for newly registered groups.'),
   ['default-summary-lookback']: duration.optional().describe('Default summary lookback used only to seed group policy when a group has no explicit group lookback.'),
@@ -969,7 +1021,7 @@ const telegramGroupPolicy = z.object({
     .describe('Bot participation mode when the group is enabled.'),
   ['summary-policy']: telegramSummaryPolicy.optional().describe('Per-group canonical summary policy.'),
   ['mention-tracking-enabled']: z.boolean().optional().describe('Whether mention tracking is enabled.'),
-  ['message-cache-enabled']: z.boolean().optional().describe('Whether recent message cache is enabled.'),
+  ['message-cache-enabled']: z.boolean().optional().describe('Whether best-effort recent message caching above the mandatory offline floor is enabled.'),
   summary: z.string().optional().describe('Group policy summary.'),
 })
 
@@ -1009,7 +1061,7 @@ const automationEventFilter = z.object({
   status: z.array(z.string()).optional().describe('Allowed `attributes.status` values carried by the triggering event. This does not match the top-level activity-event outcome status.'),
   labels: z.array(z.string()).optional().describe('Required labels when the event carries label metadata. Matching uses non-empty intersection.'),
   ['review-decisions']: z.array(z.string()).optional().describe('Allowed review decisions when the event carries review metadata. Matching uses non-empty intersection.'),
-  ['summary-trigger-kinds']: z.array(z.string()).optional().describe('Allowed summary trigger kinds when the event carries summary metadata. Matching uses non-empty intersection.'),
+  ['summary-trigger-kinds']: z.array(z.string()).optional().describe('Allowed summary trigger kinds on `telegram.summary.generated` or `telegram.summary.posted` events when they carry summary metadata. Matching uses non-empty intersection.'),
   ['author-roles']: z.array(z.string()).optional().describe('Allowed author roles when the event carries author-role metadata. Matching uses non-empty intersection.'),
   ['is-mention']: z.boolean().optional().describe('Whether the triggering event must carry the normalized mention boolean.'),
 }).strict()
@@ -1220,6 +1272,18 @@ const setupVaultReconcile = z.object({
   status: z.enum(['pending', 'applied', 'canceled']).describe('Current reconcile state.'),
   ['managed-summary']: z.string().optional().describe('Summary of the replicated managed note state relevant to the reconcile.'),
   ['disk-summary']: z.string().optional().describe('Summary of the on-disk markdown content relevant to the reconcile.'),
+  collisions: z
+    .array(
+      z.object({
+        path: path.describe('Workspace-relative markdown path involved in the reconcile collision.'),
+        kind: z
+          .enum(['path-collision', 'memory-path-collision'])
+          .describe('Collision kind. `memory-path-collision` is the reserved `Origin/Memory.md` path.'),
+        summary: z.string().describe('Human-readable collision summary.'),
+      }),
+    )
+    .optional()
+    .describe('Per-path markdown collisions that matter to adopt or replace-target decisions.'),
   ['allowed-resolutions']: z
     .array(z.enum(['adopt', 'keep-current', 'replace-target']))
     .describe('Explicit resolutions the operator may choose before any write occurs.'),
@@ -1982,16 +2046,16 @@ const setup = Cli.create('setup', {
               output: actionResult,
             }),
           )
-          .command('configure', doc({ description: 'Persist initial Telegram onboarding configuration.', options: z.object({ ['privacy-mode']: z.enum(['enabled', 'disabled', 'unknown']).optional().describe('Observed or operator-expected privacy mode state used for validation.'), ['group-ids']: z.array(z.string()).optional().describe('Initial Telegram groups to register.') }), output: actionResult })),
+          .command('configure', doc({ description: 'Persist initial Telegram onboarding configuration.', options: z.object({ ['privacy-mode']: z.enum(['enabled', 'disabled', 'unknown']).optional().describe('Observed or operator-expected privacy mode state used for validation. Tracked-group setup requires `disabled` in v1.'), ['group-ids']: z.array(z.string()).optional().describe('Initial Telegram groups to register.') }), output: actionResult })),
       ),
   )
   .command(
     Cli.create('vault', { description: 'Managed workspace and vault setup inputs.' })
-      .command('init', doc({ description: 'Set or validate the managed workspace root. In v1 the synced vault path is the same root. If the target path is non-empty and this is the first attach, Origin adopts existing markdown files there before any export, adopts an existing `Origin/Memory.md` in place, and leaves non-markdown files local unless explicitly imported later. If replicated note state already exists and the target path is populated, Origin must stop for an explicit reconcile flow that shows managed state and on-disk contents, then requires adopt, keep-current, or replace-target confirmation before any write. Origin must not silently overwrite files. When that reconcile is required, the action result returns a stable `reconcile-id` for the follow-up commands below.', options: z.object({ path, ['create-if-missing']: z.boolean().default(true).describe('Create the workspace root if it does not exist.') }), output: actionResult }))
+      .command('init', doc({ description: 'Set or validate the managed workspace root. In v1 the synced vault path is the same root. If the target path is non-empty and this is the first attach, Origin adopts existing markdown files there before any export, adopts an existing `Origin/Memory.md` in place, and leaves non-markdown files local unless explicitly imported later. Managed markdown paths are unique and `Origin/Memory.md` is reserved for the canonical memory note. If replicated note state already exists and the target path is populated, Origin must stop for an explicit reconcile flow that shows managed state, disk state, and any per-path markdown collisions before any write. Under `adopt`, a same-path managed note keeps its note id and imports disk content as a new revision; disk-only markdown paths create new notes; managed-only paths are re-materialized after reconcile; the reserved `Origin/Memory.md` path always binds to the single canonical memory note. Origin must not silently overwrite files. When that reconcile is required, the action result returns a stable `reconcile-id` for the follow-up commands below.', options: z.object({ path, ['create-if-missing']: z.boolean().default(true).describe('Create the workspace root if it does not exist.') }), output: actionResult }))
       .command(
         Cli.create('reconcile', { description: 'Inspect and apply the explicit first-attach vault reconcile flow when the target path and replicated state both already contain managed note content.' })
           .command('get', doc({ description: 'Get one pending or completed vault reconcile record.', args: z.object({ ['reconcile-id']: id('Vault reconcile id.') }), output: setupVaultReconcile }))
-          .command('apply', doc({ description: 'Apply one explicit vault reconcile decision. `replace-target` requires `confirm-overwrite=true` because it replaces target-path managed markdown content with the replicated state projection.', args: z.object({ ['reconcile-id']: id('Vault reconcile id.') }), options: z.object({ resolution: z.enum(['adopt', 'keep-current', 'replace-target']).describe('Chosen reconcile resolution.'), ['confirm-overwrite']: z.boolean().default(false).describe('Required when `resolution=replace-target`.') }), output: actionResult })),
+          .command('apply', doc({ description: 'Apply one explicit vault reconcile decision. `adopt` imports target-path markdown using relative path as the collision key and preserves existing note ids for same-path managed notes, including the reserved `Origin/Memory.md` note. `replace-target` requires `confirm-overwrite=true` because it replaces target-path managed markdown content with the replicated state projection.', args: z.object({ ['reconcile-id']: id('Vault reconcile id.') }), options: z.object({ resolution: z.enum(['adopt', 'keep-current', 'replace-target']).describe('Chosen reconcile resolution.'), ['confirm-overwrite']: z.boolean().default(false).describe('Required when `resolution=replace-target`.') }), output: actionResult })),
       )
       .command('memory-bootstrap', doc({ description: 'Seed Origin/Memory.md with initial user-provided facts or preferences.', options: z.object({ content: markdown.describe('Initial memory content.') }), output: actionResult })),
   )
@@ -2177,7 +2241,7 @@ const memory = Cli.create('memory', {
       .command(
         'create',
         doc({
-          description: 'Create a supporting memory artifact and link it from memory. Markdown notes become replicated managed notes; non-note artifacts remain local workspace artifacts unless explicitly imported into managed state later.',
+          description: 'Create a supporting memory artifact and link it from memory. Markdown notes become replicated managed notes; non-note artifacts remain local workspace artifacts unless explicitly imported into managed state later. When `kind=note`, the target path must be unique among managed markdown notes and may not be the reserved `Origin/Memory.md` path.',
           options: z.object({
             kind: z.enum(['note', 'folder', 'json', 'csv', 'markdown-table']).describe('Artifact kind.'),
             path,
@@ -2200,7 +2264,7 @@ const memory = Cli.create('memory', {
       .command(
         'move',
         doc({
-          description: 'Move a memory artifact and preserve its link from memory.',
+          description: 'Move a memory artifact and preserve its link from memory. A replicated markdown note artifact must move to a unique managed path and may not target the reserved `Origin/Memory.md` path.',
           args: z.object({ path }),
           options: z.object({
             to: path.describe('Destination path.'),
@@ -2315,12 +2379,12 @@ const workspace = Cli.create('workspace', {
   )
   .command('reindex', doc({ description: 'Reindex the workspace and derived retrieval data.', output: actionResult }))
   .command(
-    Cli.create('bridge', { description: 'Workspace import/export bridge state.' })
-      .command('status', doc({ description: 'Inspect the managed workspace bridge status.', output: workspaceStatus }))
-      .command('scan', doc({ description: 'Scan bridged note files and explicitly managed attachment paths for external changes that Origin can import in v1.', output: actionResult }))
-      .command('import', doc({ description: 'Import detected note-file edits and explicit managed-attachment replacements into replicated managed state.', output: actionResult }))
+    Cli.create('bridge', { description: 'Managed filesystem bridge state for workspace import/export.' })
+      .command('status', doc({ description: 'Inspect managed workspace filesystem-bridge status including watcher/import health.', output: workspaceStatus }))
+      .command('scan', doc({ description: 'Scan bridged note files and explicitly managed attachment paths for importable filesystem changes, including new `.md` files, path moves, deletes, and reserved-path or same-path collisions that require reconcile.', output: actionResult }))
+      .command('import', doc({ description: 'Run a manual workspace filesystem import pass. New `.md` files at new paths become managed notes, uniquely attributable `.md` renames preserve note ids and history, and unmatched `.md` deletes import as managed note deletes. The bridge must surface conflicts instead of guessing when a markdown path collides with another managed note or when `Origin/Memory.md` is renamed or deleted. Actor attribution is derived from the authenticated CLI invoker and source metadata records trigger `manual-cli`; automatic watcher imports use actor `bridge:<peer-id>` with trigger `watcher`.', output: actionResult }))
       .command('export', doc({ description: 'Materialize replicated managed notes and explicitly managed attachments back into workspace files.', output: actionResult }))
-      .command('reconcile', doc({ description: 'Run a full bridge reconcile pass for replicated managed note content and explicitly managed attachments.', output: actionResult })),
+      .command('reconcile', doc({ description: 'Run a full filesystem-bridge reconcile pass for replicated managed note content and explicitly managed attachments, including path collisions, unmatched rename/delete cases, and reserved `Origin/Memory.md` path conflicts.', output: actionResult })),
   )
   .command(
     Cli.create('conflict', { description: 'Inspect and resolve workspace bridge conflicts.' })
@@ -2366,7 +2430,7 @@ const noteCli = Cli.create('note', {
   .command(
     'create',
     doc({
-      description: 'Create a managed note.',
+      description: 'Create a managed note. The target workspace-relative path must be unique among managed notes and may not be the reserved `Origin/Memory.md` path.',
       options: z.object({
         path,
         title: z.string().optional().describe('Optional note title.'),
@@ -2387,9 +2451,9 @@ const noteCli = Cli.create('note', {
       output: actionResult,
     }),
   )
-  .command('move', doc({ description: 'Move a note to a new workspace path.', args: z.object({ ['note-id']: id('Note id.') }), options: z.object({ path }), output: actionResult }))
-  .command('rename', doc({ description: 'Rename a note file.', args: z.object({ ['note-id']: id('Note id.') }), options: z.object({ name: z.string().describe('New file name.') }), output: actionResult }))
-  .command('delete', doc({ description: 'Delete a note.', args: z.object({ ['note-id']: id('Note id.') }), output: actionResult }))
+  .command('move', doc({ description: 'Move a note to a new workspace path. The destination path must be unique among managed notes and may not be the reserved `Origin/Memory.md` path.', args: z.object({ ['note-id']: id('Note id.') }), options: z.object({ path }), output: actionResult }))
+  .command('rename', doc({ description: 'Rename a note file. The resulting path must be unique among managed notes and may not be the reserved `Origin/Memory.md` path.', args: z.object({ ['note-id']: id('Note id.') }), options: z.object({ name: z.string().describe('New file name.') }), output: actionResult }))
+  .command('delete', doc({ description: 'Delete a note. Generic note deletion must refuse the reserved `Origin/Memory.md` note so the canonical memory file remains addressable at that path.', args: z.object({ ['note-id']: id('Note id.') }), output: actionResult }))
   .command(
     'search',
     doc({
@@ -2724,7 +2788,7 @@ const googleTasksCli = Cli.create('google-tasks', {
   .command('pull', doc({ description: 'Import changes from Google Tasks into Origin tasks.', options: z.object({ ['task-list-id']: z.string().optional().describe('Optional Google task list id filter.') }), output: actionResult }))
   .command('push', doc({ description: 'Push Origin task changes to Google Tasks.', options: z.object({ ['task-list-id']: z.string().optional().describe('Optional Google task list id filter.') }), output: actionResult }))
   .command('reconcile', doc({ description: 'Reconcile Origin tasks with Google Tasks state. Remote deletions must surface as detached-preserved local tasks for review rather than silently deleting local state.', options: z.object({ ['task-list-id']: z.string().optional().describe('Optional Google task list id filter.') }), output: actionResult }))
-  .command('attach', doc({ description: 'Attach one task to Google Tasks import or mirroring. `mode=import` binds to an existing Google task and never creates a new remote object. `mode=mirror` may create a remote task when no existing Google task id is supplied. Recurring Origin task series remain Origin-canonical in v1; Google Tasks receives only a lossy root/current-task projection rather than a bridged recurring master/exception graph, so no per-occurrence provider refs or hashes are created there.', args: z.object({ ['task-id']: id('Task id.') }), options: z.object({ ['task-list-id']: z.string().describe('Google task list id.'), ['google-task-id']: z.string().optional().describe('Optional existing Google task id to bind instead of creating a new remote task.'), mode: z.enum(['import', 'mirror']).describe('Attach mode.') }), output: actionResult }))
+  .command('attach', doc({ description: 'Attach one task to Google Tasks import or mirroring. `mode=import` binds to an existing Google task and never creates a new remote object. `mode=mirror` may create a remote task when no existing Google task id is supplied. Recurring Origin task series remain Origin-canonical in v1; Google Tasks receives only a lossy root/current-task projection rather than a bridged recurring master/exception graph. The stable Google Tasks external link stays on the series root, so no per-occurrence provider refs or hashes are created there.', args: z.object({ ['task-id']: id('Task id.') }), options: z.object({ ['task-list-id']: z.string().describe('Google task list id.'), ['google-task-id']: z.string().optional().describe('Optional existing Google task id to bind instead of creating a new remote task.'), mode: z.enum(['import', 'mirror']).describe('Attach mode.') }), output: actionResult }))
   .command('detach', doc({ description: 'Detach one task from Google Tasks mirroring. The local task is preserved, the remote Google task is left untouched, and the local link transitions to `detached`.', args: z.object({ ['task-id']: id('Task id.') }), output: actionResult }))
   .command('reset-cursor', doc({ description: 'Reset one Google Tasks bridge poller cursor as an explicit repair action. Local tasks remain intact and remote Google tasks are not deleted.', options: z.object({ ['poller-id']: z.string().optional().describe('Specific Google Tasks poller id.'), ['task-list-id']: z.string().optional().describe('Optional selected Google task list id.') }), output: actionResult }))
   .command('repair', doc({ description: 'Repair a degraded Google Tasks bridge poller or selected task-list surface after auth, cursor, or reconcile failures. Local tasks remain intact and remote Google tasks are not deleted.', options: z.object({ ['poller-id']: z.string().optional().describe('Specific Google Tasks poller id.'), ['task-list-id']: z.string().optional().describe('Optional selected Google task list id.') }), output: actionResult }))
@@ -2807,11 +2871,11 @@ const email = Cli.create('email', {
       .command('list', doc({ description: 'List triage records.', options: z.object({ state: z.array(z.string()).optional().describe('Triage-state filter.'), limit: z.number().optional().describe('Maximum record count.') }), output: list(emailTriageRecord, 'Email triage records.') }))
       .command('get', doc({ description: 'Get triage metadata for a thread.', args: z.object({ ['thread-id']: id('Thread id.') }), output: emailTriageRecord }))
       .command('set', doc({ description: 'Set Origin triage metadata for a thread. `state=archived` archives the triage overlay only and does not change provider mailbox archive state.', args: z.object({ ['thread-id']: id('Thread id.') }), options: z.object({ state: z.string().describe('Triage state.'), ['follow-up-at']: isoDateTime.optional().describe('Follow-up time.'), ['linked-task-id']: z.string().optional().describe('Linked task id.') }), output: actionResult }))
-      .command('clear', doc({ description: 'Clear triage metadata for a thread.', args: z.object({ ['thread-id']: id('Thread id.') }), output: actionResult })),
+      .command('clear', doc({ description: 'Clear the canonical triage record for a thread, including follow-up, task link, and internal triage note.', args: z.object({ ['thread-id']: id('Thread id.') }), output: actionResult })),
   )
   .command(
     Cli.create('triage-note', { description: 'Internal triage notes for email threads.' })
-      .command('set', doc({ description: 'Set or replace the internal triage note for a thread.', args: z.object({ ['thread-id']: id('Thread id.') }), options: z.object({ body: markdown.describe('Triage note body.') }), output: actionResult })),
+      .command('set', doc({ description: 'Set or replace the internal triage note stored on the canonical triage record for a thread.', args: z.object({ ['thread-id']: id('Thread id.') }), options: z.object({ body: markdown.describe('Triage note body.') }), output: actionResult })),
   )
   .command(
     Cli.create('follow-up', { description: 'Email follow-up metadata.' })
@@ -2828,8 +2892,8 @@ const email = Cli.create('email', {
       .command('status', doc({ description: 'Inspect email cache status, selected mailbox surfaces, and the pollers that hydrate them.', output: providerIngressStatus }))
       .command('warm', doc({ description: 'Warm the recent email cache.', output: actionResult }))
       .command('hydrate', doc({ description: 'Hydrate full bodies or attachments for selected threads.', options: z.object({ ['thread-id']: z.array(z.string()).optional().describe('Thread ids to hydrate.') }), output: actionResult }))
-      .command('pin', doc({ description: 'Pin a thread in the local email cache.', args: z.object({ ['thread-id']: id('Thread id.') }), output: actionResult }))
-      .command('unpin', doc({ description: 'Unpin a thread from the local email cache.', args: z.object({ ['thread-id']: id('Thread id.') }), output: actionResult }))
+      .command('pin', doc({ description: 'Retain a thread in the local email cache. This affects cache eviction only and does not change Origin triage state.', args: z.object({ ['thread-id']: id('Thread id.') }), output: actionResult }))
+      .command('unpin', doc({ description: 'Release a thread from forced local email-cache retention. This affects cache eviction only and does not change Origin triage state.', args: z.object({ ['thread-id']: id('Thread id.') }), output: actionResult }))
       .command('evict', doc({ description: 'Evict cached email state for one thread or the recent cache.', options: z.object({ ['thread-id']: z.string().optional().describe('Optional thread id.') }), output: actionResult })),
   )
   .command(
@@ -2870,7 +2934,7 @@ const github = Cli.create('github', {
       .command('get', doc({ description: 'Get one repository.', args: z.object({ ['repo-id-or-name']: z.string().describe('Stable repo id or owner/name.') }), output: githubRepository }))
       .command('search', doc({ description: 'Search repositories within the local GitHub working set.', options: z.object({ query: z.string().describe('Repository search query.'), limit: z.number().optional().describe('Maximum repo count.') }), output: list(githubRepository, 'Matching repositories.') }))
       .command('context', doc({ description: 'Get one repository with linked Origin overlay context.', args: z.object({ ['repo-id-or-name']: z.string().describe('Stable repo id or owner/name.') }), output: z.object({ repo: githubRepository, ['linked-entities']: z.array(entityRef).optional().describe('Linked Origin entities.'), ['recent-activity']: z.array(activityEvent).optional().describe('Recent related activity.') }) }))
-      .command('follow', doc({ description: 'Follow a repository locally for Origin follow-up. This is sugar for creating or enabling the repo-kind GitHub follow target that defines polling scope.', args: z.object({ ['repo-id-or-name']: z.string().describe('Stable repo id or owner/name.') }), options: z.object({ reason: z.string().optional().describe('Why this repo is followed.') }), output: actionResult }))
+      .command('follow', doc({ description: 'Follow a repository locally for Origin follow-up. This is sugar for creating or enabling the repo-kind GitHub follow target that defines polling scope. If the repo follow target was dismissed earlier, following it again clears the dismissal watermark.', args: z.object({ ['repo-id-or-name']: z.string().describe('Stable repo id or owner/name.') }), options: z.object({ reason: z.string().optional().describe('Why this repo is followed.') }), output: actionResult }))
       .command('unfollow', doc({ description: 'Stop following a repository locally. This is sugar for clearing or disabling the repo-kind GitHub follow target that defines polling scope.', args: z.object({ ['repo-id-or-name']: z.string().describe('Stable repo id or owner/name.') }), output: actionResult }))
       .command('pin', doc({ description: 'Pin a repository in the local working set.', args: z.object({ ['repo-id-or-name']: z.string().describe('Stable repo id or owner/name.') }), output: actionResult }))
       .command('unpin', doc({ description: 'Unpin a repository from the local working set.', args: z.object({ ['repo-id-or-name']: z.string().describe('Stable repo id or owner/name.') }), output: actionResult }))
@@ -2881,9 +2945,9 @@ const github = Cli.create('github', {
     Cli.create('follow', { description: 'Fine-grained follow targets across tracked repositories.' })
       .command('list', doc({ description: 'List follow targets across repositories, issues, and pull requests.', options: z.object({ repo: z.array(z.string()).optional().describe('Repository filters.'), kind: z.array(z.string()).optional().describe('Follow-target kind filter.'), limit: z.number().optional().describe('Maximum target count.') }), output: list(githubFollowTarget, 'GitHub follow targets.') }))
       .command('get', doc({ description: 'Get one follow target.', args: z.object({ ['follow-id']: id('Follow target id.') }), output: githubFollowTarget }))
-      .command('set', doc({ description: 'Create or update a follow target. Repo-kind follow targets are the canonical GitHub working-set scope, while server-owned pollers keep repository refresh cursors.', options: z.object({ repo: z.string().describe('Repository owner/name.'), kind: z.enum(['repo', 'issue', 'pr']).describe('Follow-target kind.'), ['target-ref']: z.string().optional().describe('Issue or PR ref when applicable.'), reason: z.string().optional().describe('Why this matters.') }), output: actionResult }))
+      .command('set', doc({ description: 'Create or update a follow target. Repo-kind follow targets are the canonical GitHub working-set scope, while server-owned pollers keep repository refresh cursors. Updating an existing dismissed target clears its dismissal watermarks and makes it eligible for attention again.', options: z.object({ repo: z.string().describe('Repository owner/name.'), kind: z.enum(['repo', 'issue', 'pr']).describe('Follow-target kind.'), ['target-ref']: z.string().optional().describe('Issue or PR ref when applicable.'), reason: z.string().optional().describe('Why this matters.') }), output: actionResult }))
       .command('clear', doc({ description: 'Clear one follow target.', args: z.object({ ['follow-id']: id('Follow target id.') }), output: actionResult }))
-      .command('dismiss', doc({ description: 'Suppress current attention for one follow target after manual review. This stores the current repository refresh cursor as `dismissed-through-cursor`; the target resurfaces only after newer activity advances beyond that cursor. This does not remove the follow target.', args: z.object({ ['follow-id']: id('Follow target id.') }), output: actionResult }))
+      .command('dismiss', doc({ description: 'Suppress current attention for one follow target after manual review. This stores the current repository refresh cursor as `dismissed-through-cursor`. Repo targets resurface after newer GitHub activity in the same repository; issue and PR targets resurface only after newer activity for that same target ref. This does not remove the follow target.', args: z.object({ ['follow-id']: id('Follow target id.') }), output: actionResult }))
       .command('next', doc({ description: 'Return the next highest-signal follow-up targets.', output: list(githubFollowTarget, 'Next GitHub follow targets.') }))
       .command(
         Cli.create('task', { description: 'Link follow targets to planning tasks.' })
@@ -3001,7 +3065,7 @@ const telegram = Cli.create('telegram', {
       .command('set-token', doc({ description: 'Set or replace the Telegram bot token using a secure handoff ref from an operator-only channel. Do not type raw bot tokens into the agent CLI.', options: z.object({ ['token-ref']: secureRef.describe('Secure handoff ref for the Telegram bot token from BotFather.') }), output: actionResult }))
       .command('revoke', doc({ description: 'Revoke the stored Telegram bot token locally.', output: actionResult }))
       .command('validate', doc({ description: 'Validate the Telegram bot token and configuration.', output: validationResult }))
-      .command('configure', doc({ description: 'Configure tracked Telegram bot behavior such as privacy expectations for validation and default participation mode. Summary defaults only seed new or repaired group policy when that group has no explicit summary lookback; scheduling remains an Automation concern.', options: z.object({ ['privacy-mode']: z.enum(['enabled', 'disabled', 'unknown']).optional().describe('Observed or operator-expected privacy mode state used for validation.'), ['default-mode']: z.enum(['observe', 'participate']).optional().describe('Default participation mode for enabled groups.'), ['default-summary-enabled']: z.boolean().optional().describe('Whether summaries are enabled by default for newly registered groups.'), ['default-summary-lookback']: duration.optional().describe('Default summary lookback for newly registered groups when summaries are enabled.') }), output: actionResult }))
+      .command('configure', doc({ description: 'Configure tracked Telegram bot behavior such as privacy expectations for validation and default participation mode. In v1, tracked-group workflows require validated privacy mode `disabled`; `enabled` leaves groups visible for recovery only. Summary defaults only seed new or repaired group policy when that group has no explicit summary lookback; scheduling remains an Automation concern.', options: z.object({ ['privacy-mode']: z.enum(['enabled', 'disabled', 'unknown']).optional().describe('Observed or operator-expected privacy mode state used for validation. Tracked-group workflows require `disabled` in v1.'), ['default-mode']: z.enum(['observe', 'participate']).optional().describe('Default participation mode for enabled groups.'), ['default-summary-enabled']: z.boolean().optional().describe('Whether summaries are enabled by default for newly registered groups.'), ['default-summary-lookback']: duration.optional().describe('Default summary lookback for newly registered groups when summaries are enabled.') }), output: actionResult }))
       .command('refresh-metadata', doc({ description: 'Refresh bot metadata and membership state from Telegram.', output: actionResult })),
   )
   .command(
@@ -3018,7 +3082,7 @@ const telegram = Cli.create('telegram', {
       .command('list', doc({ description: 'List registered Telegram groups.', output: list(telegramGroupPolicy, 'Registered Telegram group policies.') }))
       .command('get', doc({ description: 'Get one group policy.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), output: telegramGroupPolicy }))
       .command('register', doc({ description: 'Register a group after the bot has been invited. Registration is the step that turns lightweight chat discovery into active Origin tracking and policy management.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), output: actionResult }))
-      .command('enable', doc({ description: 'Enable a group for observation or active bot participation. Summary policy is configured separately.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), options: z.object({ mode: z.enum(['observe', 'participate']).describe('Participation mode for the enabled group.') }), output: actionResult }))
+      .command('enable', doc({ description: 'Enable a group for observation or active bot participation. Summary policy is configured separately. Full tracked-group operation requires validated privacy mode `disabled` in v1.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), options: z.object({ mode: z.enum(['observe', 'participate']).describe('Participation mode for the enabled group.') }), output: actionResult }))
       .command('disable', doc({ description: 'Disable a Telegram group subscription.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), output: actionResult }))
       .command(
         Cli.create('mode', { description: 'Group participation mode.' }).command(
@@ -3035,7 +3099,7 @@ const telegram = Cli.create('telegram', {
         Cli.create('policy', { description: 'Per-group policy controls.' })
           .command('summary-set', doc({ description: 'Set summary policy for a group. This is the canonical per-group summary lookback and overrides connection defaults for that group. Scheduling stays in Automation.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), options: z.object({ enabled: z.boolean().describe('Whether summaries are enabled.'), lookback: duration.optional().describe('Optional summary lookback.') }), output: actionResult }))
           .command('mention-set', doc({ description: 'Set mention tracking policy for a group.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), options: z.object({ enabled: z.boolean().describe('Whether mention tracking is enabled.') }), output: actionResult }))
-          .command('cache-set', doc({ description: 'Set message-cache policy for a group.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), options: z.object({ enabled: z.boolean().describe('Whether recent message caching is enabled.') }), output: actionResult })),
+          .command('cache-set', doc({ description: 'Set message-cache policy for a group. This controls best-effort cache warming and retention above the mandatory offline floor.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), options: z.object({ enabled: z.boolean().describe('Whether additional recent message caching above the mandatory offline floor is enabled.') }), output: actionResult })),
       ),
   )
   .command(
@@ -3178,8 +3242,20 @@ const notificationCli = Cli.create('notification', {
   .command('failures', doc({ description: 'List failed notification deliveries.', output: list(notificationDelivery, 'Failed deliveries.') }))
   .command('retry', doc({ description: 'Retry a failed notification delivery.', args: z.object({ ['delivery-id']: id('Delivery id.') }), output: actionResult }))
 
+const provider = Cli.create('provider', {
+  description: 'Shared provider authority inspection and control.',
+}).command(
+  Cli.create('authority', { description: 'Provider single-writer authority leases, fencing, and handoffs.' })
+    .command('list', doc({ description: 'List known provider authority scopes, authoritative peers, and lease states.', options: z.object({ provider: z.array(z.string()).optional().describe('Optional provider filter.'), ['lease-status']: z.array(providerAuthorityLeaseStatus).optional().describe('Optional lease-status filter.'), ['peer-id']: z.array(z.string()).optional().describe('Optional authoritative peer filter.'), limit: z.number().optional().describe('Maximum scope count.') }), output: list(providerAuthorityRecord, 'Provider authority records.') }))
+    .command('get', doc({ description: 'Get the canonical authority record for one provider scope. Callers must pass the exact emitted `scope-ref` rather than synthesizing their own.', options: z.object({ provider: z.string().describe('Provider key.'), ['scope-ref']: z.string().describe('Exact provider authority scope ref emitted by Origin.') }), output: providerAuthorityRecord }))
+    .command('history', doc({ description: 'Get append-only takeover history for one provider authority scope.', options: z.object({ provider: z.string().describe('Provider key.'), ['scope-ref']: z.string().describe('Exact provider authority scope ref emitted by Origin.') }), output: list(providerAuthorityHistoryEntry, 'Provider authority history entries.') }))
+    .command('transfer', doc({ description: 'Request a durable epoch-incremented handoff to another peer for one provider authority scope.', options: z.object({ provider: z.string().describe('Provider key.'), ['scope-ref']: z.string().describe('Exact provider authority scope ref emitted by Origin.'), ['to-peer-id']: z.string().describe('Peer id that should become authoritative.'), reason: providerAuthorityTakeoverReason.describe('Why the handoff is requested.') }), output: actionResult }))
+    .command('renew', doc({ description: 'Renew the authority heartbeat for one provider scope. This is valid only for the active authoritative peer.', options: z.object({ provider: z.string().describe('Provider key.'), ['scope-ref']: z.string().describe('Exact provider authority scope ref emitted by Origin.') }), output: actionResult }))
+    .command('fence', doc({ description: 'Fence provider work for one provider scope and mark the lease non-active until a valid renew or transfer path completes.', options: z.object({ provider: z.string().describe('Provider key.'), ['scope-ref']: z.string().describe('Exact provider authority scope ref emitted by Origin.'), ['peer-id']: z.string().optional().describe('Optional peer to fence when supported.') }), output: actionResult })),
+)
+
 const sync = Cli.create('sync', {
-  description: 'Replication, provider sync, external-action intents, outbox, and filesystem bridge observability.',
+  description: 'Replication, provider sync, external-action intents, outbox, and filesystem bridge observability with explicit actor/source attribution semantics.',
 })
   .command('overview', doc({ description: 'Show the top-level sync overview across replica, provider, outbox, and bridge.', output: syncStatus }))
   .command('diagnose', doc({ description: 'Diagnose lag, divergence, or queue pressure across sync subsystems.', output: validationResult }))
@@ -3227,11 +3303,11 @@ const sync = Cli.create('sync', {
       .command('resolve', doc({ description: 'Resolve one sync conflict by selecting an explicit candidate or by providing merged or replacement structured payload.', args: z.object({ ['conflict-id']: id('Conflict id.') }), options: payloadResolutionOptions('Merged or replacement structured payload. Required for merge and replace resolutions.'), output: actionResult })),
   )
   .command(
-    Cli.create('bridge', { description: 'Filesystem import/export watcher state.' })
-      .command('status', doc({ description: 'Inspect the note-vault bridge state.', output: syncStatus }))
-      .command('jobs', doc({ description: 'List bridge jobs such as scans and imports.', output: list(bridgeJob, 'Bridge jobs.') }))
-      .command('rescan', doc({ description: 'Rescan the workspace and filesystem bridge inputs.', output: actionResult }))
-      .command('import', doc({ description: 'Import external filesystem edits into replicated state.', output: actionResult }))
+    Cli.create('bridge', { description: 'Filesystem bridge import/export watcher state and attribution behavior.' })
+      .command('status', doc({ description: 'Inspect filesystem-bridge state for watcher imports, manual imports, and export health.', output: syncStatus }))
+      .command('jobs', doc({ description: 'List filesystem-bridge jobs such as scans and imports, including watcher vs manual-cli trigger context.', output: list(bridgeJob, 'Bridge jobs.') }))
+      .command('rescan', doc({ description: 'Rescan the workspace and filesystem-bridge inputs.', output: actionResult }))
+      .command('import', doc({ description: 'Run a manual filesystem import pass. Imported-change actor identity is derived from the authenticated CLI invoker, while source metadata records `source.kind=filesystem` with trigger `manual-cli`. Automatic watcher-triggered imports use actor `bridge:<peer-id>` with trigger `watcher`.', output: actionResult }))
       .command('export', doc({ description: 'Export replicated state back into workspace files.', output: actionResult }))
       .command('reconcile', doc({ description: 'Run a full filesystem bridge reconcile pass.', output: actionResult })),
   )
@@ -3285,6 +3361,7 @@ export const origin = Cli.create('origin', originRootDefinition)
   .command(activity)
   .command(entity)
   .command(notificationCli)
+  .command(provider)
   .command(sync)
 
 export default origin

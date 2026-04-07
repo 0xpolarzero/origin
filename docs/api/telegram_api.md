@@ -37,6 +37,7 @@ The integration is bot-based, not a Telegram user account. Telegram remains the 
 - Group participation depends on the bot being invited to the group.
 - Privacy mode is operator-managed outside Origin; Origin only validates and records the observed state, it does not mutate BotFather configuration itself.
 - With privacy mode disabled, the bot can receive all group messages except messages sent by other bots, subject to Telegram platform rules.
+- In v1, the steady-state tracked-group contract assumes privacy mode `disabled`. If observed privacy mode is `enabled`, Origin may keep groups registered for recovery, but it must not treat them as fully enabled for summaries, ambient observation, or participation that depends on ordinary group traffic.
 - The bot cannot behave as a human user account and cannot inherit user-account capabilities.
 - Telegram API rate limits and platform permissions must be respected.
 
@@ -57,6 +58,18 @@ New chats discovered by polling may create lightweight `TelegramChatRef` discove
 `TelegramBotConnection` and `TelegramRecentMessageCache` are operational read models.
 `TelegramGroupSubscription` is the replicated overlay for tracked group policy and membership state.
 `TelegramOutgoingAction` is the server outbox for Telegram mutations.
+
+### Minimum offline/client contract (v1)
+
+Telegram remains provider-canonical, but Origin guarantees the following minimum client-visible/offline surface for configured bot domains:
+
+- Replicated overlay durability: all `TelegramGroupSubscription` objects and related `ExternalActionIntent` records are fully available offline on every synced client.
+- Connection/status floor: the last successful `TelegramBotConnection` validation snapshot and tracked `TelegramChatRef` metadata remain client-visible offline.
+- Tracked-message floor: for each enabled group subscription, at least the most recent 200 cached messages or 72 hours of message history (whichever is smaller) remains offline-visible after a successful sync.
+- Mention/summarization floor: mention flags, summary policy, and the latest 30 `TelegramSummaryJobRecord` entries per tracked group remain offline-visible.
+- Outbound intent floor: offline send/reply/policy-change requests are durably captured as replicated intent/overlay updates and replay from the authoritative server when connectivity and authority are valid.
+
+Outside these minimums, recent-message cache windows are evictable and may require best-effort provider rehydration.
 
 ## Shared Types
 
@@ -154,6 +167,20 @@ Fields:
 Summary policy and subscription enablement are separate group-level settings.
 `allowedChatIds[]` is an operational allowlist derived from group subscriptions and bot membership, not the source of truth.
 
+Authority-scope rule under the shared provider ingress contract:
+
+- Telegram authority scope is per `TelegramBotConnection`, keyed by the connected bot identity.
+- `allowedChatIds[]`, `TelegramChatRef.tracked`, and `TelegramGroupSubscription` narrow which chats Origin tracks or acts on inside that bot scope, but they do not create separate authority scopes or redefine `accountSetScope`.
+
+`botTokenSecretRef` is the canonical persisted credential reference for the Telegram bot token.
+The token value itself is never stored or echoed as raw plaintext in replicated Telegram domain objects.
+The CLI mutation contract is secure-ref only:
+
+- `telegram connection set-token --token-ref <secure-handoff-ref>`
+
+Raw bot token strings are **not** accepted on the normal agent CLI surface.
+The secure handoff may come directly from an operator-only handoff channel or from a pre-provisioned credential reference flow; either way, the mutation stores/updates `botTokenSecretRef` and the runtime resolves the secret material out-of-band.
+
 ### `TelegramChatRef`
 
 Represents a Telegram chat that Origin cares about.
@@ -205,8 +232,10 @@ Normative model:
 - `summaryLookbackMinutes` is the canonical per-group summary lookback window in minutes. It is context for summary generation, not a posting cadence or scheduler.
 - Automatic summary scheduling is owned by Automation objects. Telegram group policy only gates whether those automations may run or post for the group and provides the default lookback window they should use.
 - If `summaryLookbackMinutes` is unset, the bot connection's `defaultSummaryLookbackMinutes` can be used as the fallback seed when the subscription is created or repaired.
+- `messageCacheEnabled` controls proactive warming or retention above the mandatory offline/client floor; it does not disable that minimum floor for enabled groups after a successful sync.
 - `disabledAt` records when the subscription was last disabled; it is not a separate mode.
 - A discovered chat only becomes actively tracked after an explicit group registration creates or updates this subscription.
+- If the connected bot validates with privacy mode `enabled`, the subscription remains visible for recovery but is treated as disabled/degraded for tracked-group workflows until privacy mode is corrected.
 - If the bot loses membership or the permissions needed for the requested mode, Origin must mark the subscription disabled, refresh the chat ref, and surface the loss as a validation / recovery problem until the operator restores access and re-registers or re-enables the group.
 
 ### `TelegramRecentMessageCache`
@@ -302,12 +331,18 @@ Search should be limited to what Origin has cached or can reasonably fetch on de
 
 ### Connection management
 
-- set bot token
+- set bot token via secure handoff ref or credential reference (`telegram connection set-token --token-ref <secure-handoff-ref>`)
 - validate bot token
 - revoke bot token
 - update bot display metadata
 - record or update the privacy-mode expectation Origin should validate
 - configure default participation settings
+
+`set-token` input contract is strict:
+
+- required input: `token-ref` (opaque secure handoff / credential reference)
+- forbidden input on normal agent CLI: raw bot token strings
+- successful mutation effect: update `TelegramBotConnection.botTokenSecretRef`
 
 ### Group participation
 
@@ -398,6 +433,8 @@ That canonical ingress family is:
 - generic ingress lifecycle: `provider.ingress.started`, `provider.ingress.completed`, `provider.ingress.failed`
 - tracked-chat message changes: `telegram.message.received`, `telegram.message.mentioned`
 
+Canonical Telegram summary lifecycle activity kinds in v1 are `telegram.summary.generated` and `telegram.summary.posted`. They are Telegram-domain first-party activity emitted from `TelegramSummaryJobRecord` lifecycle, not provider-ingress message events, and they carry `sourceScope.chatId` plus `attributes.summaryTriggerKind`.
+
 Bot validation, group subscription changes, participation-policy changes, summary-job records, and outbound action outcomes may still appear in Telegram-domain activity, but they are not alternate provider-backed trigger kinds for the same Telegram message.
 
 The Telegram integration must emit activity events for:
@@ -444,7 +481,7 @@ Each activity event should include:
 The integration should expose a small, composable CLI surface such as:
 
 - `telegram connection status`
-- `telegram connection set-token`
+- `telegram connection set-token --token-ref <secure-handoff-ref>`
 - `telegram connection configure`
 - `telegram chat list`
 - `telegram chat get`
@@ -457,6 +494,13 @@ The integration should expose a small, composable CLI surface such as:
 - `telegram message send`
 - `telegram message reply`
 - `telegram summary list`
+
+Canonical token-handoff contract for the CLI surface:
+
+- `telegram connection set-token` accepts `token-ref` only.
+- Raw bot tokens are not valid input on the normal agent CLI surface.
+- The command writes/updates `TelegramBotConnection.botTokenSecretRef`; secret resolution happens through secure handoff infrastructure.
+- Onboarding must produce that `token-ref` through operator-only secure handoff (or equivalent secure credential reference) before this mutation runs.
 
 The exact command names can vary, but the model should be structured around the actions above.
 
