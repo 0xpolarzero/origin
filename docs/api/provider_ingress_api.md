@@ -70,114 +70,46 @@ So:
 - Clients never enqueue provider outbox records directly. They sync Origin-owned intent or overlay mutations, and the server materializes provider-specific outbox records from those replicated changes before dispatch.
 - Clients consume provider domains through server-mediated read models and activity rather than full replicated provider mirrors.
 
-## Provider Authority Contract
+## Provider Execution Home (v1)
 
-Provider ingress and provider outbox dispatch are single-writer per provider account-set scope.
+In v1, provider ingress and provider outbox dispatch run on exactly one machine per profile.
 
-Canonical authority object: `ProviderAuthorityRecord`
+This is the high-level rule:
 
-Required v1 fields:
+- in `local` mode, the local machine is the provider execution home
+- in `vps` mode, the VPS/server is the provider execution home
+- only that machine runs provider pollers, advances provider cursors, and dispatches provider outbox work
+- every other peer only syncs first-party state, reads server-mediated provider state, and queues `ExternalActionIntent` records for later execution
 
-- `id`
-- `provider`
-- `accountSetScope`
-  - exact provider authority boundary for lease, fencing, and dedupe
-  - choose the smallest stable provider surface that Origin can lease independently; this may be the connected provider account itself or one explicitly selected provider sub-surface
-  - never derive it from mutable Origin-local working-set or attachment state such as GitHub follow targets, Telegram group subscriptions, or per-object Google bridge links
-  - if a provider exposes multiple independently selected sub-surfaces, Origin creates one `ProviderAuthorityRecord` per selected sub-surface rather than one scope keyed by the whole current selection set
-  - v1 examples: mailbox id; connected GitHub account + one selected installation grant `installationId`; connected Telegram bot identity; connected Google account + one selected calendar id; connected Google account + one selected task-list id
-- `authoritativePeerId`
-- `authorityEpoch`
-  - monotonic fencing token; all provider cursor advances and provider write paths must verify it
-- `leaseStatus`
-  - `active`
-  - `grace`
-  - `expired`
-  - `transferring`
-  - `standby`
-- `leaseGrantedAt`
-- `leaseHeartbeatAt`
-- `leaseDurationSeconds`
-- `leaseGraceSeconds`
-- `lastHandoffRequestedAt`
-- `lastHandoffStartedAt`
-- `lastHandoffCompletedAt`
-- `takeoverReason`
-  - `bootstrap`
-  - `planned_cutover`
-  - `operator_forced`
-  - `peer_unhealthy`
-  - `credential_relink`
-  - `repair`
-- `takeoverHistory[]`
-  - append-only handoff/takeover records with `fromPeerId`, `toPeerId`, `fromEpoch`, `toEpoch`, `reason`, `actor`, `requestedAt`, `startedAt`, `completedAt`, `outcome`
-- `updatedAt`
+If the user deploys a VPS, the VPS is the only machine allowed to talk to Gmail, GitHub, Telegram, Google Calendar, or Google Tasks on Origin's behalf. A laptop or phone may record local changes and queue intent, but it does not run provider workers itself.
 
-`accountSetScope` is the exact authority boundary. A peer may hold authority for one scope and standby for another. The durable coordination-store home and serialized encoding remain implementation-defined; only the logical boundary above is normative. CLI/API surfaces expose the boundary as an opaque exact-match `scope-ref`.
+Selected provider surfaces still matter, but only as server-side scope:
 
-## Authority Runtime Semantics
+- email narrows to the connected mailbox
+- GitHub narrows by the selected installation grants and followed repos inside them
+- Telegram narrows by the connected bot plus the chats/groups Origin tracks inside that bot
+- Google Calendar narrows by the selected calendars
+- Google Tasks narrows by the selected task lists
 
-### Enforceable single-writer rule
-
-Provider pollers, provider cursor advancement, and provider outbox dispatch for a scope may run only when all are true:
-
-- local peer id equals `authoritativePeerId`
-- `leaseStatus=active`
-- heartbeat freshness is within `leaseDurationSeconds + leaseGraceSeconds`
-- the executing operation carries the current `authorityEpoch` and passes fencing verification
-
-Any failed check must fence the operation and surface an authority error.
+These selected surfaces do not let another peer become a provider worker in v1. They only tell the one provider execution home what to watch and where it may write.
 
 ### Cutover semantics
 
-Cutover is a durable state transition, not a best-effort sequence.
+Moving provider work from one machine to another is a deployment or recovery cutover, not a runtime contest between peers.
 
-Required order:
+Required v1 order:
 
-1. write transfer intent (`lastHandoffRequestedAt`, target peer, reason)
-2. atomically increment `authorityEpoch` and set `authoritativePeerId` to target with `leaseStatus=transferring`
-3. old peer observes higher/non-local epoch and fences itself (stop pollers, stop outbox dispatch, reject provider writes)
-4. target peer proves readiness, starts heartbeat, and transitions lease to `active`
-5. record `lastHandoffCompletedAt` and append takeover history entry with outcome
+1. bring the new provider execution home up
+2. sync replicated Origin state there
+3. re-establish provider credentials and provider-local operational state there
+4. stop provider pollers, cursor advancement, and outbound provider actions on the old machine
+5. start provider workers on the new machine
 
-Stop-before-start remains recommended operationally, but epoch fencing is the hard split-brain prevention contract.
+In short:
 
-### Restart semantics
+`exactly one machine runs provider sync/write work at a time`
 
-- Restart must not restore authority from process memory.
-- On startup, a peer must read `ProviderAuthorityRecord` from durable storage before starting any provider workers.
-- If local peer is authoritative, it must renew heartbeat and re-validate epoch fencing before resuming pollers/outbox.
-- If local peer is not authoritative or lease is stale, it must enter standby and expose recovery status only.
-
-### Bootstrap conflict behavior
-
-If multiple peers bootstrap concurrently for the same `accountSetScope`:
-
-- authority acquisition must be atomic on `(provider, accountSetScope)`
-- only one peer may commit the next epoch
-- losers must enter `standby` and must not run provider workers for that scope
-- if conflicting stale workers are detected, provider writes/cursor advances with stale epoch must fail fencing checks and become no-ops
-
-## Authority Control Surface
-
-Authority is runtime-operable through CLI/API.
-
-Required inspect/operate surface in v1 (documentation-first; implementation may land incrementally):
-
-- `provider authority list`
-- `provider authority get --provider <provider> --scope-ref <scope-ref>`
-- `provider authority history --provider <provider> --scope-ref <scope-ref>`
-- `provider authority transfer --provider <provider> --scope-ref <scope-ref> --to-peer <peer-id> --reason <reason>`
-- `provider authority renew --provider <provider> --scope-ref <scope-ref>`
-- `provider authority fence --provider <provider> --scope-ref <scope-ref> [--peer <peer-id>]`
-
-Minimum behavior:
-
-- `get` returns the canonical `ProviderAuthorityRecord`
-- `history` returns the append-only takeover history for the scope
-- `transfer` performs epoch-incremented durable handoff semantics
-- `renew` updates lease heartbeat only for the active authoritative peer
-- `fence` forces local worker stop and marks lease non-active until a valid renew/transfer path completes
+Because v1 has one provider execution home, Origin does not need a runtime system for choosing which peer owns provider work. The canonical v1 CLI therefore has no separate command family for that.
 
 ## Offline Intent Handoff
 
@@ -185,10 +117,10 @@ When a device is offline and the user or agent requests an external action:
 
 1. the client writes replicated Origin state locally, including any first-party overlay changes and the durable external-action intent
 2. that intent carries a stable intent id plus the target provider scope needed for later materialization
-3. that replicated state syncs to the server when connectivity returns
-4. the server validates the intent against provider auth and current scope
-5. the server creates or updates the provider-specific outbox record, carrying forward the same intent id as the origin link and dedupe root
-6. provider dispatch, retry, and dedupe happen from the server-owned outbox
+3. that replicated state syncs to the provider execution home when connectivity returns
+4. the provider execution home validates the intent against provider auth and current scope
+5. the provider execution home creates or updates the provider-specific outbox record, carrying forward the same intent id as the origin link and dedupe root
+6. provider dispatch, retry, and dedupe happen from the server-owned outbox on that machine
 
 For planning bridges, that durable external-action intent is the local request to attach, detach, pull, push, or reconcile a selected Google surface; it is not a guarantee that the provider side effect has already happened.
 
@@ -196,7 +128,7 @@ This keeps offline behavior local-first without pretending provider outboxes are
 
 ## `ExternalActionIntent`
 
-`ExternalActionIntent` is the shared replicated first-party handoff object for offline or peer-local actions that eventually need provider or job execution on the authoritative server.
+`ExternalActionIntent` is the shared replicated first-party handoff object for offline or peer-local actions that eventually need provider or job execution on the provider execution home.
 
 Required v1 fields:
 
@@ -219,7 +151,7 @@ Required v1 fields:
 - `lastError`
 - `outboxRefs[]`
 
-`provider` is optional when the intent targets an internal subsystem job rather than a third-party provider. `scope` remains required in either case because it is the authoritative materialization and dedupe boundary.
+`provider` is optional when the intent targets an internal subsystem job rather than a third-party provider. `scope` remains required in either case because it is the materialization and dedupe boundary.
 
 Canonical v1 status model:
 
@@ -229,14 +161,14 @@ Canonical v1 status model:
 - `failed`
 - `canceled`
 
-`pending` covers both cases where the intent has not yet replicated to the authoritative server and where it has replicated but has not yet been materialized into provider or job outbox work.
+`pending` covers both cases where the intent has not yet replicated to the provider execution home and where it has replicated but has not yet been materialized into provider or job outbox work.
 
 Normative lifecycle:
 
 1. a device or server peer records the intent in replicated state with a stable intent id
-2. the authoritative server validates auth and scope after the intent reaches it while the intent remains `pending`
-3. the authoritative server creates or updates at most one logical provider/job outbox record per `(intent id, provider, scope)`
-4. the intent transitions to `materialized` once the authoritative outbox linkage is durable
+2. the provider execution home validates auth and scope after the intent reaches it while the intent remains `pending`
+3. the provider execution home creates or updates at most one logical provider/job outbox record per `(intent id, provider, scope)`
+4. the intent transitions to `materialized` once the outbox linkage on the provider execution home is durable
 5. downstream dispatch/retry happens from the server-owned outbox while the intent remains the origin link and dedupe root
 6. the intent transitions to `succeeded`, `failed`, or `canceled` when the logical action reaches a terminal state
 
@@ -612,8 +544,8 @@ The important contract is:
 
 ### GitHub
 
-- one logical poller pass per selected GitHub installation-grant authority scope over the followed repos covered by that grant
-- follow targets define Origin's local working set and attention model within those grant scopes
+- one server-side poller pass over the followed repos covered by the selected installation grants
+- follow targets define Origin's local working set and attention model within those server-side scopes
 - cache stores selected repo / issue / PR / review state
 - server pollers own repository cursors and refresh state
 - follow-target dismissal is overlay state, not cache state: `dismissedThroughCursor` stores the repo refresh cursor watermark, and automatic resurfacing requires a later refresh beyond that watermark plus newer matching target activity
@@ -621,7 +553,7 @@ The important contract is:
 
 ### Telegram
 
-- one bot-update poller per Telegram bot authority scope; tracked chats narrow work inside that scope
+- one server-side bot-update poller for the connected Telegram bot; tracked chats narrow work inside that scope
 - cache stores recent tracked messages plus server read models for bot/chat state
 - `TelegramGroupSubscription` is the replicated overlay for tracked-group policy; connection state, recent message caches, and outgoing actions remain server-owned operational state
 - summary lifecycle events are downstream Telegram-domain activity emitted after automation or outbox work, not alternate provider-ingress message events
@@ -641,7 +573,6 @@ Instead:
 
 - integration-specific `refresh` commands control ingress
 - integration-specific `cache` commands control current-state caches
-- `provider authority ...` inspects and controls provider account-set authority leases and transfers
 - automations target normalized activity-event triggers
 - `sync intent ...` inspects, retries, and cancels the replicated external-intent layer that feeds provider outboxes
 

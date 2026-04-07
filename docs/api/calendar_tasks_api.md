@@ -18,7 +18,7 @@ This document defines the full v1 API surface for Origin's planning domain:
 - Google Tasks sync
 - planning read models used by the app and by the agent CLI
 
-The planning domain is first-party. Google Calendar and Google Tasks are bidirectional sync targets and import sources, not the primary internal model.
+The planning domain is first-party. Google Calendar is a bidirectional sync target and import source for calendar items. Google Tasks is a bidirectional sync target and import source only for non-recurring task links. Neither is the primary internal model.
 
 `docs/api/origin_incur_cli.ts` is the stable documentation entrypoint for the canonical CLI contract for this domain. That file re-exports the app-owned CLI spec from `apps/server/src/cli/spec.ts`. This document is normative on planning semantics and command families, but exact CLI spellings, nesting, flags, examples, and output schemas come from the canonical CLI contract.
 
@@ -32,7 +32,7 @@ The planning domain is first-party. Google Calendar and Google Tasks are bidirec
 - Direct agent reasoning should target Origin planning objects, not raw Google event semantics
 - API design should feel closer to Linear than to a thin calendar wrapper
 - Calendar items sync with Google Calendar events
-- Tasks sync with Google Tasks tasks
+- Non-recurring tasks sync with Google Tasks tasks
 
 ## Non-Goals For V1
 
@@ -276,14 +276,14 @@ Represents a unit of work in Origin's first-party planning system.
 
 ### Google Tasks sync semantics
 
-- A task may optionally be synchronized with Google Tasks
+- A non-recurring task may optionally be synchronized with Google Tasks
 - The task remains the canonical planning object; Google Tasks is an external synchronized representation
 - Some Origin task fields are richer than Google Tasks and therefore remain Origin-only
 - In particular:
   - `dueFrom` has no direct Google Tasks equivalent
   - dependency edges remain Origin-only
-  - recurrence remains Origin-canonical and does not round-trip as a full Google Tasks recurring series in v1
-  - Google Tasks v1 does not model the full Origin recurrence series, exception graph, or planning-bridge relationship graph
+  - recurring Origin tasks are not attachable to Google Tasks in v1
+  - Google Tasks v1 does not model the full Origin recurrence series, exception graph, or recurring-task linkage model
 
 ### Recurrence semantics
 
@@ -480,32 +480,32 @@ Planning objects may keep external linkage metadata.
 ### Lifecycle rules
 
 - External links carry `syncMode: "import" | "mirror" | "detached"`
-- For recurring series, `attach` and `detach` apply at the series root; explicit exception occurrences may additionally carry per-occurrence `providerRef` / `providerHash` in recurrence metadata when the provider exposes distinct remote exception objects
+- For recurring Google Calendar series, `attach` and `detach` apply at the series root; explicit calendar exception occurrences may additionally carry per-occurrence `providerRef` / `providerHash` in recurrence metadata when Google Calendar exposes distinct remote exception objects. Recurring tasks are not attachable to Google Tasks in v1
 - `attach` creates or updates the stable external link for an Origin object
 - `attach` targets a selected Google bridge surface. If the referenced calendar or task list is not already selected as an active bridge surface, the canonical CLI/runtime must refuse the attach and require explicit surface selection first rather than silently creating an implicit bridge scope
 - If provider object ids are supplied by the canonical CLI/runtime, `attach` may bind the Origin object to an existing Google event or Google task instead of creating a fresh external object
 - The planning object remains the source of truth for its own external-link metadata; the selected Google calendar or task list is the server-owned bridge surface that defines where that link may dispatch
-- `attach`, `detach`, `pull`, `push`, and `reconcile` are server-owned provider actions even when they are requested from another peer. If one is requested while a peer is offline, Origin records the requested bridge state locally first and treats provider dispatch as pending until the authoritative server-owned bridge job applies it under the shared provider-authority contract
+- `attach`, `detach`, `pull`, `push`, and `reconcile` are server-owned provider actions even when they are requested from another peer. If one is requested while a peer is offline, Origin records the requested bridge state locally first and treats provider dispatch as pending until the provider execution home applies it
 - `syncMode = "import"` binds to an existing external object or selected bridge surface and imports shared external fields into Origin on the next pull or reconcile; it does not create a new remote object and it never propagates destructive local deletes or cancels outward
-- `syncMode = "mirror"` means Origin and Google sync bidirectionally through the stable external link, and a remote object may be created if no provider object id is already bound
+- `syncMode = "mirror"` means Origin and Google sync bidirectionally through the stable external link, and a remote object may be created if no provider object id is already bound. For Google Tasks, this applies only to non-recurring Origin tasks
 - Pull or reconcile must match a remote Google object to an existing Origin object by stable bridge linkage first. If no stable link exists, the bridge creates a new Origin object rather than heuristically merging by title, time, or other fuzzy fields; binding an existing local object to that remote object requires explicit attach or repair flow
 - For recurring Google Calendar events, the Google master maps to the Origin series root and a Google exception instance maps to an explicit Origin exception keyed by `occurrenceKey`
 - The series root's Google master id and hash stay in `externalLinks[]`; per-occurrence Google exception ids and hashes stay on explicit exception recurrence metadata
 - Mirror mode exports explicit Origin calendar exceptions back as Google Calendar exceptions when the provider supports them
 - Import mode keeps Origin canonical; Google Calendar exceptions are read as external representations of Origin exceptions, not as a separate series branch
-- Google Tasks v1 does not model or mirror a remote recurring master/exception graph; recurring Origin tasks remain Origin-only series and any linked Google task is a lossy root/current-task projection
-- For recurring Origin tasks linked to Google Tasks, the stable `google-tasks` external link remains on the series root in `externalLinks[]`; explicit exception and derived occurrences do not get separate Google Tasks linkage in v1
-- Google Tasks recurrence linking never creates per-occurrence provider refs or hashes in v1 because the bridge has no recurring master/exception identity model there
+- Google Tasks v1 does not model or mirror a remote recurring master/exception graph
+- Recurring Origin task series are not attachable to Google Tasks in v1; the canonical runtime must reject `attach` or mirror setup for recurring tasks there
+- Google Tasks recurrence linking therefore never creates per-occurrence provider refs or hashes in v1
 - If a provider deletes one occurrence of a recurring series, Origin preserves the series root and records that occurrence as an explicit canceled or skipped exception
 - If the linked Google object is deleted or otherwise disappears remotely, Origin preserves the local object, detaches the external link, and records the situation for review or conflict resolution
 - `detach` leaves the external provider object untouched, preserves the local object, and changes the local link state to `detached`
 - `syncMode = "detached"` is an inert local preservation state. Detached links are excluded from automatic pull/push until an explicit attach or repair action re-binds them to a selected bridge surface
 
-Authority-scope rule under the shared provider ingress contract:
+Operational ownership under the shared provider ingress model:
 
-- Google Calendar authority is per selected calendar bridge surface, keyed by the connected Google account plus `calendarId`
-- Google Tasks authority is per selected task-list bridge surface, keyed by the connected Google account plus `taskListId`
-- Individual `attach` / `detach` operations and planning-object `externalLinks[]` route through an existing selected bridge surface; they never create, split, or rename provider authority scope
+- Google Calendar work runs only on the provider execution home and is narrowed there by the selected calendar bridge surfaces
+- Google Tasks work runs only on the provider execution home and is narrowed there by the selected task-list bridge surfaces
+- Individual `attach` / `detach` operations and planning-object `externalLinks[]` route through an existing selected bridge surface; they do not create another provider worker home
 
 ## Planning Relationships
 
@@ -547,7 +547,7 @@ Any command examples in this document are illustrative summaries of the canonica
 
 - Selected Google calendars are bridge surfaces configured during onboarding or integration setup, not ad hoc per-item attachments
 - Each selected calendar has a server-owned poller and cursor under the shared provider ingress model
-- Bridge pollers, cursor advancement, and outbound Google Calendar writes run only on the peer that currently holds provider authority for that selected calendar scope
+- Bridge pollers, cursor advancement, and outbound Google Calendar writes run only on the provider execution home
 - Origin planning objects stay canonical; the selected Google calendar is the external bridge surface that feeds or receives those objects
 - Status and repair live on the canonical CLI; this document does not define a separate operational surface
 - Use canonical CLI surfaces such as `origin planning google-calendar status`, `origin planning google-calendar reset-cursor`, and `origin planning google-calendar repair`
@@ -579,23 +579,23 @@ Any command examples in this document are illustrative summaries of the canonica
 
 - Selected Google task lists are bridge surfaces configured during onboarding or integration setup, not ad hoc per-item attachments
 - Each selected task list has a server-owned poller and cursor under the shared provider ingress model
-- Bridge pollers, cursor advancement, and outbound Google Tasks writes run only on the peer that currently holds provider authority for that selected task-list scope
+- Bridge pollers, cursor advancement, and outbound Google Tasks writes run only on the provider execution home
 - Origin planning objects stay canonical; the selected Google task list is the external bridge surface that feeds or receives those objects
 - Status and repair live on the canonical CLI; this document does not define a separate operational surface
 - Use canonical CLI surfaces such as `origin planning google-tasks status`, `origin planning google-tasks reset-cursor`, and `origin planning google-tasks repair`
 
 ### Domain rules
 
-- The Google Tasks bridge syncs Origin tasks with Google Tasks tasks
+- The Google Tasks bridge syncs Google Tasks tasks with eligible non-recurring Origin tasks
 - Imported Google Tasks entries create or update Origin tasks
-- Exported Origin tasks push to Google Tasks through stable external links
+- Exported non-recurring Origin tasks push to Google Tasks through stable external links
 - Google Tasks limitations do not reduce Origin's canonical task model
 - Google Tasks v1 is a flat task-list bridge, not a full planning mirror
 - Fields unsupported by Google Tasks remain Origin-only metadata and are not expected to round-trip losslessly
 - In v1, the bridge does not model the full Origin recurrence series, exception graph, dependency graph, project/label topology, or calendar-link relationships as first-class Google Tasks state
-- Recurring Origin tasks may still be linked to Google Tasks, but the linked Google task is a lossy projection of the root/current task state rather than a bridged recurring series
+- Recurring Origin tasks are not mirrored to Google Tasks in v1. The bridge supports only non-recurring task links there
 - `syncMode = "import"` for Google Tasks binds to an existing Google task or selected task-list import path; it does not create a remote task
-- `syncMode = "mirror"` for Google Tasks may create or update a remote Google task for the root/current task state, but never creates a recurring master/exception graph
+- `syncMode = "mirror"` for Google Tasks may create or update a remote Google task for one non-recurring Origin task, but never creates a recurring master/exception graph
 - `dueFrom` remains Origin-only; Google Tasks can at best carry a simplified due value
 
 ### Representative canonical bridge commands
@@ -691,6 +691,6 @@ The `synced_from_google*` events below are planning-domain audit and lifecycle e
 - Support task dependencies through `blockedByTaskIds[]`
 - Support recurring task series
 - Support task-to-calendar linking
-- Support bidirectional Google Tasks sync for tasks
+- Support bidirectional Google Tasks sync for non-recurring tasks
 - Support recurring calendar item series
 - Support bidirectional Google Calendar sync for calendar items

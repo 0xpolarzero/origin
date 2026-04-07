@@ -87,7 +87,7 @@ GitHub remains provider-canonical, but Origin guarantees the following minimum c
 - Repository snapshot floor: at least metadata for the most recent 100 tracked repositories (or all tracked repositories when fewer than 100) remains offline-visible from the last sync.
 - Issue/PR snapshot floor: for each tracked repository, at least the most recent 50 cached issue/PR snapshots touched in the last 30 days remain offline-visible, including title/state/labels/assignees/review-decision summaries.
 - Discussion snapshot floor: for each cached issue/PR snapshot, at least the most recent 20 comments/reviews remain offline-visible as cached summaries/snippets.
-- Outbound intent floor: offline GitHub mutations are durably captured as replicated intent plus server outbox linkage and replay once the authoritative server regains connectivity and valid grant scope.
+- Outbound intent floor: offline GitHub mutations are durably captured as replicated intent plus server outbox linkage and replay once the provider execution home regains connectivity and valid grant scope.
 
 Outside these minimums, colder provider-derived snapshots may be evicted and re-fetched from GitHub.
 
@@ -144,11 +144,11 @@ Required behavior:
 - if scope later shrinks, Origin preserves the local repo/follow objects, marks the affected repo as out of provider scope, and stops direct GitHub actions until the operator refreshes or changes grant selection
 - validation should explain which selected grants are active, which are revoked or stale, and which repositories currently fall outside actionable scope
 
-Authority-scope rule under the shared provider ingress contract:
+Operational ownership under the shared provider ingress model:
 
-- GitHub authority scope is per selected `GitHubInstallationGrant`, keyed by the connected GitHub account plus `installationId`.
-- `selectedRepositories[]`, derived `accessibleRepositories[]`, and `GitHubFollowTarget` objects narrow work inside that grant scope, but they do not redefine `accountSetScope`.
-- If multiple grants are selected, Origin represents them as multiple GitHub authority scopes, one per selected grant.
+- GitHub pollers and outbound GitHub actions run only on the provider execution home.
+- Selected `GitHubInstallationGrant` records and any `selectedRepositories[]` narrowing tell that one machine which repositories it may read or write.
+- `GitHubFollowTarget` objects narrow local attention and poll scope inside that server-side working set; they do not turn other peers into provider workers.
 
 Required grant-management surface:
 

@@ -128,12 +128,11 @@ Origin should feel like a personal chief-of-staff that can actually operate. The
 - Preferred v1 shape: a single Linux VPS, compatible with Hetzner-style deployment, where Origin runs directly on the host machine
 - Preferred v1 service model: bare-metal / systemd-first rather than container-first, because the agent should be able to use the VPS like its own machine
 - If the user later moves from local to VPS mode, replicated app state syncs to the VPS first, while secrets and provider operational state are re-established there instead of opaque-migrated.
-- Provider authority cutover follows the provider-ingress authority contract, not only process ordering.
-- Cutover requires a durable authority transfer record for the provider account set scope, monotonic authority epoch increment, and lease handoff timestamps before the new peer may start pollers or provider outbox dispatch.
-- A peer may execute provider ingress or provider outbox work only while it holds the active authority lease for that exact provider account set scope.
-- Every provider write path and cursor advance must carry and verify the active authority epoch as a fencing token.
-- Bootstrap or restart on any peer must perform authority-lease verification first; if another peer holds authority, the restarting peer stays standby and must not run provider workers for that scope.
-- At most one peer is authoritative for a provider account set at a time, enforced by authority epoch + lease fencing rather than stop-before-start ordering alone.
+- In v1, exactly one machine runs provider sync and outbound provider actions for a profile.
+- In `local` mode, that machine is the local Origin host.
+- In `vps` mode, that machine is the VPS/server.
+- Other peers never run provider pollers, advance provider cursors, or dispatch provider outbox work; they only sync first-party state and queue provider-targeted intent.
+- Moving provider work from one machine to another is a deployment cutover: bring the new server up, sync Origin state there, re-establish provider credentials there, stop provider workers on the old machine, then start them on the new one.
 
 ### Action Surface
 
@@ -158,58 +157,45 @@ Origin should distinguish between:
 - Provider ingress operational state is server-local operational state: pollers, cursors, backoff/rate-limit state, provider execution queues, and primary provider caches.
 - A domain may define explicit Origin-owned overlays or linkage metadata as replicated first-party state, but provider-derived caches are not peer-replicated source-of-truth.
 - Examples of replicated provider-domain overlays in v1 are `EmailTriageRecord`, `GitHubFollowTarget`, and `TelegramGroupSubscription`.
-- Clients do not write provider outboxes directly. Offline or local user intent syncs as replicated first-party external-action intent state, and the server materializes provider-specific outbox records from that intent when it is online and authorized to act.
+- Clients do not write provider outboxes directly. Offline or local user intent syncs as replicated first-party external-action intent state, and the provider execution home materializes provider-specific outbox records from that intent when it is online and authorized to act.
 - An `ExternalActionIntent` is a replicated first-party record with a stable intent id, target/scope metadata, action kind, payload, actor/timestamp attribution, and lifecycle status.
 - V1 intent lifecycle is: `pending -> materialized -> succeeded|failed|canceled`.
-- `pending` covers both "recorded durably on a peer but not yet replicated to the authoritative server" and "seen by the authoritative server but not yet materialized into durable provider or job outbox work."
-- `materialized` means the authoritative server has created provider or job outbox work from that intent.
+- `pending` covers both "recorded durably on a peer but not yet replicated to the provider execution home" and "seen by the provider execution home but not yet materialized into durable provider or job outbox work."
+- `materialized` means the provider execution home has created provider or job outbox work from that intent.
 - `succeeded`, `failed`, and `canceled` are durable terminal states for the logical intent itself, even if the underlying provider outbox has its own attempt history.
-- The authoritative server must materialize at most one logical provider or job action per intent id plus provider scope, and every derived outbox record carries that same intent id forward as its origin link and dedupe root.
+- The provider execution home must materialize at most one logical provider or job action per intent id plus provider scope, and every derived outbox record carries that same intent id forward as its origin link and dedupe root.
 - The CLI must expose inspect and repair surfaces for these intents rather than hiding them entirely behind provider-specific outboxes, including `sync intent list|get|retry|cancel`.
 - The shared schema, lifecycle, and trigger-facing event contract for these intents and provider ingress are defined in [provider_ingress_api.md](./api/provider_ingress_api.md) and surfaced through the stable CLI docs entrypoint [origin_incur_cli.ts](./api/origin_incur_cli.ts), which re-exports the app-owned spec at `apps/server/src/cli/spec.ts`.
 - Clients consume provider domains through server-mediated read models, activity, and targeted fetches rather than by owning full replicated provider mirrors.
 
-### Provider Authority Contract (Global)
+### Provider Execution Home (Global)
 
-Provider ingress and provider outbox dispatch are single-writer per provider account-set scope.
+Provider ingress and provider outbox dispatch are server-only in v1.
 
-Canonical authority record: `ProviderAuthorityRecord`
+The high-level rule is intentionally simple:
 
-- `id`
-- `provider`
-- `accountSetScope`
-  - exact provider authority boundary. It uses the smallest stable provider surface Origin can lease independently, never mutable local follow/tracking/attachment state. If a provider exposes multiple independently selected sub-surfaces, Origin uses one authority record per selected sub-surface. V1 examples: mailbox id; connected GitHub account + one selected installation grant `installationId`; connected Telegram bot identity; connected Google account + one selected calendar id; connected Google account + one selected task-list id.
-- `authoritativePeerId`
-- `authorityEpoch`
-  - monotonic fencing token; every provider cursor advance and provider write must verify this epoch
-- `leaseStatus`
-  - `active|grace|expired|transferring|standby`
-- `leaseGrantedAt`
-- `leaseHeartbeatAt`
-- `leaseDurationSeconds`
-- `leaseGraceSeconds`
-- `lastHandoffRequestedAt`
-- `lastHandoffStartedAt`
-- `lastHandoffCompletedAt`
-- `takeoverReason`
-  - `bootstrap|planned_cutover|operator_forced|peer_unhealthy|credential_relink|repair`
-- `takeoverHistory[]`
-  - append-only handoff/takeover log including prior peer id, next peer id, old/new epoch, reason, actor, and timestamps
-- `updatedAt`
+- one machine runs provider sync and provider writes for a profile
+- in `local` mode that machine is the local Origin host
+- in `vps` mode that machine is the VPS/server
+- every other peer is a client for provider domains, not a second provider worker
 
-Required semantics:
+If the user runs Origin on a VPS, that VPS is the only machine allowed to poll providers or send provider writes. Laptops and phones may queue intent and sync first-party state, but they do not run Gmail, GitHub, Telegram, or Google bridge workers themselves.
 
-- Provider workers run only when `authoritativePeerId` matches the local peer, `leaseStatus=active`, and the lease heartbeat is fresh within `leaseDurationSeconds + leaseGraceSeconds`.
-- Cutover requires durable transfer intent + epoch increment + lease activation on the new peer before any provider worker starts there.
-- The old peer must fence itself immediately once it observes a higher epoch or non-local authority record.
-- Stop-before-start is operational guidance only; epoch fencing is the hard safety boundary.
-- Bootstrap conflict rule: if multiple peers start at once, only the peer that atomically acquires the next epoch for the scope becomes authoritative; all others enter standby and must not run provider workers until an explicit transfer or lease expiry path succeeds.
-- Restart rule: process restart never restores authority implicitly from local memory; the peer must re-read and validate the durable authority record and reacquire/renew heartbeat before resuming provider workers.
+Provider surfaces still narrow what that one machine does:
 
-Runtime/API control surface requirement:
+- email scopes to the connected mailbox
+- GitHub scopes to the selected installation grants and the followed repos inside them
+- Telegram scopes to the connected bot and the chats/groups Origin tracks inside it
+- Google Calendar scopes to the selected calendars
+- Google Tasks scopes to the selected task lists
 
-- Authority state must be inspectable and operable through explicit CLI/API surfaces, including status, history, transfer, renew, and emergency fence operations.
-- The canonical command family is `provider authority ...` and is specified in [provider_ingress_api.md](./api/provider_ingress_api.md).
+Those scopes tell the provider execution home what to cover. They do not give another peer permission to start provider work.
+
+This means:
+
+- clients always queue provider-targeted intent offline and sync it later
+- the provider execution home materializes and dispatches provider work after sync
+- v1 does not need a second runtime system for choosing which machine owns provider work
 
 ### Provider-Domain Offline/Client Residency Minimums (Global)
 
@@ -219,7 +205,7 @@ Minimum global guarantees:
 
 - Clients always retain replicated first-party overlays and `ExternalActionIntent` history offline.
 - Clients can always inspect the last synced provider read-model snapshot they already have for each configured domain.
-- Clients can always queue new provider-targeted intent offline; execution waits for authoritative server sync.
+- Clients can always queue new provider-targeted intent offline; execution waits for sync to the provider execution home.
 - Clients are not guaranteed full provider-history search or full raw-content availability offline.
 - Server-owned provider caches are recoverable/evictable; they are not peer-replicated source-of-truth mirrors.
 
@@ -323,8 +309,8 @@ Every peer, including each Apple device and the server, should have a local Orig
 ### Sync Rules
 
 - Devices edit their local replica first
-- Online peers sync changes bidirectionally with the server peer
-- The server peer is responsible for always-on automation, integration execution, and durable relay between intermittently connected devices
+- Online peers sync changes bidirectionally with the server
+- The server is responsible for always-on automation, provider execution, and durable relay between intermittently connected devices
 - No Apple device needs to be online for the server to continue acting
 - No server round-trip is required for the user to keep working locally
 
@@ -365,7 +351,7 @@ Every peer, including each Apple device and the server, should have a local Orig
 
 - Canonical live state is a replicated local-first state model shared by devices and the server
 - Every peer keeps its own durable local copy
-- The server is an always-on peer, not the only authority
+- The server is an always-on replica for first-party state. Provider ingress and provider outbox work still run only on that one server machine.
 
 #### What happens when the user edits offline
 
@@ -376,7 +362,7 @@ Every peer, including each Apple device and the server, should have a local Orig
 
 #### What happens when the device comes back online
 
-- The device syncs its replicated changes to the server peer
+- The device syncs its replicated changes to the server
 - The server syncs any newer changes back to the device
 - For external-service or AI work, the server materializes its own provider/job outbox records from the synced replicated intent and executes them with server-held credentials or capabilities
 - That materialization reuses the intent's stable intent id as the origin link and dedupe root so one synced intent becomes one logical provider or job action
@@ -415,7 +401,7 @@ Every peer, including each Apple device and the server, should have a local Orig
 - Provider changes from Google bridges reconcile into replicated planning objects; Origin planning changes sync outward through server-owned bridge jobs
 - Email, GitHub, and Telegram remain external-service domains rather than replicated first-party object sets
 - The server owns their pollers, primary caches, and provider outboxes; clients consume them through server-mediated read models and activity, with only domain-defined first-party overlays such as `EmailTriageRecord`, `GitHubFollowTarget`, and `TelegramGroupSubscription` replicated when needed
-- Offline client actions that target those providers are recorded first as replicated Origin intent, then converted by the server into provider-specific outbox work once sync reaches the authoritative server peer
+- Offline client actions that target those providers are recorded first as replicated Origin intent, then converted by the provider execution home into provider-specific outbox work once sync reaches that machine
 
 ### Recommended Library Stack
 
@@ -426,7 +412,7 @@ Every peer, including each Apple device and the server, should have a local Orig
   - local-first replicated state
   - automatic merge of concurrent changes
   - durable change history with actor attribution
-  - sync between devices and server peers
+  - sync between devices and the server
 - Implementation note:
   - Apple clients should use `automerge-swift`
   - the server should use the JavaScript Automerge repo/networking layer
@@ -435,7 +421,7 @@ Every peer, including each Apple device and the server, should have a local Orig
 #### Server-side Automerge layers
 
 - `automerge-repo`
-  - the JavaScript-side repository, storage, and networking layer for server peers
+  - the JavaScript-side repository, storage, and networking layer for the server
   - use this on the TypeScript server for durable peer sync and websocket-based replication
 
 #### Apple-side Automerge layers
@@ -564,17 +550,17 @@ Origin should be deliberate about which domains it owns directly and which it tr
 #### Google planning sync model
 
 - Google Calendar and Google Tasks are synchronized external planning surfaces, not the primary internal planning model
-- Origin should support bidirectional sync with both
+- Origin should support bidirectional sync with both, with Google Tasks limited to non-recurring task links in v1
 - This means:
   - Google Calendar events can be imported into Origin calendar items
   - Origin calendar items can be exported or mirrored to Google Calendar events
   - Google Tasks tasks can be imported into Origin tasks
-  - Origin tasks can be exported or mirrored to Google Tasks tasks
+  - Non-recurring Origin tasks can be exported or mirrored to Google Tasks tasks
   - changes from either side should reconcile through Origin's local-first planning model
 - `import` binds Origin to an existing Google object or selected bridge surface and never creates a new remote object
 - `mirror` may create a remote Google object when no provider object is already bound
 - In v1, Google Calendar recurrence round-trips through the bridge as a series root plus explicit per-occurrence exceptions keyed by the original scheduled slot
-- In v1, Google Tasks bridging does not mirror a recurring master/exception graph; recurring Origin tasks stay Origin-canonical series and any Google Tasks link is only a lossy root/current-task projection
+- In v1, Google Tasks bridging does not mirror recurring Origin task series. Recurring Origin tasks stay Origin-only for Google Tasks, and the bridge supports only non-recurring task links there
 - Each synced item should keep stable linkage metadata between the Origin object and its external Google object
 - Metadata may be stored in the external object body or another practical carrier when needed, but the canonical planning state remains inside Origin
 
@@ -591,7 +577,7 @@ Origin should be deliberate about which domains it owns directly and which it tr
 - If a Google Calendar event appears or changes, Origin syncs it into its own planning model
 - If Origin creates or updates a calendar item, the Google Calendar sync bridge can mirror that outward
 - If a Google Tasks task appears or changes, Origin syncs it into its own planning model
-- If Origin creates or updates a task, the Google Tasks sync bridge can mirror that outward
+- If Origin creates or updates a non-recurring task, the Google Tasks sync bridge can mirror that outward
 - Agent workflows and automations should generally operate against Origin planning objects rather than talking to Google Calendar or Google Tasks semantics directly
 
 #### Tasks versus calendar items
@@ -938,7 +924,7 @@ All core libraries and tools used by the system should be cloned locally into `d
 17. External markdown editing is a supported first-class workflow on filesystem-bearing peers; file edits are imported back into replicated state and then sync normally.
 18. Tasks and calendar items are first-party Origin planning objects, not thin wrappers around an external provider.
 19. Google Calendar is a bidirectional sync target and import surface for Origin calendar items, not the primary internal planning model.
-20. Google Tasks is a bidirectional sync target and import surface for Origin tasks, not the primary internal planning model.
+20. Google Tasks is a bidirectional sync target and import surface for non-recurring Origin tasks, not the primary internal planning model.
 21. Agent workflows should generally operate against Origin planning objects rather than directly against Google provider semantics.
 22. Tasks support an optional `dueFrom` in addition to `dueAt`, allowing due windows that can span multiple days in planning views.
 23. The full v1 calendar/tasks API surface is specified in [calendar_tasks_api.md](./api/calendar_tasks_api.md).
@@ -973,8 +959,8 @@ V1 should be minimal in implementation, but not artificially narrow in product p
 
 - primary loop: calendar + planning
 - supporting loops: email triage, GitHub follow-up, Telegram summaries
-- architecture priority: local-first clients plus an always-on server peer
-- planning model: first-party Origin tasks / calendar items with Google Calendar and Google Tasks bidirectional sync
+- architecture priority: local-first clients plus an always-on server
+- planning model: first-party Origin tasks / calendar items with Google Calendar bidirectional sync and Google Tasks sync limited to non-recurring task links
 - integration principle: broad enough to support the core loops, but each integration should start with the minimum action surface needed for the loop
 
 ## Initial Assumptions To Validate

@@ -31,12 +31,12 @@ The onboarding flow should:
 - Assume the Telegram bot already exists; connect it through token entry.
 - Do not assume automated creation of external provider accounts.
 - Keep the setup path functional even if the user begins locally and later moves to VPS mode.
-- In `vps` mode, bring up the authoritative server before provider linking becomes authoritative.
+- In `vps` mode, bring up the VPS/server before provider linking becomes active there.
 - In `vps` mode, collect only non-secret setup inputs until that server exists.
-- Provider OAuth, token storage, and server-owned pollers/cursors happen on the authoritative server.
-- At most one peer/instance may be authoritative for a given provider account set at a time. Stop-before-start remains the operational goal during cutover, but the hard safety contract is provider-authority lease plus epoch fencing rather than process ordering alone.
+- Provider OAuth, token storage, and server-owned pollers/cursors happen on the VPS/server in `vps` mode.
+- In v1, exactly one machine runs provider sync and outbound provider actions for a profile. In `local` mode that machine is the local Origin host; in `vps` mode it is the VPS/server.
 - The managed workspace root and vault path are scoped to the active Origin peer/instance, not shared as a profile-global path.
-- When a local deployment later migrates to VPS, replicated app state moves to the VPS but provider authority moves only after the VPS is deployed and rehydrated.
+- When a local deployment later migrates to VPS, replicated app state moves to the VPS and provider work moves only after the VPS is deployed, rehydrated, and re-linked to the providers there.
 - Persist only what is needed to complete setup, recover it, and operate the system afterward.
 
 ## Phase 1: Start Mode
@@ -116,14 +116,14 @@ Origin walks the user through provider-specific connection steps.
 
 In `local` mode, this phase runs immediately.
 
-In `vps` mode, the inputs for this phase may be gathered earlier, but the actual provider links are created only after Phase 9 has deployed the authoritative server.
+In `vps` mode, the inputs for this phase may be gathered earlier, but the actual provider links are created only after Phase 9 has deployed the VPS/server.
 
 ### Google
 
 - Use OAuth where available.
 - Connect the pre-created agent Google account.
 - Complete OAuth through a secure callback or operator-only secure handoff that yields a stored connection reference rather than exposing raw token material to the agent CLI.
-- In `vps` mode, complete OAuth and store the resulting tokens on the authoritative server after deployment, not during pre-server setup.
+- In `vps` mode, complete OAuth and store the resulting tokens on the VPS/server after deployment, not during pre-server setup.
 - Verify that the returned Google principal matches the pre-collected expected agent Google identity and fail linking on mismatch.
 - Request the minimum scopes required for:
   - Gmail inbox access for the agent mailbox
@@ -135,7 +135,7 @@ In `vps` mode, the inputs for this phase may be gathered earlier, but the actual
 - Use OAuth where available.
 - Connect the pre-created agent GitHub account.
 - Complete OAuth through a secure callback or operator-only secure handoff that yields a stored connection reference rather than exposing raw token material to the agent CLI.
-- In `vps` mode, complete OAuth and store the resulting tokens on the authoritative server after deployment, not during pre-server setup.
+- In `vps` mode, complete OAuth and store the resulting tokens on the VPS/server after deployment, not during pre-server setup.
 - Verify that the returned GitHub principal matches the pre-collected expected agent GitHub identity and fail linking on mismatch.
 - Discover the available GitHub App installation grants after OAuth; OAuth success alone is not sufficient for usable repo access.
 - Require the operator to select the grants Origin should rely on for its working set, then persist those selected grant records plus the derived repo/org coverage.
@@ -153,7 +153,7 @@ In `vps` mode, the inputs for this phase may be gathered earlier, but the actual
 - The mutation stores `TelegramBotConnection.botTokenSecretRef` as the durable credential reference used by runtime validation and polling.
 - Configure the bot for group participation.
 - Configure the bot for the maximum access model Telegram allows for v1, including privacy mode settings required to receive group messages. Origin validates the observed privacy mode state; it does not mutate BotFather privacy settings itself.
-- In `vps` mode, store the bot token reference and create server-owned pollers only after the authoritative server exists.
+- In `vps` mode, store the bot token reference and create server-owned pollers only after the VPS/server exists.
 
 ### Required user input
 
@@ -261,7 +261,7 @@ Origin configures the Telegram bot for group use.
 
 Origin attaches the managed workspace root, initializes or adopts the vault at that same root, and ensures the agent memory file exists.
 
-In `vps` mode, this phase configures the current peer only. After Phase 9 deploys the authoritative server, that server peer may run the same attach/init flow against its own host path before server-side external filesystem editing is enabled there.
+In `vps` mode, this phase configures the current peer only. After Phase 9 deploys the VPS/server, that server instance may run the same attach/init flow against its own host path before server-side external filesystem editing is enabled there.
 
 ### Required user input
 
@@ -327,7 +327,7 @@ Origin enables in-app and push notifications.
 
 If the user selected `vps`, Origin completes the server deployment.
 
-This deployment step happens before Phases 4 through 6 become authoritative in `vps` mode.
+This deployment step happens before Phases 4 through 6 run on the VPS/server in `vps` mode.
 
 ### Required user input
 
@@ -348,9 +348,9 @@ This deployment step happens before Phases 4 through 6 become authoritative in `
 - Origin is running on the VPS as a normal host service.
 - The server can access its managed files and the host filesystem it is allowed to use.
 - The setup matches the bare-metal / systemd-first service model.
-- Provider linking and server-owned pollers become authoritative on the deployed server only after the replicated app state has been rehydrated and the provider links have been re-established there.
-- Any local instance fences and stops provider pollers, cursors, and outbound provider actions for the same account set before the VPS peer is marked authoritative.
-- Exactly one peer may be authoritative for a provider account set at a time.
+- Provider linking and server-owned pollers start on the deployed server only after the replicated app state has been rehydrated and the provider links have been re-established there.
+- Any local instance stops provider pollers, cursors, and outbound provider actions before the VPS becomes the provider execution home.
+- Exactly one machine runs provider sync and outbound provider actions at a time.
 - Local-only workspace artifacts are not treated as migrated replicated state unless they were explicitly imported.
 
 ### Failure / recovery

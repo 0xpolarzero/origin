@@ -65,7 +65,7 @@ Email remains provider-canonical, but Origin guarantees the following minimum cl
 - Message snapshot floor: for those cached threads, at least the most recent 1,000 message envelopes (`from/to/subject/sentAt/snippet/labels`) remain client-visible from the last successful sync.
 - Body residency floor: full message body content is guaranteed offline only for messages explicitly opened, composed against, or fetched by Origin in the last 30 days, up to at least 200 bodies per account.
 - Attachment residency floor: attachment bytes are offline-guaranteed only for files the user or agent explicitly downloaded/imported through Origin; metadata refs may exist without local bytes.
-- Outbound intent floor: offline send/reply/archive/triage requests are durably captured as replicated intent/overlay updates and are replayed by the authoritative server after sync; provider side effects are not guaranteed until replay succeeds.
+- Outbound intent floor: offline send/reply/archive/triage requests are durably captured as replicated intent/overlay updates and are replayed by the provider execution home after sync; provider side effects are not guaranteed until replay succeeds.
 
 Outside these minimums, older or colder provider-derived cache entries may be evicted and re-fetched from the provider.
 

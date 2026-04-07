@@ -265,57 +265,6 @@ const providerIngressStatus = z.object({
   ['last-refreshed-at']: isoDateTime.optional().describe('Most recent provider refresh completion time when known.'),
 })
 
-const providerAuthorityLeaseStatus = z.enum([
-  'active',
-  'grace',
-  'expired',
-  'transferring',
-  'standby',
-])
-
-const providerAuthorityTakeoverReason = z.enum([
-  'bootstrap',
-  'planned_cutover',
-  'operator_forced',
-  'peer_unhealthy',
-  'credential_relink',
-  'repair',
-])
-
-const providerAuthorityHistoryEntry = z.object({
-  ['from-peer-id']: z.string().optional().describe('Prior authoritative peer when one existed.'),
-  ['to-peer-id']: z.string().describe('Next authoritative peer.'),
-  ['from-epoch']: z.number().optional().describe('Prior authority epoch when one existed.'),
-  ['to-epoch']: z.number().describe('New authority epoch recorded for the handoff or takeover.'),
-  reason: providerAuthorityTakeoverReason.describe('Why the handoff or takeover occurred.'),
-  actor: z.string().describe('Actor that requested or confirmed the handoff.'),
-  ['requested-at']: isoDateTime.optional().describe('When the handoff was first requested.'),
-  ['started-at']: isoDateTime.optional().describe('When the handoff began.'),
-  ['completed-at']: isoDateTime.optional().describe('When the handoff finished.'),
-  outcome: z.string().describe('Terminal outcome such as completed, fenced, or failed.'),
-  summary: z.string().describe('Human-readable handoff summary.'),
-})
-
-const providerAuthorityRecord = z.object({
-  id: id('Provider authority record id.'),
-  provider: z.string().describe('Provider key.'),
-  ['scope-ref']: z.string().describe('Opaque exact-match provider authority scope ref emitted by Origin.'),
-  ['authoritative-peer-id']: z.string().describe('Peer currently allowed to run provider workers for this scope.'),
-  ['authority-epoch']: z.number().describe('Current monotonic fencing token for this authority scope.'),
-  ['lease-status']: providerAuthorityLeaseStatus.describe('Current authority lease state.'),
-  ['lease-granted-at']: isoDateTime.optional().describe('When the current lease became active.'),
-  ['lease-heartbeat-at']: isoDateTime.optional().describe('When the active peer last renewed its heartbeat.'),
-  ['lease-duration-seconds']: z.number().optional().describe('Nominal authority-lease duration in seconds.'),
-  ['lease-grace-seconds']: z.number().optional().describe('Additional grace period for lease freshness in seconds.'),
-  ['last-handoff-requested-at']: isoDateTime.optional().describe('When the latest handoff was requested.'),
-  ['last-handoff-started-at']: isoDateTime.optional().describe('When the latest handoff began.'),
-  ['last-handoff-completed-at']: isoDateTime.optional().describe('When the latest handoff completed.'),
-  ['takeover-reason']: providerAuthorityTakeoverReason.optional().describe('Most recent takeover reason when known.'),
-  ['takeover-history']: z.array(providerAuthorityHistoryEntry).optional().describe('Append-only authority handoff history for this scope.'),
-  ['updated-at']: isoDateTime.optional().describe('Most recent authority record update time.'),
-  summary: z.string().describe('Authority summary.'),
-})
-
 const integrationConfig = z.object({
   key: z.string().describe('Integration key.'),
   values: z.record(z.string(), z.unknown()).describe('Operator-configurable integration settings.'),
@@ -660,11 +609,11 @@ const recurrence = z.object({
   ['provider-ref']: z
     .string()
     .optional()
-    .describe('Per-occurrence provider ref for explicit exception occurrences when the attached provider exposes distinct remote exception objects. Root/master provider refs stay in the planning object external link.'),
+    .describe('Per-occurrence provider ref for explicit exception occurrences when the attached provider exposes distinct remote exception objects, currently Google Calendar only in v1. Root/master provider refs stay in the planning object external link. Recurring Google Tasks links are not supported.'),
   ['provider-hash']: z
     .string()
     .optional()
-    .describe('Per-occurrence provider-side content hash for explicit exception occurrences when tracked. Root/master provider hashes stay in the planning object external link.'),
+    .describe('Per-occurrence provider-side content hash for explicit exception occurrences when tracked, currently Google Calendar only in v1. Root/master provider hashes stay in the planning object external link. Recurring Google Tasks links are not supported.'),
   ['advance-mode']: z
     .enum(['on_completion', 'on_schedule'])
     .optional()
@@ -1257,7 +1206,7 @@ const externalActionIntent = z.object({
   ['updated-by-actor']: z.string().optional().describe('Actor that last updated the intent state.'),
   ['created-at']: isoDateTime.describe('Intent creation time.'),
   ['updated-at']: isoDateTime.optional().describe('Most recent intent update time.'),
-  ['materialized-at']: isoDateTime.optional().describe('When the authoritative server materialized this intent into provider or job outbox work.'),
+  ['materialized-at']: isoDateTime.optional().describe('When the provider execution home materialized this intent into provider or job outbox work.'),
   ['succeeded-at']: isoDateTime.optional().describe('When the logical intent reached a succeeded terminal state.'),
   ['failed-at']: isoDateTime.optional().describe('When the logical intent reached a failed terminal state.'),
   ['canceled-at']: isoDateTime.optional().describe('When the logical intent was canceled.'),
@@ -2786,9 +2735,9 @@ const googleTasksCli = Cli.create('google-tasks', {
       .command('deselect', doc({ description: 'Deselect a Google task-list bridge surface. If Origin tasks are still attached to that task list, the command must refuse unless `force-detach` is true; with `force-detach`, those local links transition to `detached` and the remote Google tasks are left untouched.', args: z.object({ ['task-list-id']: z.string().describe('Google task list id.') }), options: z.object({ ['force-detach']: z.boolean().default(false).describe('Detach local links that still target this task list before deselecting it.') }), output: actionResult })),
   )
   .command('pull', doc({ description: 'Import changes from Google Tasks into Origin tasks.', options: z.object({ ['task-list-id']: z.string().optional().describe('Optional Google task list id filter.') }), output: actionResult }))
-  .command('push', doc({ description: 'Push Origin task changes to Google Tasks.', options: z.object({ ['task-list-id']: z.string().optional().describe('Optional Google task list id filter.') }), output: actionResult }))
+  .command('push', doc({ description: 'Push linked non-recurring Origin task changes to Google Tasks.', options: z.object({ ['task-list-id']: z.string().optional().describe('Optional Google task list id filter.') }), output: actionResult }))
   .command('reconcile', doc({ description: 'Reconcile Origin tasks with Google Tasks state. Remote deletions must surface as detached-preserved local tasks for review rather than silently deleting local state.', options: z.object({ ['task-list-id']: z.string().optional().describe('Optional Google task list id filter.') }), output: actionResult }))
-  .command('attach', doc({ description: 'Attach one task to Google Tasks import or mirroring. `mode=import` binds to an existing Google task and never creates a new remote object. `mode=mirror` may create a remote task when no existing Google task id is supplied. Recurring Origin task series remain Origin-canonical in v1; Google Tasks receives only a lossy root/current-task projection rather than a bridged recurring master/exception graph. The stable Google Tasks external link stays on the series root, so no per-occurrence provider refs or hashes are created there.', args: z.object({ ['task-id']: id('Task id.') }), options: z.object({ ['task-list-id']: z.string().describe('Google task list id.'), ['google-task-id']: z.string().optional().describe('Optional existing Google task id to bind instead of creating a new remote task.'), mode: z.enum(['import', 'mirror']).describe('Attach mode.') }), output: actionResult }))
+  .command('attach', doc({ description: 'Attach one non-recurring task to Google Tasks import or mirroring. `mode=import` binds to an existing Google task and never creates a new remote object. `mode=mirror` may create a remote task when no existing Google task id is supplied. Recurring Origin task series are not mirrored to Google Tasks in v1, so the canonical runtime must reject attach for recurring tasks.', args: z.object({ ['task-id']: id('Task id.') }), options: z.object({ ['task-list-id']: z.string().describe('Google task list id.'), ['google-task-id']: z.string().optional().describe('Optional existing Google task id to bind instead of creating a new remote task.'), mode: z.enum(['import', 'mirror']).describe('Attach mode.') }), output: actionResult }))
   .command('detach', doc({ description: 'Detach one task from Google Tasks mirroring. The local task is preserved, the remote Google task is left untouched, and the local link transitions to `detached`.', args: z.object({ ['task-id']: id('Task id.') }), output: actionResult }))
   .command('reset-cursor', doc({ description: 'Reset one Google Tasks bridge poller cursor as an explicit repair action. Local tasks remain intact and remote Google tasks are not deleted.', options: z.object({ ['poller-id']: z.string().optional().describe('Specific Google Tasks poller id.'), ['task-list-id']: z.string().optional().describe('Optional selected Google task list id.') }), output: actionResult }))
   .command('repair', doc({ description: 'Repair a degraded Google Tasks bridge poller or selected task-list surface after auth, cursor, or reconcile failures. Local tasks remain intact and remote Google tasks are not deleted.', options: z.object({ ['poller-id']: z.string().optional().describe('Specific Google Tasks poller id.'), ['task-list-id']: z.string().optional().describe('Optional selected Google task list id.') }), output: actionResult }))
@@ -3242,18 +3191,6 @@ const notificationCli = Cli.create('notification', {
   .command('failures', doc({ description: 'List failed notification deliveries.', output: list(notificationDelivery, 'Failed deliveries.') }))
   .command('retry', doc({ description: 'Retry a failed notification delivery.', args: z.object({ ['delivery-id']: id('Delivery id.') }), output: actionResult }))
 
-const provider = Cli.create('provider', {
-  description: 'Shared provider authority inspection and control.',
-}).command(
-  Cli.create('authority', { description: 'Provider single-writer authority leases, fencing, and handoffs.' })
-    .command('list', doc({ description: 'List known provider authority scopes, authoritative peers, and lease states.', options: z.object({ provider: z.array(z.string()).optional().describe('Optional provider filter.'), ['lease-status']: z.array(providerAuthorityLeaseStatus).optional().describe('Optional lease-status filter.'), ['peer-id']: z.array(z.string()).optional().describe('Optional authoritative peer filter.'), limit: z.number().optional().describe('Maximum scope count.') }), output: list(providerAuthorityRecord, 'Provider authority records.') }))
-    .command('get', doc({ description: 'Get the canonical authority record for one provider scope. Callers must pass the exact emitted `scope-ref` rather than synthesizing their own.', options: z.object({ provider: z.string().describe('Provider key.'), ['scope-ref']: z.string().describe('Exact provider authority scope ref emitted by Origin.') }), output: providerAuthorityRecord }))
-    .command('history', doc({ description: 'Get append-only takeover history for one provider authority scope.', options: z.object({ provider: z.string().describe('Provider key.'), ['scope-ref']: z.string().describe('Exact provider authority scope ref emitted by Origin.') }), output: list(providerAuthorityHistoryEntry, 'Provider authority history entries.') }))
-    .command('transfer', doc({ description: 'Request a durable epoch-incremented handoff to another peer for one provider authority scope.', options: z.object({ provider: z.string().describe('Provider key.'), ['scope-ref']: z.string().describe('Exact provider authority scope ref emitted by Origin.'), ['to-peer-id']: z.string().describe('Peer id that should become authoritative.'), reason: providerAuthorityTakeoverReason.describe('Why the handoff is requested.') }), output: actionResult }))
-    .command('renew', doc({ description: 'Renew the authority heartbeat for one provider scope. This is valid only for the active authoritative peer.', options: z.object({ provider: z.string().describe('Provider key.'), ['scope-ref']: z.string().describe('Exact provider authority scope ref emitted by Origin.') }), output: actionResult }))
-    .command('fence', doc({ description: 'Fence provider work for one provider scope and mark the lease non-active until a valid renew or transfer path completes.', options: z.object({ provider: z.string().describe('Provider key.'), ['scope-ref']: z.string().describe('Exact provider authority scope ref emitted by Origin.'), ['peer-id']: z.string().optional().describe('Optional peer to fence when supported.') }), output: actionResult })),
-)
-
 const sync = Cli.create('sync', {
   description: 'Replication, provider sync, external-action intents, outbox, and filesystem bridge observability with explicit actor/source attribution semantics.',
 })
@@ -3361,7 +3298,6 @@ export const origin = Cli.create('origin', originRootDefinition)
   .command(activity)
   .command(entity)
   .command(notificationCli)
-  .command(provider)
   .command(sync)
 
 export default origin

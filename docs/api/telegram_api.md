@@ -67,7 +67,7 @@ Telegram remains provider-canonical, but Origin guarantees the following minimum
 - Connection/status floor: the last successful `TelegramBotConnection` validation snapshot and tracked `TelegramChatRef` metadata remain client-visible offline.
 - Tracked-message floor: for each enabled group subscription, at least the most recent 200 cached messages or 72 hours of message history (whichever is smaller) remains offline-visible after a successful sync.
 - Mention/summarization floor: mention flags, summary policy, and the latest 30 `TelegramSummaryJobRecord` entries per tracked group remain offline-visible.
-- Outbound intent floor: offline send/reply/policy-change requests are durably captured as replicated intent/overlay updates and replay from the authoritative server when connectivity and authority are valid.
+- Outbound intent floor: offline send/reply/policy-change requests are durably captured as replicated intent/overlay updates and replay from the provider execution home when connectivity and provider access are valid.
 
 Outside these minimums, recent-message cache windows are evictable and may require best-effort provider rehydration.
 
@@ -167,10 +167,11 @@ Fields:
 Summary policy and subscription enablement are separate group-level settings.
 `allowedChatIds[]` is an operational allowlist derived from group subscriptions and bot membership, not the source of truth.
 
-Authority-scope rule under the shared provider ingress contract:
+Operational ownership under the shared provider ingress model:
 
-- Telegram authority scope is per `TelegramBotConnection`, keyed by the connected bot identity.
-- `allowedChatIds[]`, `TelegramChatRef.tracked`, and `TelegramGroupSubscription` narrow which chats Origin tracks or acts on inside that bot scope, but they do not create separate authority scopes or redefine `accountSetScope`.
+- Telegram polling and outbound Telegram actions run only on the provider execution home.
+- The connected bot identity plus the tracked chats/groups tell that one machine what it may watch or act on.
+- `allowedChatIds[]`, `TelegramChatRef.tracked`, and `TelegramGroupSubscription` narrow work inside that server-side scope; they do not turn other peers into Telegram workers.
 
 `botTokenSecretRef` is the canonical persisted credential reference for the Telegram bot token.
 The token value itself is never stored or echoed as raw plaintext in replicated Telegram domain objects.
