@@ -121,7 +121,7 @@ const activitySourceScope = z.object({
   ['follow-target-id']: z.array(z.string()).optional().describe('GitHub follow-target ids covered by the event when known.'),
   ['chat-id']: z.array(z.string()).optional().describe('Telegram chat ids covered by the event when known.'),
   ['entity-id']: z.array(z.string()).optional().describe('Origin entity ids covered by the event when known.'),
-})
+}).strict()
 
 const activityEvent = z.object({
   id: id('Activity event id.'),
@@ -1012,7 +1012,7 @@ const automationEventFilter = z.object({
   ['summary-trigger-kinds']: z.array(z.string()).optional().describe('Allowed summary trigger kinds when the event carries summary metadata. Matching uses non-empty intersection.'),
   ['author-roles']: z.array(z.string()).optional().describe('Allowed author roles when the event carries author-role metadata. Matching uses non-empty intersection.'),
   ['is-mention']: z.boolean().optional().describe('Whether the triggering event must carry the normalized mention boolean.'),
-})
+}).strict()
 
 const automationTriggerSchedule = z.object({
   type: z.literal('schedule').describe('Scheduled trigger kind.'),
@@ -1195,7 +1195,7 @@ const outboxItem = z.object({
 const externalActionIntent = z.object({
   id: id('Intent id.'),
   kind: z.string().describe('Intent family such as provider_action or planning_bridge_action.'),
-  provider: z.string().optional().describe('Target provider when this intent maps to provider work.'),
+  provider: z.string().optional().describe('Target provider or subsystem key when this intent maps to provider or internal job work.'),
   scope: z.string().describe('Canonical target scope for materialization and dedupe.'),
   ['target-ref']: z.string().optional().describe('Primary provider or entity target for the logical action when one exists.'),
   action: z.string().describe('Requested logical action such as attach, detach, pull, push, reconcile, send, reply, or comment.'),

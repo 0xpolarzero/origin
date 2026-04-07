@@ -161,6 +161,7 @@ Origin should distinguish between:
 - `succeeded`, `failed`, and `canceled` are durable terminal states for the logical intent itself, even if the underlying provider outbox has its own attempt history.
 - The authoritative server must materialize at most one logical provider or job action per intent id plus provider scope, and every derived outbox record carries that same intent id forward as its origin link and dedupe root.
 - The CLI must expose inspect and repair surfaces for these intents rather than hiding them entirely behind provider-specific outboxes, including `sync intent list|get|retry|cancel`.
+- The shared schema, lifecycle, and trigger-facing event contract for these intents and provider ingress are defined in [provider_ingress_api.md](./api/provider_ingress_api.md) and surfaced canonically through [spec.ts](../apps/server/src/cli/spec.ts).
 - Clients consume provider domains through server-mediated read models, activity, and targeted fetches rather than by owning full replicated provider mirrors.
 
 ### Local-First Requirement
