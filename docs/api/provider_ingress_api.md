@@ -104,7 +104,7 @@ Required v1 fields:
 - `createdByActor`
 - `updatedByActor`
 - `materializedAt`
-- `completedAt`
+- `succeededAt`
 - `failedAt`
 - `canceledAt`
 - `lastError`
