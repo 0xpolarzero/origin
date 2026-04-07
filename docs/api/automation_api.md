@@ -93,6 +93,8 @@ Every automation object has:
 - `archivedAt`
 - `deletedAt`
 
+All fields listed above are canonical persisted state unless a later note marks them as server-managed execution metadata. The CLI may present some of them with shorter labels, but it must round-trip the canonical object model.
+
 ### Actor Identity
 
 Actor identifiers should be explicit and machine-readable.
@@ -158,6 +160,12 @@ Represents a durable routine or reactive workflow.
 - `archivedAt`
 - `deletedAt`
 
+`name` is the canonical human-facing title for the automation. CLI surfaces may label it `title`, but that is an alias, not a separate persisted field.
+`descriptionMd` is the canonical long-form description. CLI surfaces may label it `summary`, but that is likewise an alias.
+`slug` is the stable machine key and should not be inferred from `name`.
+`lastRunAt`, `nextRunAt`, and `lastRunStatus` are server-managed execution metadata.
+`source` records where the automation definition came from and must survive read/update round-trips even when the create flow does not set it explicitly.
+
 ### `kind`
 
 `kind` is a coarse persisted classification derived from the trigger shape. It is not a second source of truth for execution behavior.
@@ -203,6 +211,7 @@ The canonical v1 shape is a small typed action object aligned with the CLI:
 `args` are the positional arguments for that command path.
 
 `options` are the named CLI flags or key/value options for that command path.
+`summary` is a short human-readable intent note for the action, not a second workflow definition.
 
 ### `notificationPolicy`
 

@@ -144,12 +144,14 @@ Fields:
 - `privacyMode: TelegramPrivacyMode`
 - `allowedChatIds[]`
 - `defaultParticipationMode: TelegramParticipationMode`
+- `defaultSummaryWindowMinutes`
 - `createdAt`
 - `updatedAt`
 - `lastValidatedAt`
 - `revokedAt`
 
 `defaultParticipationMode` controls only the default interactive behavior for enabled groups.
+`defaultSummaryWindowMinutes` is a connection-level fallback for new or unset group summary policies; it seeds group policy but does not override an explicit group value.
 Summary policy and subscription enablement are separate group-level settings.
 `allowedChatIds[]` is an operational allowlist derived from group subscriptions and bot membership, not the source of truth.
 
@@ -189,6 +191,7 @@ Fields:
 - `subscriptionState: TelegramGroupSubscriptionState`
 - `participationMode: TelegramParticipationMode`
 - `summaryEnabled`
+- `summaryWindowMinutes`
 - `mentionTrackingEnabled`
 - `messageCacheEnabled`
 - `createdAt`
@@ -200,6 +203,7 @@ Normative model:
 - `subscriptionState` controls whether the group is actively tracked by Origin.
 - `participationMode` applies only when `subscriptionState=enabled` and controls interactive bot behavior.
 - `summaryEnabled` is independent of `participationMode` and controls whether summary workflows may run or post for the group.
+- `summaryWindowMinutes` is the canonical per-group summary lookback window in minutes. If it is unset, the bot connection's `defaultSummaryWindowMinutes` can be used as the fallback seed when the subscription is created or repaired.
 - `disabledAt` records when the subscription was last disabled; it is not a separate mode.
 - A discovered chat only becomes actively tracked after an explicit group registration creates or updates this subscription.
 - If the bot loses membership or the permissions needed for the requested mode, Origin must mark the subscription disabled, refresh the chat ref, and surface the loss as a validation / recovery problem until the operator restores access and re-registers or re-enables the group.
@@ -261,6 +265,7 @@ Fields:
 - `lastError`
 
 Automatic summaries are automation-owned. This record projects the resulting execution state for Telegram; it is not a second canonical workflow object.
+`windowStart` and `windowEnd` are the evaluated window for the specific run. They come from the active group policy or explicit operator request at scheduling time and do not replace `TelegramGroupSubscription.summaryWindowMinutes`.
 
 ## Read / Query Surface
 
@@ -333,7 +338,7 @@ Participation mode and summary policy are separate settings on an enabled group.
 
 - refresh recent message cache for a chat
 - expire old cached windows
-- rehydrate a recent cached chat window from Telegram when provider state is still reachable
+- rehydrate a recent cached chat window from Telegram when the bot can still read that recent history and the provider still exposes it
 
 ## Sync / Cache Strategy
 
@@ -343,7 +348,7 @@ Participation mode and summary policy are separate settings on an enabled group.
 - Origin stores recent message windows as a selective, recent, bounded cache for agent workflow speed and short-lived robustness.
 - Chat refs and group policy are expected to survive cache eviction or repair.
 - Recent message caches are evictable and are not a durable history store.
-- Rehydration is best-effort for provider state that is still reachable from Telegram at refresh time; it does not guarantee reconstruction of all evicted history.
+- Rehydration is best-effort for reachable recent history only; it can refill a bounded window after eviction, but it does not guarantee reconstruction of all prior messages or inaccessible state.
 - Local clients should read Telegram state through the server or from the server-synced local state, not by talking to Telegram directly.
 - The shared polling / cursor / cache / activity-event model is defined in [provider_ingress_api.md](./provider_ingress_api.md)
 
@@ -356,6 +361,7 @@ Origin models each tracked group on separate axes:
 - subscription state: `enabled` or `disabled`
 - participation mode: `observe` or `participate`
 - summary policy: enabled or disabled
+- summary window: per-group override or bot-level default
 
 These axes must not be collapsed into one overloaded mode field.
 

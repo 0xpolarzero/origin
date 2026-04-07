@@ -197,8 +197,40 @@ Represents a draft or outgoing composition under Origin control.
 
 ### Notes
 
+- Drafts are composition state, not dispatch state
 - Drafts are optional and transient unless the provider requires persistence
 - The direct-action posture means most user-visible operations should be send/reply oriented rather than draft-heavy
+
+## `EmailOutgoingAction`
+
+Represents the server-side outbox record for a mail mutation that still needs to be applied or confirmed.
+
+### Fields
+
+- `id`
+- `providerAccountId`
+- `providerThreadId`
+- `draftId`
+- `kind`
+- `payload`
+- `providerMessageId`
+- `status`
+- `dedupeKey`
+- `attemptCount`
+- `queuedAt`
+- `attemptedAt`
+- `succeededAt`
+- `failedAt`
+- `lastError`
+- `createdAt`
+- `updatedAt`
+
+### Notes
+
+- Outgoing actions are dispatch state, not composition state
+- `kind` should distinguish at least send, reply, reply-all, and forward dispatch
+- A draft may exist without an outgoing action, but send / reply / reply-all / forward mutations should create or reuse an outgoing action when they are ready to leave Origin
+- Retries must reuse the same `dedupeKey` so a repeated dispatch cannot duplicate mail
 
 ## `EmailTriageRecord`
 
@@ -234,6 +266,7 @@ Represents lightweight operational metadata that Origin keeps for a thread.
 - It does not replace the provider mailbox
 - It gives the agent a stable place to track follow-up and triage without duplicating the entire inbox
 - `archived` here means Origin triage archived, not provider mailbox archive state
+- `archived` is set through triage state management, not through provider mailbox archive / unarchive actions
 
 ## `EmailAttachment`
 
@@ -327,7 +360,7 @@ The email API should support at least the following read operations.
 
 The email API should support at least the following mutations.
 
-### Mail actions
+### Draft and outbound actions
 
 - send a new message
 - reply to a thread
@@ -335,12 +368,15 @@ The email API should support at least the following mutations.
 - forward a message
 - save or update a draft when needed
 
+### Provider mailbox actions
+
+- archive
+- unarchive
+
 ### Triage actions
 
 - mark read
 - mark unread
-- archive
-- unarchive
 - star
 - unstar
 - apply or remove labels
@@ -359,6 +395,7 @@ The email API should support at least the following mutations.
 
 - Mutations should be idempotent where practical
 - Send/reply actions should use stable idempotency keys so retries do not duplicate mail
+- Provider mailbox archive state and Origin triage archive state are separate; archive / unarchive under provider actions must not be treated as triage state changes
 - The agent should not need a simulation-only path for normal usage
 
 ## Cache And Sync Strategy
@@ -399,7 +436,11 @@ Examples:
 - `email.message.received`
 - `email.thread.updated`
 - `email.message.forwarded`
+- `email.outgoing.queued`
+- `email.outgoing.attempted`
+- `email.outgoing.sent`
 - `email.reply.sent`
+- `email.outgoing.failed`
 - `email.label.updated`
 - `email.thread.archived`
 - `email.thread.unarchived`

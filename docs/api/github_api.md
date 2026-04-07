@@ -35,7 +35,9 @@ Origin connects the pre-created agent GitHub account through GitHub's authorizat
 
 In v1, the resulting credential is a GitHub App user access token obtained through OAuth. OAuth alone is not enough for usable access: repo and organization access come from installing the GitHub App on the selected repositories or organizations, and those installation grants are required setup state. The token acts on behalf of the connected account and is constrained by both the user grant and app permissions.
 
-Setup validation should confirm both the OAuth grant and the installation grants before the account is considered usable.
+Setup validation should confirm both the OAuth grant and the installation-grant records before the account is considered usable.
+
+An installation grant is the local Origin record for a specific GitHub App installation on a user or organization account. It is the scope anchor for repo access checks and should capture the installation identity, the owning account, and the repository access shape that Origin derived from that grant.
 
 Important implications from GitHub's docs:
 
@@ -48,7 +50,8 @@ Practical consequence:
 
 - v1 should use the connected account token for normal repo, issue, PR, comment, review, and search operations
 - v1 should track followed repositories locally rather than depending on GitHub's watch subscription endpoints as the core follow mechanism
-- repo access checks should follow the selected GitHub App installation grants, not a separate Origin-owned permission system
+- repo access checks should follow the selected GitHub App installation-grant records, not a separate Origin-owned permission system
+- installation-grant scope means the repo/org access exposed by a selected GitHub App installation, not a separate Origin ACL
 
 ## Local State
 
@@ -57,7 +60,7 @@ GitHub state inside Origin should be selective and derived.
 ### Stored locally
 
 - connected account metadata
-- selected GitHub App installation grants and the derived accessible repo/org scope
+- selected GitHub App installation-grant records and the derived accessible repo/org scope
 - repo follow targets and derived tracked repositories
 - local follow targets across repositories, issues, and pull requests
 - server-side cursors / last-seen markers for polling
@@ -76,6 +79,25 @@ GitHub state inside Origin should be selective and derived.
 - broad historical copies of all repo traffic by default
 
 ## Core Objects
+
+### `GitHubInstallationGrant`
+
+Represents a selected GitHub App installation that Origin can act through.
+
+Suggested fields:
+
+- `id`
+- `installationId`
+- `accountType`
+- `accountLogin`
+- `repositorySelection`
+- `accessibleRepositoryIds[]`
+- `permissions`
+- `status`
+- `lastValidatedAt`
+- `revokedAt`
+- `createdAt`
+- `updatedAt`
 
 ### `GitHubRepository`
 
@@ -120,6 +142,9 @@ Suggested fields:
 - `enabled`
 - `pinned`
 - `reason`
+- `dismissedAt`
+- `dismissedByActor`
+- `dismissedThroughCursor`
 - `lastRefreshedAt`
 - `createdAt`
 - `updatedAt`
@@ -132,6 +157,7 @@ Normative model:
 - Issue and PR follow targets narrow local attention within that working set.
 - Issue and PR targets may reference or inherit the repo-level polling scope rather than creating a second repo cursor.
 - These follow targets do not map to GitHub's native watch / subscription state.
+- `dismissedThroughCursor` is the durable attention watermark for `dismiss`; when activity advances past that cursor, the target can resurface automatically.
 
 ### `GitHubIssueSnapshot`
 
@@ -193,11 +219,17 @@ Suggested fields:
 - `payload`
 - `status`
 - `attemptCount`
+- `dedupeKey`
+- `queuedAt`
+- `attemptedAt`
+- `succeededAt`
+- `failedAt`
 - `lastError`
 - `createdAt`
 - `updatedAt`
 
 GitHub actions are server-side outbox records derived from user or agent intent, not replicated provider state.
+`dedupeKey` is the stable origin-side identity for a logical mutation. Retries must reuse it so one intent cannot materialize twice.
 
 ### `GitHubCursor`
 
@@ -329,6 +361,8 @@ Each activity event should include:
 - action type
 - outcome status
 - error details when relevant
+
+Refresh bookkeeping may be coalesced internally, but visible activity should preserve object-family granularity. Repo tracking changes, issue changes, PR changes, review requests, review submissions, comment changes, and follow-dismiss state changes should not collapse into one generic `updated` event.
 
 ## Failure / Retry Semantics
 
