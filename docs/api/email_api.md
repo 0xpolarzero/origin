@@ -106,6 +106,7 @@ Represents a connected mailbox account that Origin can operate on.
 
 - The account is connected directly to the provider API
 - The account is the working inbox for the agent
+- Account status and sync cursor state are server-side read models derived from provider ingress, not client-authored replica state
 - Multiple accounts are not a v1 goal, but the model should not hardcode a single mailbox in case the product later needs more than one
 
 ## `EmailThread`
@@ -136,7 +137,8 @@ Represents a mail thread as Origin sees it.
 ### Notes
 
 - A thread is the primary object for triage
-- A thread may have local triage metadata even when the provider source remains canonical
+- Thread triage fields are derived projections of the canonical `EmailTriageRecord`
+- `archivedAt` reflects the provider mailbox archive state, which is distinct from Origin triage `archived`
 - The thread cache can be partial and should be evictable
 
 ## `EmailMessage`
@@ -228,8 +230,10 @@ Represents lightweight operational metadata that Origin keeps for a thread.
 ### Notes
 
 - This is intentionally lightweight
+- This is the canonical Origin-owned triage overlay for the thread
 - It does not replace the provider mailbox
 - It gives the agent a stable place to track follow-up and triage without duplicating the entire inbox
+- `archived` here means Origin triage archived, not provider mailbox archive state
 
 ## `EmailAttachment`
 
@@ -366,6 +370,7 @@ The email API should support at least the following mutations.
 - Attachments should be cached selectively
 - Sync should be cursor-based and provider-driven
 - If the cursor becomes invalid, Origin should be able to fall back to a broader resync of the account
+- The account, sync, and thread state exposed through Origin should be treated as server-side read models derived from provider ingress
 - The local email state should be treated as an evictable projection, not a durable mailbox replica
 - The shared polling / cursor / cache / activity-event model is defined in [provider_ingress_api.md](./provider_ingress_api.md)
 
@@ -376,6 +381,13 @@ Origin should emit activity events for important email actions and mailbox state
 For provider-backed reactive automations, the canonical trigger surface is the ingress-emitted email event family defined in [provider_ingress_api.md](./provider_ingress_api.md).
 
 Email-domain activity entries may still include richer message-level detail, but they should not create a second competing trigger surface for the same provider change.
+Provider mailbox archive changes and Origin triage changes must be separate event families: use thread archive events for provider archive state and triage state events for Origin-owned overlay changes.
+
+Incoming provider ingress should distinguish:
+
+- a new thread first observed by Origin
+- a new message appended to an existing thread
+- a generic thread update such as label, archive, or metadata change
 
 Examples:
 
@@ -383,11 +395,14 @@ Examples:
 - `email.sync.completed`
 - `email.sync.failed`
 - `email.thread.fetched`
-- `email.thread.received`
+- `email.thread.created`
+- `email.message.received`
+- `email.thread.updated`
 - `email.message.forwarded`
 - `email.reply.sent`
 - `email.label.updated`
 - `email.thread.archived`
+- `email.thread.unarchived`
 - `email.triage.state.changed`
 - `email.followup.scheduled`
 

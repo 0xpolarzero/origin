@@ -134,6 +134,8 @@ In `vps` mode, the inputs for this phase may be gathered earlier, but the actual
 - Complete OAuth through a secure callback or operator-only secure handoff that yields a stored connection reference rather than exposing raw token material to the agent CLI.
 - In `vps` mode, complete OAuth and store the resulting tokens on the authoritative server after deployment, not during pre-server setup.
 - Verify that the returned GitHub principal matches the pre-collected expected agent GitHub identity and fail linking on mismatch.
+- Collect or validate the selected GitHub App installation grants after OAuth; OAuth success alone is not sufficient for usable repo access.
+- Record which repositories or organizations are covered by the chosen GitHub App installation grants.
 - Request the minimum scopes required for:
   - follow-up workflows
   - repository observation
@@ -143,13 +145,14 @@ In `vps` mode, the inputs for this phase may be gathered earlier, but the actual
 
 - Link the pre-created Telegram bot through an operator-only secure handoff or secure credential reference, not by passing the raw token through the normal agent CLI surface.
 - Configure the bot for group participation.
-- Configure the bot for the maximum access model Telegram allows for v1, including privacy mode settings required to receive group messages.
+- Configure the bot for the maximum access model Telegram allows for v1, including privacy mode settings required to receive group messages. Origin validates the observed privacy mode state; it does not mutate BotFather privacy settings itself.
 - In `vps` mode, store the bot token and create server-owned pollers only after the authoritative server exists.
 
 ### Required user input
 
 - OAuth approval for Google
 - OAuth approval for GitHub
+- confirmation of the GitHub App installation grants and repo/org selection Origin should rely on
 - secure operator handoff or credential reference for the Telegram bot token
 - confirmation of Telegram bot group/privacy configuration
 
@@ -158,12 +161,13 @@ In `vps` mode, the inputs for this phase may be gathered earlier, but the actual
 - provider connection records
 - encrypted token material or secure token references
 - provider-specific scope grants
+- GitHub App installation grant metadata and selected repo/org scope
 - Telegram bot configuration state
 
 ### Success criteria
 
 - Google is connected and usable by Origin.
-- GitHub is connected and usable by Origin.
+- GitHub is connected and usable by Origin, including at least one valid GitHub App installation grant for the selected working set.
 - Telegram bot is connected and usable by Origin in groups.
 - No provider link is accepted if the returned Google or GitHub principal does not match the expected pre-collected agent identity.
 
@@ -171,6 +175,7 @@ In `vps` mode, the inputs for this phase may be gathered earlier, but the actual
 
 - If OAuth fails, the user retries the provider flow.
 - If OAuth completes against the wrong Google or GitHub account, Origin rejects the link, reports the mismatch, and asks the user to retry with the expected agent account or correct the expected identity first.
+- If GitHub OAuth succeeds but no valid GitHub App installation grants are available for the selected repo/org scope, Origin keeps GitHub in an incomplete state and asks the user to install or extend the GitHub App grants before marking setup complete.
 - If a secure token handoff is invalid, Origin reports the failure and re-prompts for the secure credential handoff.
 - If a required scope is missing, Origin restarts the corresponding provider authorization flow.
 
@@ -253,6 +258,11 @@ Origin attaches the managed workspace root, initializes or adopts the vault at t
 - If the target path does not exist, Origin creates the managed workspace root and bootstraps `Origin/Memory.md` there.
 - If the target path exists and is empty, Origin adopts it as the managed workspace root and bootstraps `Origin/Memory.md`.
 - If the target path exists and is non-empty, Origin inspects and adopts the existing contents first.
+- First-attach adoption only applies when the profile does not already contain replicated note state for another attached workspace.
+- During first-attach adoption, existing markdown files are imported as managed notes with their relative paths preserved and stable note ids assigned during import.
+- If `Origin/Memory.md` already exists, Origin adopts it in place as the canonical memory file rather than overwriting it.
+- Existing non-markdown files remain ordinary local workspace artifacts unless later imported or attached into managed note state explicitly.
+- If the profile already has replicated note state and the target path is already populated, attach must enter an explicit reconcile/repair flow instead of silently importing or overwriting.
 - A non-empty target path must be imported or adopted before Origin exports managed files into it.
 - Origin must never silently overwrite existing files, including an existing `Origin/Memory.md`, during first attach.
 - In v1, the vault is the workspace root; there is no separate vault subtree path.
@@ -330,7 +340,7 @@ Origin validates the connected system end-to-end.
 ### Checks
 
 - agent Google account can authenticate
-- agent GitHub account can authenticate
+- agent GitHub account and selected installation grants can authenticate
 - Telegram bot can operate in groups
 - email inbox can be read and written
 - selected calendars and tasks sync correctly
@@ -350,6 +360,7 @@ During onboarding, Origin should persist:
 - user identity handles
 - agent account connection records
 - OAuth scopes and token references
+- GitHub App installation grant metadata and selected repo/org scope
 - Telegram bot token reference
 - selected calendars, tasks, and mailbox configuration
 - vault and memory file location

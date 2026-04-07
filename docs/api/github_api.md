@@ -33,7 +33,9 @@ GitHub remains canonical. Origin keeps only selective caches and operational met
 
 Origin connects the pre-created agent GitHub account through GitHub's authorization flow.
 
-In v1, the resulting credential is a GitHub App user access token obtained through OAuth. Repo and organization access come from installing the GitHub App on the selected repositories or organizations. The token acts on behalf of the connected account and is constrained by both the user grant and app permissions.
+In v1, the resulting credential is a GitHub App user access token obtained through OAuth. OAuth alone is not enough for usable access: repo and organization access come from installing the GitHub App on the selected repositories or organizations, and those installation grants are required setup state. The token acts on behalf of the connected account and is constrained by both the user grant and app permissions.
+
+Setup validation should confirm both the OAuth grant and the installation grants before the account is considered usable.
 
 Important implications from GitHub's docs:
 
@@ -55,14 +57,15 @@ GitHub state inside Origin should be selective and derived.
 ### Stored locally
 
 - connected account metadata
+- selected GitHub App installation grants and the derived accessible repo/org scope
 - repo follow targets and derived tracked repositories
 - local follow targets across repositories, issues, and pull requests
-- local cursors / last-seen markers
-- cached issue snapshots
-- cached pull request snapshots
-- cached comment and review snapshots for followed items
-- lightweight search results
-- queued outbound GitHub actions
+- server-side cursors / last-seen markers for polling
+- cached issue snapshots exposed as read models
+- cached pull request snapshots exposed as read models
+- cached comment and review snapshots for followed items as read models
+- lightweight search results as read models
+- queued outbound GitHub actions as server outbox records
 - activity-event records for meaningful GitHub operations
 
 ### Not stored locally
@@ -117,8 +120,7 @@ Suggested fields:
 - `enabled`
 - `pinned`
 - `reason`
-- `lastCursor`
-- `lastSyncAt`
+- `lastRefreshedAt`
 - `createdAt`
 - `updatedAt`
 
@@ -126,9 +128,9 @@ Normative model:
 
 - Follow targets live in Origin and define the local follow-up working set.
 - Repo-kind follow targets define the canonical repository working set.
-- Repo follow targets define poll scope for the integration and own the repository cursor state.
+- Repo follow targets define poll scope for the integration and local attention, but server pollers own the repository cursor state.
 - Issue and PR follow targets narrow local attention within that working set.
-- Issue and PR targets may reference or inherit the repo-level cursor rather than creating a second repo cursor.
+- Issue and PR targets may reference or inherit the repo-level polling scope rather than creating a second repo cursor.
 - These follow targets do not map to GitHub's native watch / subscription state.
 
 ### `GitHubIssueSnapshot`
@@ -195,9 +197,11 @@ Suggested fields:
 - `createdAt`
 - `updatedAt`
 
+GitHub actions are server-side outbox records derived from user or agent intent, not replicated provider state.
+
 ### `GitHubCursor`
 
-Represents a local sync cursor for a repository follow target or repository-scoped query.
+Represents a server-owned sync cursor for a repository follow target or repository-scoped query.
 
 Suggested fields:
 
@@ -346,7 +350,7 @@ Non-retryable failures:
 
 Recommended behavior:
 
-- queue write actions locally before dispatch
+- queue write actions into Origin's server-side outbox before dispatch
 - retry with backoff for transient failures
 - surface failures in the activity log
 - preserve the outbound action record until it is clearly resolved or intentionally abandoned

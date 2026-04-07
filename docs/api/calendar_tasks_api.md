@@ -275,6 +275,7 @@ Represents a unit of work in Origin's first-party planning system.
 - The series root is the occurrence whose `occurrenceIndex = 0`
 - Series-level recurrence mutations operate on the series root task occurrence
 - This preserves clean per-occurrence history and keeps completion semantics intuitive
+- The same materialization and exception rules below apply to task series and calendar item series
 
 ## `TaskRecurrence`
 
@@ -360,6 +361,17 @@ Represents a scheduled block or event in Origin's planning domain.
 - Series-level recurrence mutations operate on the series root calendar item occurrence
 - The recurrence rule defines how future occurrences are generated and related
 
+### Recurrence materialization and exceptions
+
+- The series root is the canonical recurrence definition for both tasks and calendar items
+- Origin may materialize future occurrences ahead of time for planning, sync, and history views, but generated occurrences are derived from the root rule and are not alternate canonical roots
+- Only the series root and explicit exception occurrences are canonical records for the series
+- A single-occurrence edit creates or updates an explicit exception occurrence for that `occurrenceIndex`; it does not rewrite the series root
+- For tasks, single-occurrence completion, due window, schedule, or status changes are stored as task-occurrence exceptions
+- For calendar items, single-occurrence time or status changes are stored as calendar-item-occurrence exceptions
+- Series-level edits update the root recurrence rule and apply to future generated occurrences; existing explicit exceptions remain exceptions unless edited directly
+- A canceled or skipped occurrence is represented as an explicit exception, not by deleting the whole series
+
 ## `CalendarItemRecurrence`
 
 Represents recurrence metadata attached to a calendar item occurrence.
@@ -420,8 +432,13 @@ Planning objects may keep external linkage metadata.
 - For recurring series, `attach` and `detach` apply at the series root; occurrences inherit the linkage and do not carry independent attach state.
 - `attach` creates or updates the stable external link for an Origin object
 - If provider object ids are supplied by the canonical CLI/runtime, `attach` may bind the Origin object to an existing Google event or Google task instead of creating a fresh external object
-- `mode = "import"` means the next pull or reconcile imports from the linked external object into the Origin object without making Google canonical, and it never propagates destructive local deletes or cancels outward
-- `mode = "mirror"` means Origin and Google sync bidirectionally through the stable external link, and destructive local changes propagate outward when the provider supports the corresponding remote change
+- `syncMode = "import"` means the next pull or reconcile imports from the linked external object into the Origin object without making Google canonical, and it never propagates destructive local deletes or cancels outward
+- `syncMode = "mirror"` means Origin and Google sync bidirectionally through the stable external link, and destructive local changes propagate outward when the provider supports the corresponding remote change
+- For recurring Google Calendar events and Google Tasks series, the Google master maps to the Origin series root
+- A single Google recurring exception maps to an explicit Origin exception occurrence tied to the same series and `occurrenceIndex`
+- Mirror mode exports explicit Origin exceptions back as Google exceptions when the provider supports them
+- Import mode keeps Origin canonical; Google-side recurrence exceptions are read as external representations of Origin exceptions, not as a separate series branch
+- If a provider deletes one occurrence of a recurring series, Origin preserves the series root and records that occurrence as an explicit canceled or skipped exception
 - If the linked Google object is deleted or otherwise disappears remotely, Origin preserves the local object, detaches the external link, and records the situation for review or conflict resolution
 - `detach` leaves the external provider object untouched, preserves the local object, and changes the local link state to `detached`
 

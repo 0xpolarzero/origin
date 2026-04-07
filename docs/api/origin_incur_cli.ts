@@ -390,7 +390,7 @@ const workspaceStatus = z.object({
 
 const workspaceRevision = z.object({
   id: id('Workspace revision id.'),
-  path: path.describe('Workspace-relative path.'),
+  path: path.describe('Workspace-relative path for replicated managed content such as notes or explicitly imported managed attachments.'),
   actor: z.string().describe('Actor id that produced the revision.'),
   at: isoDateTime.describe('Revision time.'),
   summary: z.string().describe('Revision summary.'),
@@ -859,7 +859,7 @@ const githubPullRequestContext = z.object({
 const telegramConnection = z.object({
   status: z.string().describe('Connection status.'),
   ['bot-username']: z.string().optional().describe('Connected bot username.'),
-  ['privacy-mode']: z.string().optional().describe('Observed privacy mode state.'),
+  ['privacy-mode']: z.string().optional().describe('Observed privacy mode state used for validation.'),
   summary: z.string().describe('Connection summary.'),
 })
 
@@ -923,9 +923,9 @@ const automationTriggerSchedule = z.object({
 
 const automationTriggerEvent = z.object({
   type: z.literal('event').describe('Reactive trigger kind.'),
-  ['event-kinds']: z.array(z.string()).describe('Canonical provider-ingress event kinds that may trigger the automation.'),
-  filters: z.record(z.string(), z.unknown()).optional().describe('Structured event filters.'),
-  ['source-scope']: z.record(z.string(), z.unknown()).optional().describe('Optional provider or entity scope constraints.'),
+  ['event-kinds']: z.array(z.string()).describe('Canonical durable Origin activity-event kinds that may trigger the automation.'),
+  filters: z.record(z.string(), z.unknown()).optional().describe('Conjunctive structured event filters evaluated after the event kind matches.'),
+  ['source-scope']: z.record(z.string(), z.unknown()).optional().describe('Optional provider, object, or entity scope constraints that further limit matching events.'),
 })
 
 const automationTriggerManual = z.object({
@@ -944,9 +944,9 @@ const automationTriggerHybrid = z.object({
     .describe('Schedule portion of the trigger.'),
   event: z
     .object({
-      ['event-kinds']: z.array(z.string()).describe('Canonical provider-ingress event kinds that may trigger the automation.'),
-      filters: z.record(z.string(), z.unknown()).optional().describe('Structured event filters.'),
-      ['source-scope']: z.record(z.string(), z.unknown()).optional().describe('Optional provider or entity scope constraints.'),
+      ['event-kinds']: z.array(z.string()).describe('Canonical durable Origin activity-event kinds that may trigger the automation.'),
+      filters: z.record(z.string(), z.unknown()).optional().describe('Conjunctive structured event filters evaluated after the event kind matches.'),
+      ['source-scope']: z.record(z.string(), z.unknown()).optional().describe('Optional provider, object, or entity scope constraints that further limit matching events.'),
     })
     .describe('Reactive event portion of the trigger.'),
 })
@@ -960,8 +960,9 @@ const automationTrigger = z.discriminatedUnion('type', [
 
 const automationAction = z.object({
   type: z.literal('command').describe('Action kind.'),
-  command: z.string().describe('Canonical Origin command or command family to invoke.'),
-  args: z.record(z.string(), z.unknown()).optional().describe('Arguments passed to the command.'),
+  command: z.string().describe('Exact canonical Origin CLI command path to invoke.'),
+  args: z.array(z.string()).optional().describe('Ordered positional arguments for that command path.'),
+  options: z.record(z.string(), z.unknown()).optional().describe('Named CLI options or flags for that command path.'),
   summary: z.string().optional().describe('Human-readable action summary.'),
 })
 
@@ -980,7 +981,7 @@ const automation = z.object({
   id: id('Automation id.'),
   title: z.string().describe('Automation title.'),
   status: z.string().describe('Automation status.'),
-  kind: z.string().describe('Automation kind.'),
+  kind: z.enum(['scheduled', 'reactive', 'manual', 'hybrid']).describe('Derived automation kind based on the trigger shape.'),
   summary: z.string().describe('Automation summary.'),
   trigger: automationTrigger.optional().describe('Typed trigger definition.'),
   actions: z.array(automationAction).optional().describe('Ordered action definitions.'),
@@ -993,6 +994,10 @@ const automationRun = z.object({
   ['automation-id']: id('Automation id.'),
   status: z.string().describe('Run status.'),
   summary: z.string().describe('Run summary.'),
+  ['triggered-at']: isoDateTime.optional().describe('Logical trigger time for the run.'),
+  ['scheduled-at']: isoDateTime.optional().describe('Scheduled trigger boundary when this is a scheduled run.'),
+  ['activity-event-id']: z.string().optional().describe('Triggering activity-event id when this is a reactive run.'),
+  ['trigger-reason']: z.string().optional().describe('Why the run started, such as schedule, matching event, or manual request.'),
   ['started-at']: isoDateTime.optional().describe('Run start time.'),
   ['ended-at']: isoDateTime.optional().describe('Run end time.'),
   ['trace-id']: z.string().optional().describe('Correlated trace id.'),
@@ -1791,7 +1796,7 @@ const setup = Cli.create('setup', {
             'oauth-complete',
             doc({
               description:
-                'Complete GitHub OAuth during onboarding using a secure handoff ref from an operator-only browser flow. This flow produces the GitHub App user access token for the connected agent account. If an agent GitHub identity is already stored, the returned GitHub principal must match it or the command fails.',
+                'Complete GitHub OAuth during onboarding using a secure handoff ref from an operator-only browser flow. This flow produces the GitHub App user access token for the connected agent account. OAuth completion does not by itself make GitHub usable; the selected GitHub App installation grants must also be valid for the intended repo or org scope. If an agent GitHub identity is already stored, the returned GitHub principal must match it or the command fails.',
               options: z.object({
                 ['code-ref']: secureRef.describe(
                   'Secure handoff ref for the GitHub authorization code returned by the operator-only browser flow.',
@@ -1815,12 +1820,12 @@ const setup = Cli.create('setup', {
               output: actionResult,
             }),
           )
-          .command('configure', doc({ description: 'Persist initial Telegram onboarding configuration.', options: z.object({ ['privacy-mode']: z.enum(['enabled', 'disabled', 'unknown']).optional().describe('Observed privacy mode state.'), ['group-ids']: z.array(z.string()).optional().describe('Initial Telegram groups to register.') }), output: actionResult })),
+          .command('configure', doc({ description: 'Persist initial Telegram onboarding configuration.', options: z.object({ ['privacy-mode']: z.enum(['enabled', 'disabled', 'unknown']).optional().describe('Observed or operator-expected privacy mode state used for validation.'), ['group-ids']: z.array(z.string()).optional().describe('Initial Telegram groups to register.') }), output: actionResult })),
       ),
   )
   .command(
     Cli.create('vault', { description: 'Managed workspace and vault setup inputs.' })
-      .command('init', doc({ description: 'Set or validate the managed workspace root. In v1 the synced vault path is the same root. If the target path is non-empty, Origin adopts and imports it before any export instead of silently overwriting files.', options: z.object({ path, ['create-if-missing']: z.boolean().default(true).describe('Create the workspace root if it does not exist.') }), output: actionResult }))
+      .command('init', doc({ description: 'Set or validate the managed workspace root. In v1 the synced vault path is the same root. If the target path is non-empty and this is the first attach, Origin adopts existing markdown files there before any export, adopts an existing `Origin/Memory.md` in place, and leaves non-markdown files local unless explicitly imported later. Origin must not silently overwrite files.', options: z.object({ path, ['create-if-missing']: z.boolean().default(true).describe('Create the workspace root if it does not exist.') }), output: actionResult }))
       .command('memory-bootstrap', doc({ description: 'Seed Origin/Memory.md with initial user-provided facts or preferences.', options: z.object({ content: markdown.describe('Initial memory content.') }), output: actionResult })),
   )
   .command(
@@ -2005,7 +2010,7 @@ const memory = Cli.create('memory', {
       .command(
         'create',
         doc({
-          description: 'Create a supporting memory artifact and link it from memory.',
+          description: 'Create a supporting memory artifact and link it from memory. Markdown notes become replicated managed notes; non-note artifacts remain local workspace artifacts unless explicitly imported into managed state later.',
           options: z.object({
             kind: z.enum(['note', 'folder', 'json', 'csv', 'markdown-table']).describe('Artifact kind.'),
             path,
@@ -2040,7 +2045,7 @@ const memory = Cli.create('memory', {
       .command(
         'link',
         doc({
-          description: 'Link an existing artifact from Origin/Memory.md.',
+          description: 'Link an existing artifact from Origin/Memory.md. Linking does not by itself import the artifact into replicated managed state.',
           options: z.object({
             path,
             summary: z.string().describe('Artifact summary.'),
@@ -2049,11 +2054,11 @@ const memory = Cli.create('memory', {
         }),
       )
       .command('unlink', doc({ description: 'Unlink an artifact from Origin/Memory.md without deleting the file.', args: z.object({ path }), output: actionResult }))
-      .command('history', doc({ description: 'Inspect revision history for one memory artifact.', args: z.object({ path }), output: list(workspaceRevision, 'Artifact revisions.') }))
+      .command('history', doc({ description: 'Inspect revision history for one memory artifact when that artifact has been explicitly imported into replicated managed state.', args: z.object({ path }), output: list(workspaceRevision, 'Artifact revisions.') }))
       .command(
         'restore',
         doc({
-          description: 'Restore one memory artifact to a prior revision.',
+          description: 'Restore one memory artifact to a prior revision when that artifact participates in replicated managed state.',
           args: z.object({ path, ['revision-id']: id('Revision id.') }),
           output: actionResult,
         }),
@@ -2120,14 +2125,14 @@ const workspace = Cli.create('workspace', {
   .command(
     'history',
     doc({
-      description: 'Inspect workspace revision history for one managed path.',
+      description: 'Inspect workspace revision history for one managed path that participates in replicated managed state, such as a note or explicitly imported managed attachment.',
       args: z.object({ path }),
       output: list(workspaceRevision, 'Workspace revisions.'),
     }),
   )
   .command(
     Cli.create('revision', { description: 'Inspect specific workspace revisions.' })
-      .command('list', doc({ description: 'List revisions for one managed path.', args: z.object({ path }), output: list(workspaceRevision, 'Workspace revisions.') }))
+      .command('list', doc({ description: 'List revisions for one managed path that participates in replicated managed state.', args: z.object({ path }), output: list(workspaceRevision, 'Workspace revisions.') }))
       .command('get', doc({ description: 'Get one workspace revision.', args: z.object({ ['revision-id']: id('Revision id.') }), output: workspaceRevision }))
       .command(
         'diff',
@@ -2145,10 +2150,10 @@ const workspace = Cli.create('workspace', {
   .command(
     Cli.create('bridge', { description: 'Workspace import/export bridge state.' })
       .command('status', doc({ description: 'Inspect the managed workspace bridge status.', output: workspaceStatus }))
-      .command('scan', doc({ description: 'Scan the workspace for external file changes.', output: actionResult }))
-      .command('import', doc({ description: 'Import detected filesystem edits into managed state.', output: actionResult }))
-      .command('export', doc({ description: 'Materialize managed state back into workspace files.', output: actionResult }))
-      .command('reconcile', doc({ description: 'Run a full bridge reconcile pass.', output: actionResult })),
+      .command('scan', doc({ description: 'Scan bridged note files and explicitly managed attachment paths for external changes that Origin can import in v1.', output: actionResult }))
+      .command('import', doc({ description: 'Import detected note-file edits and explicit managed-attachment replacements into replicated managed state.', output: actionResult }))
+      .command('export', doc({ description: 'Materialize replicated managed notes and explicitly managed attachments back into workspace files.', output: actionResult }))
+      .command('reconcile', doc({ description: 'Run a full bridge reconcile pass for replicated managed note content and explicitly managed attachments.', output: actionResult })),
   )
   .command(
     Cli.create('conflict', { description: 'Inspect and resolve workspace bridge conflicts.' })
@@ -2485,8 +2490,8 @@ const taskCli = Cli.create('task', {
     Cli.create('recurrence', { description: 'Recurring-task series controls.' })
       .command('set', doc({ description: 'Set recurrence on a task series root. The series root is the occurrence whose `occurrence-index` is `0`.', args: z.object({ ['task-id']: id('Task series root id. The series root is the occurrence whose `occurrence-index` is `0`.') }), options: z.object({ frequency: z.enum(['daily', 'weekly', 'monthly', 'yearly']).describe('Recurrence frequency.'), interval: z.number().optional().describe('Optional recurrence interval.'), ['by-weekday']: z.array(z.string()).optional().describe('Weekly weekday filters.'), ['by-month-day']: z.array(z.number()).optional().describe('Monthly day filters.'), timezone: z.string().optional().describe('Recurrence timezone.'), ['advance-mode']: z.enum(['on_completion', 'on_schedule']).optional().describe('How the task series advances after the root or later occurrences are scheduled or completed.') }), output: actionResult }))
       .command('clear', doc({ description: 'Remove recurrence metadata from a task series root. The series root is the occurrence whose `occurrence-index` is `0`.', args: z.object({ ['task-id']: id('Task series root id. The series root is the occurrence whose `occurrence-index` is `0`.') }), output: actionResult }))
-      .command('preview', doc({ description: 'Preview upcoming task occurrences from a task series root without mutating state. The series root is the occurrence whose `occurrence-index` is `0`.', args: z.object({ ['task-id']: id('Task series root id. The series root is the occurrence whose `occurrence-index` is `0`.') }), options: z.object({ count: z.number().default(10).describe('Occurrence count to preview.') }), output: list(task, 'Preview task occurrences.') }))
-      .command('occurrences', doc({ description: 'List occurrences generated from a recurring task series. The series root is the occurrence whose `occurrence-index` is `0`.', args: z.object({ ['task-id']: id('Task series root id. The series root is the occurrence whose `occurrence-index` is `0`.') }), options: z.object({ from: isoDate.optional().describe('Inclusive lower bound.'), to: isoDate.optional().describe('Inclusive upper bound.'), limit: z.number().optional().describe('Maximum occurrence count.') }), output: list(task, 'Recurring task occurrences.') })),
+      .command('preview', doc({ description: 'Preview upcoming task occurrences projected from a task series root without mutating state. The series root is the occurrence whose `occurrence-index` is `0`.', args: z.object({ ['task-id']: id('Task series root id. The series root is the occurrence whose `occurrence-index` is `0`.') }), options: z.object({ count: z.number().default(10).describe('Occurrence count to preview.') }), output: list(task, 'Preview task occurrences.') }))
+      .command('occurrences', doc({ description: 'List materialized recurring task occurrences and explicit exceptions for a task series root. The series root is the occurrence whose `occurrence-index` is `0`.', args: z.object({ ['task-id']: id('Task series root id. The series root is the occurrence whose `occurrence-index` is `0`.') }), options: z.object({ from: isoDate.optional().describe('Inclusive lower bound.'), to: isoDate.optional().describe('Inclusive upper bound.'), limit: z.number().optional().describe('Maximum occurrence count.') }), output: list(task, 'Recurring task occurrences.') })),
   )
   .command(
     Cli.create('conflict', { description: 'Inspect and resolve task conflicts.' })
@@ -2533,8 +2538,8 @@ const calendarItemCli = Cli.create('calendar-item', {
     Cli.create('recurrence', { description: 'Recurring calendar-series controls.' })
       .command('set', doc({ description: 'Set recurrence on a calendar series root. The series root is the occurrence whose `occurrence-index` is `0`.', args: z.object({ ['calendar-item-id']: id('Calendar series root id. The series root is the occurrence whose `occurrence-index` is `0`.') }), options: z.object({ frequency: z.enum(['daily', 'weekly', 'monthly', 'yearly']).describe('Recurrence frequency.'), interval: z.number().optional().describe('Optional recurrence interval.'), ['by-weekday']: z.array(z.string()).optional().describe('Weekly weekday filters.'), ['by-month-day']: z.array(z.number()).optional().describe('Monthly day filters.'), timezone: z.string().optional().describe('Recurrence timezone.') }), output: actionResult }))
       .command('clear', doc({ description: 'Remove recurrence metadata from a calendar series root. The series root is the occurrence whose `occurrence-index` is `0`.', args: z.object({ ['calendar-item-id']: id('Calendar series root id. The series root is the occurrence whose `occurrence-index` is `0`.') }), output: actionResult }))
-      .command('preview', doc({ description: 'Preview upcoming calendar occurrences from a calendar series root without mutating state. The series root is the occurrence whose `occurrence-index` is `0`.', args: z.object({ ['calendar-item-id']: id('Calendar series root id. The series root is the occurrence whose `occurrence-index` is `0`.') }), options: z.object({ count: z.number().default(10).describe('Occurrence count to preview.') }), output: list(calendarItem, 'Preview calendar occurrences.') }))
-      .command('occurrences', doc({ description: 'List occurrences generated from a recurring calendar series. The series root is the occurrence whose `occurrence-index` is `0`.', args: z.object({ ['calendar-item-id']: id('Calendar series root id. The series root is the occurrence whose `occurrence-index` is `0`.') }), options: z.object({ from: isoDate.optional().describe('Inclusive lower bound.'), to: isoDate.optional().describe('Inclusive upper bound.'), limit: z.number().optional().describe('Maximum occurrence count.') }), output: list(calendarItem, 'Recurring calendar occurrences.') })),
+      .command('preview', doc({ description: 'Preview upcoming calendar occurrences projected from a calendar series root without mutating state. The series root is the occurrence whose `occurrence-index` is `0`.', args: z.object({ ['calendar-item-id']: id('Calendar series root id. The series root is the occurrence whose `occurrence-index` is `0`.') }), options: z.object({ count: z.number().default(10).describe('Occurrence count to preview.') }), output: list(calendarItem, 'Preview calendar occurrences.') }))
+      .command('occurrences', doc({ description: 'List materialized recurring calendar occurrences and explicit exceptions for a calendar series root. The series root is the occurrence whose `occurrence-index` is `0`.', args: z.object({ ['calendar-item-id']: id('Calendar series root id. The series root is the occurrence whose `occurrence-index` is `0`.') }), options: z.object({ from: isoDate.optional().describe('Inclusive lower bound.'), to: isoDate.optional().describe('Inclusive upper bound.'), limit: z.number().optional().describe('Maximum occurrence count.') }), output: list(calendarItem, 'Recurring calendar occurrences.') })),
   )
   .command(
     Cli.create('conflict', { description: 'Inspect and resolve calendar-item conflicts.' })
@@ -2678,7 +2683,7 @@ const email = Cli.create('email', {
   )
   .command(
     Cli.create('outbox', { description: 'Queued outbound email actions.' })
-      .command('list', doc({ description: 'List queued outbound email actions.', output: list(outboxItem, 'Email outbox items.') }))
+      .command('list', doc({ description: 'List queued outbound email actions from the server-owned provider outbox.', output: list(outboxItem, 'Email outbox items.') }))
       .command('get', doc({ description: 'Get one queued outbound email action.', args: z.object({ ['outbox-id']: id('Outbox item id.') }), output: outboxItem }))
       .command('retry', doc({ description: 'Retry one queued outbound email action.', args: z.object({ ['outbox-id']: id('Outbox item id.') }), output: actionResult }))
       .command('cancel', doc({ description: 'Cancel one queued outbound email action.', args: z.object({ ['outbox-id']: id('Outbox item id.') }), output: actionResult }))
@@ -2691,8 +2696,8 @@ const github = Cli.create('github', {
   .command(
     Cli.create('account', { description: 'Connected GitHub account state.' })
       .command('status', doc({ description: 'Inspect connected GitHub account state.', output: integrationStatus }))
-      .command('validate', doc({ description: 'Validate GitHub connectivity and permissions.', output: validationResult }))
-      .command('permissions', doc({ description: 'Inspect effective GitHub permissions for the connected account.', output: integrationScopeStatus })),
+      .command('validate', doc({ description: 'Validate GitHub connectivity, effective permissions, and GitHub App installation grants for the current working set.', output: validationResult }))
+      .command('permissions', doc({ description: 'Inspect effective GitHub permissions and installation-grant scope for the connected account.', output: integrationScopeStatus })),
   )
   .command(
     Cli.create('repo', { description: 'Repository tracking.' })
@@ -2711,7 +2716,7 @@ const github = Cli.create('github', {
     Cli.create('follow', { description: 'Fine-grained follow targets across tracked repositories.' })
       .command('list', doc({ description: 'List follow targets across repositories, issues, and pull requests.', options: z.object({ repo: z.array(z.string()).optional().describe('Repository filters.'), kind: z.array(z.string()).optional().describe('Follow-target kind filter.'), limit: z.number().optional().describe('Maximum target count.') }), output: list(githubFollowTarget, 'GitHub follow targets.') }))
       .command('get', doc({ description: 'Get one follow target.', args: z.object({ ['follow-id']: id('Follow target id.') }), output: githubFollowTarget }))
-      .command('set', doc({ description: 'Create or update a follow target. Repo-kind follow targets are the canonical GitHub working-set scope and own repository refresh cursors.', options: z.object({ repo: z.string().describe('Repository owner/name.'), kind: z.enum(['repo', 'issue', 'pr']).describe('Follow-target kind.'), ['target-ref']: z.string().optional().describe('Issue or PR ref when applicable.'), reason: z.string().optional().describe('Why this matters.') }), output: actionResult }))
+      .command('set', doc({ description: 'Create or update a follow target. Repo-kind follow targets are the canonical GitHub working-set scope, while server-owned pollers keep repository refresh cursors.', options: z.object({ repo: z.string().describe('Repository owner/name.'), kind: z.enum(['repo', 'issue', 'pr']).describe('Follow-target kind.'), ['target-ref']: z.string().optional().describe('Issue or PR ref when applicable.'), reason: z.string().optional().describe('Why this matters.') }), output: actionResult }))
       .command('clear', doc({ description: 'Clear one follow target.', args: z.object({ ['follow-id']: id('Follow target id.') }), output: actionResult }))
       .command('dismiss', doc({ description: 'Suppress current attention for one follow target after manual review. This does not remove the follow target; new activity may surface it again.', args: z.object({ ['follow-id']: id('Follow target id.') }), output: actionResult }))
       .command('next', doc({ description: 'Return the next highest-signal follow-up targets.', output: list(githubFollowTarget, 'Next GitHub follow targets.') }))
@@ -2815,7 +2820,7 @@ const github = Cli.create('github', {
   )
   .command(
     Cli.create('outbox', { description: 'Queued outbound GitHub mutations.' })
-      .command('list', doc({ description: 'List queued outbound GitHub actions.', output: list(outboxItem, 'GitHub outbox items.') }))
+      .command('list', doc({ description: 'List queued outbound GitHub actions from the server-owned provider outbox.', output: list(outboxItem, 'GitHub outbox items.') }))
       .command('get', doc({ description: 'Get one queued outbound GitHub action.', args: z.object({ ['outbox-id']: id('Outbox item id.') }), output: outboxItem }))
       .command('retry', doc({ description: 'Retry one queued outbound GitHub action.', args: z.object({ ['outbox-id']: id('Outbox item id.') }), output: actionResult }))
       .command('cancel', doc({ description: 'Cancel one queued outbound GitHub action.', args: z.object({ ['outbox-id']: id('Outbox item id.') }), output: actionResult }))
@@ -2831,7 +2836,7 @@ const telegram = Cli.create('telegram', {
       .command('set-token', doc({ description: 'Set or replace the Telegram bot token using a secure handoff ref from an operator-only channel. Do not type raw bot tokens into the agent CLI.', options: z.object({ ['token-ref']: secureRef.describe('Secure handoff ref for the Telegram bot token from BotFather.') }), output: actionResult }))
       .command('revoke', doc({ description: 'Revoke the stored Telegram bot token locally.', output: actionResult }))
       .command('validate', doc({ description: 'Validate the Telegram bot token and configuration.', output: validationResult }))
-      .command('configure', doc({ description: 'Configure tracked Telegram bot behavior such as privacy expectations and default participation mode.', options: z.object({ ['privacy-mode']: z.enum(['enabled', 'disabled', 'unknown']).optional().describe('Observed or intended privacy mode state.'), ['default-mode']: z.enum(['observe', 'participate']).optional().describe('Default participation mode for enabled groups.'), ['default-summary-enabled']: z.boolean().optional().describe('Whether summaries are enabled by default for newly registered groups.'), ['default-summary-window']: duration.optional().describe('Default summary lookback or cadence for newly registered groups when summaries are enabled.') }), output: actionResult }))
+      .command('configure', doc({ description: 'Configure tracked Telegram bot behavior such as privacy expectations for validation and default participation mode.', options: z.object({ ['privacy-mode']: z.enum(['enabled', 'disabled', 'unknown']).optional().describe('Observed or operator-expected privacy mode state used for validation.'), ['default-mode']: z.enum(['observe', 'participate']).optional().describe('Default participation mode for enabled groups.'), ['default-summary-enabled']: z.boolean().optional().describe('Whether summaries are enabled by default for newly registered groups.'), ['default-summary-window']: duration.optional().describe('Default summary lookback or cadence for newly registered groups when summaries are enabled.') }), output: actionResult }))
       .command('refresh-metadata', doc({ description: 'Refresh bot metadata and membership state from Telegram.', output: actionResult })),
   )
   .command(
@@ -2878,11 +2883,11 @@ const telegram = Cli.create('telegram', {
   )
   .command(
     Cli.create('summary', { description: 'Telegram summary generation and posting.' })
-      .command('list', doc({ description: 'List recent Telegram summary jobs.', options: z.object({ ['chat-id']: z.string().optional().describe('Optional chat filter.'), since: isoDateTime.optional().describe('Lower time bound.'), until: isoDateTime.optional().describe('Upper time bound.'), limit: z.number().optional().describe('Maximum summary count.') }), output: list(telegramSummaryJob, 'Telegram summary jobs.') }))
+      .command('list', doc({ description: 'List recent Telegram summary-job projections produced by automation runs or explicit summary requests.', options: z.object({ ['chat-id']: z.string().optional().describe('Optional chat filter.'), since: isoDateTime.optional().describe('Lower time bound.'), until: isoDateTime.optional().describe('Upper time bound.'), limit: z.number().optional().describe('Maximum summary count.') }), output: list(telegramSummaryJob, 'Telegram summary jobs.') }))
       .command('get', doc({ description: 'Get one Telegram summary job.', args: z.object({ ['summary-id']: id('Summary job id.') }), output: telegramSummaryJob }))
       .command('run', doc({ description: 'Generate a summary for a Telegram group over a recent window.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), options: z.object({ window: duration.default('24h').describe('Window to summarize.') }), output: actionResult }))
       .command('post', doc({ description: 'Post a generated summary into a Telegram group.', args: z.object({ ['summary-id']: id('Summary job id.') }), output: actionResult }))
-      .command('next', doc({ description: 'Return the next groups that should be summarized.', output: list(telegramSummaryJob, 'Next Telegram summary candidates.') })),
+      .command('next', doc({ description: 'Return the next groups whose current Telegram summary policy and automation state indicate a summary is due.', output: list(telegramSummaryJob, 'Next Telegram summary candidates.') })),
   )
   .command(
     Cli.create('cache', { description: 'Telegram cache controls.' })
@@ -2899,7 +2904,7 @@ const telegram = Cli.create('telegram', {
   )
   .command(
     Cli.create('outbox', { description: 'Queued outbound Telegram actions.' })
-      .command('list', doc({ description: 'List queued outbound Telegram actions.', output: list(outboxItem, 'Telegram outbox items.') }))
+      .command('list', doc({ description: 'List queued outbound Telegram actions from the server-owned provider outbox.', output: list(outboxItem, 'Telegram outbox items.') }))
       .command('get', doc({ description: 'Get one queued outbound Telegram action.', args: z.object({ ['outbox-id']: id('Outbox item id.') }), output: outboxItem }))
       .command('retry', doc({ description: 'Retry one queued outbound Telegram action.', args: z.object({ ['outbox-id']: id('Outbox item id.') }), output: actionResult }))
       .command('cancel', doc({ description: 'Cancel one queued outbound Telegram action.', args: z.object({ ['outbox-id']: id('Outbox item id.') }), output: actionResult }))
@@ -2911,7 +2916,7 @@ const automationCli = Cli.create('automation', {
 })
   .command('list', doc({ description: 'List automations.', options: z.object({ status: z.array(z.string()).optional().describe('Automation status filter.'), trigger: z.array(z.string()).optional().describe('Trigger filter.'), ['linked-task']: z.array(z.string()).optional().describe('Linked task filter.'), limit: z.number().optional().describe('Maximum automation count.') }), output: list(automation, 'Automations.') }))
   .command('get', doc({ description: 'Get one automation.', args: z.object({ ['automation-id']: id('Automation id.') }), output: automation }))
-  .command('create', doc({ description: 'Create an automation.', options: z.object({ title: z.string().describe('Automation title.'), kind: z.string().describe('Automation kind.'), trigger: automationTrigger.describe('Typed trigger definition.'), actions: z.array(automationAction).describe('Ordered action definitions.'), ['run-policy']: automationRunPolicy.optional().describe('Run policy. Defaults to serial execution, skipped catch-up, and stop-on-error.'), ['retry-policy']: automationRetryPolicy.optional().describe('Retry policy. Defaults to three total attempts with exponential backoff.') }), output: actionResult }))
+  .command('create', doc({ description: 'Create an automation. The persisted automation kind is derived from the trigger shape and is not supplied separately.', options: z.object({ title: z.string().describe('Automation title.'), trigger: automationTrigger.describe('Typed trigger definition.'), actions: z.array(automationAction).describe('Ordered action definitions.'), ['run-policy']: automationRunPolicy.optional().describe('Run policy. Defaults to serial execution, skipped catch-up, and stop-on-error.'), ['retry-policy']: automationRetryPolicy.optional().describe('Retry policy. Defaults to three total attempts with exponential backoff.') }), output: actionResult }))
   .command('update', doc({ description: 'Update an automation.', args: z.object({ ['automation-id']: id('Automation id.') }), options: z.object({ title: z.string().optional().describe('New title.'), trigger: automationTrigger.optional().describe('Replacement trigger.'), actions: z.array(automationAction).optional().describe('Replacement actions.'), ['notification-policy']: z.record(z.string(), z.unknown()).optional().describe('Notification policy patch.'), ['run-policy']: automationRunPolicy.partial().optional().describe('Run policy patch.'), ['retry-policy']: automationRetryPolicy.partial().optional().describe('Retry policy patch.') }), output: actionResult }))
   .command('archive', doc({ description: 'Archive an automation.', args: z.object({ ['automation-id']: id('Automation id.') }), output: actionResult }))
   .command('delete', doc({ description: 'Delete an automation.', args: z.object({ ['automation-id']: id('Automation id.') }), output: actionResult }))

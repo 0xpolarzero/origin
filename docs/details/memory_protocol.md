@@ -40,7 +40,11 @@ Origin memory has three layers:
 - files, folders, or datasets created when needed
 - referenced from `Origin/Memory.md`
 - format chosen pragmatically by the agent
-- may live either as replicated markdown or note attachments inside the managed workspace root, or as ordinary local workspace artifacts, depending on their file type and whether Origin explicitly manages them as replicated state
+- may live either as replicated markdown notes, replicated managed note attachments, or as ordinary local workspace artifacts, depending on whether Origin explicitly manages them as replicated state
+
+A replicated managed note attachment is a file that Origin has explicitly attached to a managed note or explicitly imported as note-managed supporting content inside the managed workspace root.
+
+An ordinary local workspace artifact is any file, folder, or dataset inside the managed workspace root that Origin has not explicitly imported into the managed note set.
 
 `Origin/Memory.md` is not meant to contain every remembered detail.
 It is the durable index and operating memory for the agent.
@@ -102,6 +106,8 @@ The agent should choose the simplest structure that serves the task.
 ## Replication Boundary
 
 - `Origin/Memory.md`, markdown notes in the managed workspace root, and note attachments inside that root are part of Origin's replicated note model.
+- Replicated note attachments only become replicated through an explicit attachment or import flow; mere presence in the workspace root does not make a file replicated.
+- Referencing a file from `Origin/Memory.md` or linking to it from another note does not by itself promote that file into replicated managed state.
 - Supporting markdown notes that live inside the managed workspace root are replicated managed state.
 - Linked JSON files, CSV files, folders, and other workspace artifacts are local workspace artifacts by default, even when they live inside the managed workspace root and `Origin/Memory.md` references them.
 - A linked local workspace artifact becomes replicated managed state only if Origin explicitly imports it into the managed note set or re-materializes it from managed state.

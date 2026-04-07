@@ -35,7 +35,7 @@ The integration is bot-based, not a Telegram user account. Telegram remains the 
 - A bot is not a normal Telegram user account.
 - The bot must be configured via a bot token obtained from BotFather.
 - Group participation depends on the bot being invited to the group.
-- Privacy mode is an observed / validated constraint on what messages the bot receives in groups, not a provider mutation Origin promises to perform itself.
+- Privacy mode is operator-managed outside Origin; Origin only validates and records the observed state, it does not mutate BotFather configuration itself.
 - With privacy mode disabled, the bot can receive all group messages except messages sent by other bots, subject to Telegram platform rules.
 - The bot cannot behave as a human user account and cannot inherit user-account capabilities.
 - Telegram API rate limits and platform permissions must be respected.
@@ -54,6 +54,9 @@ Origin may keep the following Telegram-related local state:
 
 This state is metadata and cache, not a full mirrored copy of Telegram.
 New chats discovered by polling may create lightweight `TelegramChatRef` discovery state only; they do not become actively tracked, summarized, or fully cached until the user explicitly registers the group.
+`TelegramBotConnection` and `TelegramRecentMessageCache` are operational read models.
+`TelegramGroupSubscription` is the replicated overlay for tracked group policy and membership state.
+`TelegramOutgoingAction` is the server outbox for Telegram mutations.
 
 ## Shared Types
 
@@ -176,8 +179,8 @@ Fields:
 
 ### `TelegramGroupSubscription`
 
-Represents Origin's local subscription state and policy for a Telegram group.
-This is the canonical tracking object for groups.
+Represents Origin's tracked-group overlay and policy for a Telegram group.
+This is the canonical Origin tracking object for groups and the replicated overlay for provider-facing group state.
 
 Fields:
 
@@ -199,6 +202,7 @@ Normative model:
 - `summaryEnabled` is independent of `participationMode` and controls whether summary workflows may run or post for the group.
 - `disabledAt` records when the subscription was last disabled; it is not a separate mode.
 - A discovered chat only becomes actively tracked after an explicit group registration creates or updates this subscription.
+- If the bot loses membership or the permissions needed for the requested mode, Origin must mark the subscription disabled, refresh the chat ref, and surface the loss as a validation / recovery problem until the operator restores access and re-registers or re-enables the group.
 
 ### `TelegramRecentMessageCache`
 
@@ -240,7 +244,7 @@ Fields:
 
 ### `TelegramSummaryJobRecord`
 
-Represents a summary or participation task produced by Origin.
+Represents a read-model record for a summary or participation workflow owned by automation or an explicit operator request.
 
 Fields:
 
@@ -255,6 +259,8 @@ Fields:
 - `completedAt`
 - `failedAt`
 - `lastError`
+
+Automatic summaries are automation-owned. This record projects the resulting execution state for Telegram; it is not a second canonical workflow object.
 
 ## Read / Query Surface
 
@@ -293,7 +299,7 @@ Search should be limited to what Origin has cached or can reasonably fetch on de
 - validate bot token
 - revoke bot token
 - update bot display metadata
-- configure privacy mode
+- record or update the privacy-mode expectation Origin should validate
 - configure default participation settings
 
 ### Group participation
@@ -332,7 +338,8 @@ Participation mode and summary policy are separate settings on an enabled group.
 ## Sync / Cache Strategy
 
 - Telegram remains the source of truth.
-- Origin stores bot identity, chat refs, group subscription policy, and outbound actions as durable Origin metadata.
+- Origin stores bot identity, chat refs, recent message windows, and outbound actions as server-side operational state and read models derived from Telegram ingress.
+- `TelegramGroupSubscription` is the replicated Origin overlay for tracked-group policy and lifecycle state.
 - Origin stores recent message windows as a selective, recent, bounded cache for agent workflow speed and short-lived robustness.
 - Chat refs and group policy are expected to survive cache eviction or repair.
 - Recent message caches are evictable and are not a durable history store.
@@ -351,6 +358,12 @@ Origin models each tracked group on separate axes:
 - summary policy: enabled or disabled
 
 These axes must not be collapsed into one overloaded mode field.
+
+Membership and permission loss follow a strict lifecycle:
+
+- if the bot is removed from a group or loses the permissions required for the tracked mode, the subscription is disabled
+- disabled subscriptions remain visible for recovery, but they do not generate summaries or outbound participation actions until access is restored
+- a re-scan or explicit re-registration can re-enable the subscription once the bot is invited back and permissions are valid again
 
 Origin should support:
 

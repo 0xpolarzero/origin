@@ -141,8 +141,8 @@ Origin should feel like a personal chief-of-staff that can actually operate. The
 
 Origin should distinguish between:
 
-- replicated app state: editable objects that must work offline on every device and sync bidirectionally when online
-- external mirrors and outboxes: selective read models of external systems plus queued mutations waiting to be applied remotely
+- replicated app state: editable first-party objects and Origin-authored external-action intents that must work offline on every device and sync bidirectionally when online
+- external mirrors and server outboxes: selective read models of external systems plus server-owned queued mutations waiting to be applied remotely
 - materialized projections: derived views such as markdown files, search indexes, reports, or external-service updates
 - secrets: credentials and session material stored behind capability boundaries
 
@@ -151,6 +151,8 @@ Origin should distinguish between:
 - First-party Origin objects remain replicated local-first state.
 - Provider ingress operational state is server-local operational state: pollers, cursors, backoff/rate-limit state, provider execution queues, and primary provider caches.
 - A domain may define explicit Origin-owned overlays or linkage metadata as replicated first-party state, but provider-derived caches are not peer-replicated source-of-truth.
+- Examples of replicated provider-domain overlays in v1 are `EmailTriageRecord`, `GitHubFollowTarget`, and `TelegramGroupSubscription`.
+- Clients do not write provider outboxes directly. Offline or local user intent syncs as replicated first-party external-action intent state, and the server materializes provider-specific outbox records from that intent when it is online and authorized to act.
 - Clients consume provider domains through server-mediated read models, activity, and targeted fetches rather than by owning full replicated provider mirrors.
 
 ### Local-First Requirement
@@ -296,12 +298,13 @@ Every peer, including each Apple device and the server, should have a local Orig
 - The app writes immediately to its local replicated store
 - The UI updates from local state with no network round-trip
 - A change record is stored locally with actor identity and metadata
-- If the action targets an external service or the AI, it is added to an outbox queue
+- If the action targets an external service or the AI, the device records a replicated external-action intent locally rather than writing provider/server outboxes directly
 
 #### What happens when the device comes back online
 
 - The device syncs its replicated changes to the server peer
 - The server syncs any newer changes back to the device
+- For external-service or AI work, the server materializes its own provider/job outbox records from the synced replicated intent and executes them with server-held credentials or capabilities
 - If there were concurrent edits, the replicated data model preserves both and merges according to the document rules
 - If there is a semantic conflict that still needs resolution, that conflict is represented in state rather than causing silent data loss
 
@@ -336,7 +339,8 @@ Every peer, including each Apple device and the server, should have a local Orig
 - Google provider pollers, cursors, backoff/rate-limit state, and execution queues remain server-local operational state
 - Provider changes from Google bridges reconcile into replicated planning objects; Origin planning changes sync outward through server-owned bridge jobs
 - Email, GitHub, and Telegram remain external-service domains rather than replicated first-party object sets
-- The server owns their pollers, primary caches, and provider outboxes; clients consume them through server-mediated read models and activity, with only domain-defined first-party overlays replicated when needed
+- The server owns their pollers, primary caches, and provider outboxes; clients consume them through server-mediated read models and activity, with only domain-defined first-party overlays such as `EmailTriageRecord`, `GitHubFollowTarget`, and `TelegramGroupSubscription` replicated when needed
+- Offline client actions that target those providers are recorded first as replicated Origin intent, then converted by the server into provider-specific outbox work once sync reaches the authoritative server peer
 
 ### Recommended Library Stack
 
@@ -544,8 +548,9 @@ Origin should be deliberate about which domains it owns directly and which it tr
 
 - The managed workspace root is the full filesystem area Origin manages on a peer
 - In v1, the markdown vault is the managed workspace root itself
-- Markdown notes and note attachments inside the vault bridge into replicated note state
-- Non-note files in the managed workspace remain normal host files unless Origin explicitly imports them into managed replicated state
+- Markdown notes and explicitly managed note attachments inside the vault bridge into replicated note state
+- A managed note attachment is a file that Origin explicitly attached to a note or explicitly imported as note-managed supporting content
+- Non-note files in the managed workspace remain normal host files unless Origin explicitly imports or attaches them into managed replicated state
 
 #### Recommended markdown-vault design
 
@@ -559,6 +564,7 @@ Origin should be deliberate about which domains it owns directly and which it tr
   - edit note state through the replicated document model
   - export current note state to markdown files
   - import external markdown edits back into replicated note state
+  - replicate non-markdown files only when they are explicitly attached or imported as managed note content
   - keep richer operational metadata in the replicated store and projection database rather than stuffing large metadata into frontmatter
 
 #### Filesystem-first note editing requirement
@@ -579,6 +585,8 @@ Origin should be deliberate about which domains it owns directly and which it tr
   - applying those diffs as text operations into local Automerge note documents
   - recording actor/source metadata for the imported change
   - preventing export/import echo loops
+- The note bridge automatically imports markdown note edits. Non-markdown files do not become replicated managed state just by existing in the workspace or being linked from a note.
+- Explicitly managed note attachments sync only through explicit attach/import/replace flows; ordinary local workspace artifacts are outside the bridge's replicated import path in v1.
 - Peers sync note state through Automerge, not by sharing the vault filesystem directly
 - This means concurrent file edits on different peers still reconcile through the replicated note model
 
@@ -594,12 +602,20 @@ Origin should be deliberate about which domains it owns directly and which it tr
 - If the selected workspace/vault path does not exist, Origin creates it
 - If it exists and is empty, Origin initializes it
 - If it exists and is non-empty, Origin performs an adoption/import pass before any export
+- First-attach adoption applies only when the profile does not already have replicated note state for another workspace
+- During first-attach adoption, existing `.md` files in the workspace root are imported as managed notes with their relative paths preserved
+- Existing `Origin/Memory.md` is adopted in place as the canonical memory file and must not be overwritten
+- Existing non-markdown files remain ordinary local workspace artifacts unless the user or agent later explicitly imports or attaches them into managed state
+- If a profile already has replicated note state and the target path is already populated, attach must go through an explicit reconcile/repair flow instead of silently importing or overwriting
 - Origin must not silently clobber existing files during attach, adoption, or first export
 
 #### External editing import path
 
 - Editing notes outside Origin should be a supported workflow
 - External edits do not bypass the replicated model; they are imported into it
+- Automatic external-edit import applies to managed markdown note files
+- Mere presence of a local file, or linking to it from `Origin/Memory.md` or another note, does not promote it into replicated managed state
+- Explicitly managed note attachments may be replaced or re-imported through managed attachment flows, but ordinary local workspace artifacts are not opportunistically imported into replicated state
 - Each imported file change becomes a normal replicated change authored by an actor such as:
   - `user:<device-id>:external`
   - `agent:<server-session-id>:external`
@@ -654,8 +670,9 @@ Origin should be deliberate about which domains it owns directly and which it tr
 - Arbitrary host-filesystem access is a first-class operational capability for the agent, not an edge case
 - These arbitrary host files are not part of the replicated local-first app state by default
 - The special thing about the managed workspace/vault is sync behavior, not access control
-- Markdown notes and note attachments inside the managed vault are bridged into Origin's replicated note model and sync across peers
+- Markdown notes and explicitly managed note attachments inside the managed vault are bridged into Origin's replicated note model and sync across peers
 - Non-note files in the managed workspace and arbitrary host files outside it remain normal host files unless Origin explicitly imports them into managed state
+- Ordinary local workspace artifacts do not get replicated history or restore semantics in v1; replicated history applies to managed note state and any file explicitly imported into that state
 - Other host files should be treated as external operational resources that Origin can inspect, modify, create, move, or organize through its CLI capability surface
 
 #### Email, GitHub, and Telegram
@@ -845,7 +862,7 @@ All core libraries and tools used by the system should be cloned locally into `d
 40. Retrieval should use a hybrid model: structured filters and exact search first, with embeddings / vector retrieval as a first-class derived layer where semantic search improves context quality.
 41. Origin should support proactive notifications through in-app surfaces and push notifications, but not through outbound email or Telegram notifications in v1.
 42. Persisted agent-authored documents should be ordinary notes in the vault organized as needed; transient one-off output should remain in chat by default.
-43. The managed workspace is a single shared assistant workspace; the vault is its synced notes subtree rather than a separate user/agent split.
+43. The managed workspace is a single shared assistant workspace, and in v1 the vault is that workspace root itself rather than a separate subtree or user/agent split.
 44. Agent memory behavior is defined by [memory_protocol.md](./details/memory_protocol.md): `Origin/Memory.md` is the curated memory index, and the agent may create supporting files or datasets referenced from it without requiring fixed schemas upfront.
 45. Origin itself should use the simplest viable single-owner auth model in v1 and should not introduce an internal multi-user account system.
 46. The preferred v1 deployment target is a single Linux VPS compatible with Hetzner-style deployment, using a bare-metal / systemd-first service model rather than container-first packaging.

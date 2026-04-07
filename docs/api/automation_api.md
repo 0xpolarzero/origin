@@ -160,11 +160,14 @@ Represents a durable routine or reactive workflow.
 
 ### `kind`
 
+`kind` is a coarse persisted classification derived from the trigger shape. It is not a second source of truth for execution behavior.
+
 An automation can be one of:
 
 - `scheduled`
 - `reactive`
 - `manual`
+- `hybrid`
 
 ### `trigger`
 
@@ -176,6 +179,8 @@ Supported forms:
 - event-based
 - manual start
 - hybrid schedule plus event start where needed
+
+The trigger type is the canonical source of truth for start behavior. `kind` follows the trigger shape above.
 
 The trigger shape is intentionally small and typed in v1.
 
@@ -190,11 +195,14 @@ The canonical v1 shape is a small typed action object aligned with the CLI:
 - `type: "command"`
 - `command`
 - `args`
+- `options`
 - `summary`
 
-`command` names the canonical Origin command or command family to invoke.
+`command` names the exact canonical CLI command path to invoke, not a loose command family.
 
-`args` must match that command's contract.
+`args` are the positional arguments for that command path.
+
+`options` are the named CLI flags or key/value options for that command path.
 
 ### `notificationPolicy`
 
@@ -245,6 +253,8 @@ Represents one execution instance of an automation.
 - `automationId`
 - `status: RunStatus`
 - `triggeredAt`
+- `scheduledAt`
+- `activityEventId`
 - `startedAt`
 - `finishedAt`
 - `triggerReason`
@@ -294,7 +304,13 @@ Event triggers are used for things like:
 - a sync event lands
 - an integration reports a notable state change
 
+Allowed event families in v1 are the normalized durable events emitted by provider ingress and first-party domain lifecycle events. Event triggers must match those durable event kinds exactly; they do not match raw cache diffs or ad hoc payload changes.
+
 For provider-backed reactive workflows, `eventKinds[]` should point at provider ingress activity kinds, not raw cache diffs.
+
+`filters` are conjunctive: all supplied filters must pass after the event kind matches.
+
+`sourceScope` limits which objects or providers can emit matching events; it does not redefine the event kind itself.
 
 ### Manual Trigger
 
@@ -395,6 +411,7 @@ Mutation behavior:
 - Manual runs should record the triggering actor and reason.
 - Scheduled runs dedupe on `(automationId, scheduledAt)`.
 - Reactive runs dedupe on `(automationId, activityEventId)`.
+- `scheduledAt` and `activityEventId` are the logical run identity anchors when present.
 - Retrying a failed run reuses the same logical run record and increments attempt state.
 
 ### Concurrency
@@ -537,7 +554,7 @@ The intended flow is:
 
 Examples:
 
-- `on new email` should trigger from an email ingress event such as `email.thread.received`
+- `on new email` should trigger from an email ingress event such as `email.thread.created` or `email.message.received`
 - `on followed GitHub PR updated` should trigger from a GitHub ingress event
 - `on Telegram message in tracked group` should trigger from a Telegram ingress event
 

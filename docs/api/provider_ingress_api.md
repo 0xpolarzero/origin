@@ -66,7 +66,21 @@ So:
 - Queued provider mutations are outbox records, separate from pollers.
 - Provider caches and outboxes are not the replicated app-state layer.
 - A provider domain may define explicit Origin-owned overlay objects separately, but that does not make provider-derived caches peer-replicated source-of-truth.
+- Examples of replicated overlay objects in v1 are `EmailTriageRecord`, `GitHubFollowTarget`, and `TelegramGroupSubscription`.
+- Clients never enqueue provider outbox records directly. They sync Origin-owned intent or overlay mutations, and the server materializes provider-specific outbox records from those replicated changes before dispatch.
 - Clients consume provider domains through server-mediated read models and activity rather than full replicated provider mirrors.
+
+## Offline Intent Handoff
+
+When a device is offline and the user or agent requests an external action:
+
+1. the client writes replicated Origin state locally, including any first-party overlay changes and the durable external-action intent
+2. that replicated state syncs to the server when connectivity returns
+3. the server validates the intent against provider auth and current scope
+4. the server creates or updates the provider-specific outbox record
+5. provider dispatch, retry, and dedupe happen from the server-owned outbox
+
+This keeps offline behavior local-first without pretending provider outboxes are peer-replicated state.
 
 ## Why This Model
 
@@ -177,7 +191,9 @@ Not every provider field change needs a user-visible event.
 
 Origin should emit events for meaningful changes such as:
 
-- new email thread/message
+- new email thread
+- new email message in an existing thread
+- meaningful email thread update
 - email triage-relevant state change
 - new or updated followed GitHub issue/PR/review/comment
 - new Telegram message in a tracked chat
@@ -222,7 +238,7 @@ They should not continuously diff provider cache state directly.
 
 For provider-backed workflows, ingress activity events are the canonical trigger surface.
 
-Provider-domain docs may also define first-party object events such as `planning.task.updated` or `email.label.updated`.
+Provider-domain docs may also define first-party object events such as `planning.task.updated` or `email.triage.state.changed`.
 
 Those downstream domain events are useful for audit, read models, and first-party workflows, but they do not replace the ingress event surface for provider-backed reactive automation unless a domain explicitly re-emits the same logical event with the same durable event identity.
 
@@ -250,7 +266,8 @@ Every provider ingress pass may emit:
   - `provider.ingress.completed`
   - `provider.ingress.failed`
 - provider-backed domain events
-  - `email.thread.received`
+  - `email.thread.created`
+  - `email.message.received`
   - `email.thread.updated`
   - `github.issue.updated`
   - `github.pr.updated`
@@ -322,20 +339,22 @@ The important contract is:
 
 - one mailbox poller for the agent inbox
 - cursor is mailbox/provider specific
-- cache stores recent relevant threads/messages plus Origin triage overlay
+- cache stores recent relevant threads/messages as server read models plus the Origin triage overlay
 - events drive things like `on new email`
 
 ### GitHub
 
 - one poller over the local followed working set
-- follow targets define scope
+- follow targets define Origin's local scope and attention model
 - cache stores selected repo / issue / PR / review state
+- server pollers own repository cursors and refresh state
 - events drive things like `on followed PR updated`
 
 ### Telegram
 
 - one bot update / tracked-chat poller
-- cache stores recent tracked messages and group policy state
+- cache stores recent tracked messages plus server read models for bot/chat state
+- `TelegramGroupSubscription` is the replicated overlay for tracked-group policy; connection state, recent message caches, and outgoing actions remain server-owned operational state
 - events drive things like `on Telegram message in tracked group`
 
 ### Google Calendar / Google Tasks
