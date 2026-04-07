@@ -75,10 +75,11 @@ So:
 When a device is offline and the user or agent requests an external action:
 
 1. the client writes replicated Origin state locally, including any first-party overlay changes and the durable external-action intent
-2. that replicated state syncs to the server when connectivity returns
-3. the server validates the intent against provider auth and current scope
-4. the server creates or updates the provider-specific outbox record
-5. provider dispatch, retry, and dedupe happen from the server-owned outbox
+2. that intent carries a stable `intentId` plus the target provider scope needed for later materialization
+3. that replicated state syncs to the server when connectivity returns
+4. the server validates the intent against provider auth and current scope
+5. the server creates or updates the provider-specific outbox record, carrying forward the same `intentId` as the origin link and dedupe root
+6. provider dispatch, retry, and dedupe happen from the server-owned outbox
 
 For planning bridges, that durable external-action intent is the local request to attach, detach, pull, push, or reconcile a selected Google surface; it is not a guarantee that the provider side effect has already happened.
 

@@ -11,6 +11,7 @@
 Origin should systematize memory behavior, not prematurely systematize memory schemas.
 
 Origin has a managed workspace root. That root is scoped to the active Origin peer/instance rather than being a profile-global path. In v1, that workspace root is also the markdown vault that participates in the replicated note model.
+For replicated note state, the active peer's managed workspace root is the source of truth; other peers receive re-materialized copies of that state rather than independent divergent stores.
 
 The agent should know how to:
 
@@ -59,6 +60,7 @@ It is the durable index and operating memory for the agent.
 - Transient one-off output should stay in chat unless there is a clear reason to persist it.
 - The user must be able to inspect and edit memory directly.
 - The replication boundary must stay explicit: links from memory do not by themselves make an artifact part of replicated managed state.
+- The active peer's replicated workspace is authoritative for markdown notes and note attachments; linked artifacts remain references until Origin explicitly imports or re-materializes them.
 
 ## What Belongs In `Origin/Memory.md`
 
@@ -182,7 +184,7 @@ The system prompt for Origin agents should explicitly teach:
 - Supporting memory artifacts should be visible like other files in the managed workspace.
 - User edits to `Origin/Memory.md` and other markdown notes in the managed workspace root are authoritative inputs like any other vault edit.
 - Edits to linked local workspace artifacts remain local unless Origin explicitly imports or re-materializes them into replicated managed state.
-- If a peer moves from local to VPS, linked local workspace artifacts stay on the original host unless they are explicitly imported or re-materialized for the VPS peer.
+- If a peer moves from local to VPS, replicated markdown notes and explicit note attachments are re-materialized on the VPS peer; linked local workspace artifacts stay on the original host unless they are explicitly imported or re-materialized for the VPS peer.
 
 ## Relationship To Retrieval
 

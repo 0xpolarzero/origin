@@ -34,6 +34,7 @@ The onboarding flow should:
 - In `vps` mode, bring up the authoritative server before provider linking becomes authoritative.
 - In `vps` mode, collect only non-secret setup inputs until that server exists.
 - Provider OAuth, token storage, and server-owned pollers/cursors happen on the authoritative server.
+- At most one peer/instance may be authoritative for a given provider account set at a time; cutover must stop the old peer's provider workers before the new peer's workers start.
 - The managed workspace root and vault path are scoped to the active Origin peer/instance, not shared as a profile-global path.
 - When a local deployment later migrates to VPS, replicated app state moves to the VPS but provider authority moves only after the VPS is deployed and rehydrated.
 - Persist only what is needed to complete setup, recover it, and operate the system afterward.
@@ -263,16 +264,15 @@ Origin attaches the managed workspace root, initializes or adopts the vault at t
 
 - If the target path does not exist, Origin creates the managed workspace root and bootstraps `Origin/Memory.md` there.
 - If the target path exists and is empty, Origin adopts it as the managed workspace root and bootstraps `Origin/Memory.md`.
-- If the target path exists and is non-empty, Origin inspects and adopts the existing contents first.
-- First-attach adoption only applies when the profile does not already contain replicated note state for another attached workspace.
+- If the target path exists and is non-empty, Origin inspects and adopts the existing contents first when this is the first attached workspace for the profile.
+- If the profile already contains replicated note state for another attached workspace, Origin enters an explicit reconcile/repair flow instead of attaching silently.
 - The managed workspace root is per-peer/instance state; a local peer and a VPS peer may each have their own attached root.
 - On a non-empty target path, Origin classifies the existing files before it writes anything.
 - During first-attach adoption, existing markdown files are imported as managed notes with their relative paths preserved and stable note ids assigned during import.
 - If `Origin/Memory.md` already exists, Origin adopts it in place as the canonical memory file rather than overwriting it.
 - Existing non-markdown files remain ordinary local workspace artifacts unless later imported or attached into managed note state explicitly.
-- If the profile already has replicated note state and the target path is already populated, attach must enter an explicit reconcile/repair flow instead of silently importing or overwriting.
-- The reconcile/repair flow must show the existing replicated note state and the on-disk contents, then require the user to choose an adopt/relocate/replace path before any write occurs.
-- A non-empty target path must be imported or adopted before Origin exports managed files into it.
+- The reconcile/repair flow must show the existing replicated note state and the on-disk contents side by side, then require the user to choose one of three explicit paths before any write occurs: adopt the target path as the managed workspace root and import compatible markdown notes, keep the current managed root and leave the target path untouched, or replace the target path from an exported managed copy after explicit overwrite confirmation.
+- A non-empty target path must be imported or adopted before Origin exports managed files into it, and Origin must never write to that path before the user has chosen a reconcile path.
 - Origin must never silently overwrite existing files, including an existing `Origin/Memory.md`, during first attach.
 - In v1, the vault is the workspace root; there is no separate vault subtree path.
 
@@ -336,8 +336,9 @@ This deployment step happens before Phases 4 through 6 become authoritative in `
 - Origin is running on the VPS as a normal host service.
 - The server can access its managed files and the host filesystem it is allowed to use.
 - The setup matches the bare-metal / systemd-first service model.
-- Provider linking and server-owned pollers now become authoritative on the deployed server.
-- Any local instance stops running provider pollers, cursors, and outbound provider actions for the same account set once the VPS is authoritative.
+- Provider linking and server-owned pollers become authoritative on the deployed server only after the replicated app state has been rehydrated and the provider links have been re-established there.
+- Any local instance stops running provider pollers, cursors, and outbound provider actions for the same account set before the VPS peer is marked authoritative.
+- Exactly one peer may be authoritative for a provider account set at a time.
 - Local-only workspace artifacts are not treated as migrated replicated state unless they were explicitly imported.
 
 ### Failure / recovery

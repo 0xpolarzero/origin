@@ -127,7 +127,8 @@ Origin should feel like a personal chief-of-staff that can actually operate. The
 - Holds the operational environment, agent-linked accounts, credentials, jobs, and mirrored working context needed for unattended execution
 - Preferred v1 shape: a single Linux VPS, compatible with Hetzner-style deployment, where Origin runs directly on the host machine
 - Preferred v1 service model: bare-metal / systemd-first rather than container-first, because the agent should be able to use the VPS like its own machine
-- If the user later moves from local to VPS mode, replicated app state syncs to the VPS, while secrets and provider operational state are re-established there instead of opaque-migrated.
+- If the user later moves from local to VPS mode, replicated app state syncs to the VPS first, while secrets and provider operational state are re-established there instead of opaque-migrated.
+- Provider authority then cuts over in order: validate the VPS peer, re-link provider credentials there, stop provider pollers/cursors/outbound workers on the old peer for that account set, and only then start them on the VPS. At most one peer is authoritative for a provider account set at a time.
 
 ### Action Surface
 
@@ -153,6 +154,8 @@ Origin should distinguish between:
 - A domain may define explicit Origin-owned overlays or linkage metadata as replicated first-party state, but provider-derived caches are not peer-replicated source-of-truth.
 - Examples of replicated provider-domain overlays in v1 are `EmailTriageRecord`, `GitHubFollowTarget`, and `TelegramGroupSubscription`.
 - Clients do not write provider outboxes directly. Offline or local user intent syncs as replicated first-party external-action intent state, and the server materializes provider-specific outbox records from that intent when it is online and authorized to act.
+- An `ExternalActionIntent` is a replicated first-party record with a stable `intentId`, target/scope metadata, payload, and actor/timestamp attribution.
+- The authoritative server must materialize at most one logical provider or job action per `intentId` plus provider scope, and every derived outbox record carries that `intentId` forward as its origin link and dedupe root.
 - Clients consume provider domains through server-mediated read models, activity, and targeted fetches rather than by owning full replicated provider mirrors.
 
 ### Local-First Requirement
@@ -298,13 +301,14 @@ Every peer, including each Apple device and the server, should have a local Orig
 - The app writes immediately to its local replicated store
 - The UI updates from local state with no network round-trip
 - A change record is stored locally with actor identity and metadata
-- If the action targets an external service or the AI, the device records a replicated external-action intent locally rather than writing provider/server outboxes directly
+- If the action targets an external service or the AI, the device records a replicated external-action intent locally with a stable `intentId` rather than writing provider/server outboxes directly
 
 #### What happens when the device comes back online
 
 - The device syncs its replicated changes to the server peer
 - The server syncs any newer changes back to the device
 - For external-service or AI work, the server materializes its own provider/job outbox records from the synced replicated intent and executes them with server-held credentials or capabilities
+- That materialization reuses the intent's stable `intentId` as the origin link and dedupe root so one synced intent becomes one logical provider or job action
 - If there were concurrent edits, the replicated data model preserves both and merges according to the document rules
 - If there is a semantic conflict that still needs resolution, that conflict is represented in state rather than causing silent data loss
 
@@ -522,8 +526,8 @@ Origin should be deliberate about which domains it owns directly and which it tr
 - Calendar items may also exist without a task when they represent standalone events
 - Tasks support both `dueFrom` and `dueAt`, allowing a task to define a due window from `x` to `y`
 - Tasks support dependency edges through `blockedByTaskIds[]`
-- Tasks support recurrence as recurring task series with per-occurrence history
-- Calendar items support recurrence as recurring series with per-occurrence history
+- Tasks support recurrence as recurring task series whose canonical records are the series root plus explicit per-occurrence exceptions, with derived/materialized occurrences and per-occurrence history when present
+- Calendar items support recurrence as recurring series whose canonical records are the series root plus explicit per-occurrence exceptions, with derived/materialized occurrences and per-occurrence history when present
 - The UI should be able to render a due window as spanning multiple days without forcing the task to become a calendar event
 - This keeps planning flexible while still supporting tight scheduling flows
 
@@ -607,6 +611,7 @@ Origin should be deliberate about which domains it owns directly and which it tr
 - Existing `Origin/Memory.md` is adopted in place as the canonical memory file and must not be overwritten
 - Existing non-markdown files remain ordinary local workspace artifacts unless the user or agent later explicitly imports or attaches them into managed state
 - If a profile already has replicated note state and the target path is already populated, attach must go through an explicit reconcile/repair flow instead of silently importing or overwriting
+- That reconcile flow must show the existing replicated note state and on-disk contents side by side, then require an explicit choice to adopt the target path, keep the current managed root, or replace the target path from an exported managed copy before any write occurs
 - Origin must not silently clobber existing files during attach, adoption, or first export
 
 #### External editing import path

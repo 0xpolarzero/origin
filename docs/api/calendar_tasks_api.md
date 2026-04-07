@@ -504,12 +504,14 @@ Any command examples in this document are illustrative summaries of the canonica
 
 ### Representative canonical bridge commands
 
+- `origin planning google-calendar surface list|get|select|deselect`
 - `origin planning google-calendar status`
 - `origin planning google-calendar pull`
 - `origin planning google-calendar push`
 - `origin planning google-calendar reconcile`
 - `origin planning google-calendar attach`
 - `origin planning google-calendar detach`
+- Deselecting a selected calendar must refuse while Origin items still target it unless the operator explicitly requests force-detach, which only detaches local links and never deletes remote Google events
 
 ## Google Tasks Bridge
 
@@ -534,10 +536,12 @@ Any command examples in this document are illustrative summaries of the canonica
 
 ### Representative canonical bridge commands
 
+- `origin planning google-tasks surface list|get|select|deselect`
 - `origin planning google-tasks status`
 - `origin planning google-tasks pull`
 - `origin planning google-tasks push`
 - `origin planning google-tasks reconcile`
+- Deselecting a selected task list must refuse while Origin tasks still target it unless the operator explicitly requests force-detach, which only detaches local links and never deletes remote Google Tasks entries
 - `origin planning google-tasks attach`
 - `origin planning google-tasks detach`
 
