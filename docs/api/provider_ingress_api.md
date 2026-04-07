@@ -80,6 +80,8 @@ When a device is offline and the user or agent requests an external action:
 4. the server creates or updates the provider-specific outbox record
 5. provider dispatch, retry, and dedupe happen from the server-owned outbox
 
+For planning bridges, that durable external-action intent is the local request to attach, detach, pull, push, or reconcile a selected Google surface; it is not a guarantee that the provider side effect has already happened.
+
 This keeps offline behavior local-first without pretending provider outboxes are peer-replicated state.
 
 ## Why This Model
@@ -103,8 +105,8 @@ Examples:
 - one mailbox poller for the connected agent inbox
 - one GitHub poller covering the local followed working set
 - one Telegram poller for bot updates / tracked chats
-- one Google Calendar poller for attached calendars
-- one Google Tasks poller for attached task lists
+- one Google Calendar poller per attached calendar surface
+- one Google Tasks poller per attached task-list surface
 
 Each poller stores:
 
@@ -279,6 +281,7 @@ Each event should include:
 
 - stable activity event id
 - provider
+- actor
 - poller id
 - cursor before / after when useful
 - provider object refs
@@ -286,6 +289,8 @@ Each event should include:
 - activity timestamp
 - outcome status
 - shared trace id when the ingress event later causes first-party object updates or automation runs
+
+When available, `actor` should preserve the Origin-attributed source of the change, such as a user, agent, sync actor, or external peer identity.
 
 ## Failure And Retry
 

@@ -266,14 +266,17 @@ Represents a unit of work in Origin's first-party planning system.
   - `dueFrom` has no direct Google Tasks equivalent
   - dependency edges remain Origin-only
   - recurrence remains Origin-canonical even if mirrored externally in a simpler form
+  - Google Tasks v1 does not model the full Origin recurrence series or planning-bridge relationship graph
 
 ### Recurrence semantics
 
-- Recurrence is modeled as a series of normal task occurrences, not as one task whose due window mutates forever
-- Each recurring occurrence is still a normal task with its own status, history, links, and due window
+- Recurrence is modeled as a canonical series plus materialized occurrences, not as one task whose due window mutates forever
+- The series root plus explicit exceptions are the canonical records for the series
+- Materialized recurring occurrences behave like normal tasks for status, history, links, and due window when they are present
 - Recurrence is occurrence-based
 - The series root is the occurrence whose `occurrenceIndex = 0`
 - Series-level recurrence mutations operate on the series root task occurrence
+- A single-occurrence edit creates or updates an explicit exception occurrence for that `occurrenceIndex`; it does not rewrite the series root
 - This preserves clean per-occurrence history and keeps completion semantics intuitive
 - The same materialization and exception rules below apply to task series and calendar item series
 
@@ -354,11 +357,13 @@ Represents a scheduled block or event in Origin's planning domain.
 ### Recurrence semantics
 
 - Calendar recurrence is first-party in v1
-- Recurrence is modeled as a series of normal calendar item occurrences
-- Each occurrence is still a normal calendar item with its own history, sync links, and status
+- Recurrence is modeled as a canonical series plus materialized occurrences, not as one calendar item whose time mutates forever
+- The series root plus explicit exceptions are the canonical records for the series
+- Materialized recurring occurrences behave like normal calendar items for history, sync links, and status when they are present
 - Recurrence is occurrence-based
 - The series root is the occurrence whose `occurrenceIndex = 0`
 - Series-level recurrence mutations operate on the series root calendar item occurrence
+- A single-occurrence edit creates or updates an explicit exception occurrence for that `occurrenceIndex`; it does not rewrite the series root
 - The recurrence rule defines how future occurrences are generated and related
 
 ### Recurrence materialization and exceptions
@@ -405,10 +410,10 @@ Planning objects may keep external linkage metadata.
 
 ### Current v1 link target
 
-- `googleCalendar`
-- `googleTasks`
+- `google-calendar`
+- `google-tasks`
 
-### `googleCalendar` fields
+### `google-calendar` fields
 
 - `calendarId`
 - `eventId`
@@ -417,7 +422,7 @@ Planning objects may keep external linkage metadata.
 - `lastExternalHash`
 - `syncMode: "import" | "mirror" | "detached"`
 
-### `googleTasks` fields
+### `google-tasks` fields
 
 - `taskListId`
 - `taskId`
@@ -432,6 +437,8 @@ Planning objects may keep external linkage metadata.
 - For recurring series, `attach` and `detach` apply at the series root; occurrences inherit the linkage and do not carry independent attach state.
 - `attach` creates or updates the stable external link for an Origin object
 - If provider object ids are supplied by the canonical CLI/runtime, `attach` may bind the Origin object to an existing Google event or Google task instead of creating a fresh external object
+- The planning object remains the source of truth for its own external-link metadata; the selected Google calendar or task list is the server-owned bridge surface that defines where that link may dispatch
+- If `attach`, `detach`, `pull`, `push`, or `reconcile` is requested while a peer is offline, Origin records the requested bridge state locally first and treats provider dispatch as pending until the server-owned bridge job applies it
 - `syncMode = "import"` means the next pull or reconcile imports from the linked external object into the Origin object without making Google canonical, and it never propagates destructive local deletes or cancels outward
 - `syncMode = "mirror"` means Origin and Google sync bidirectionally through the stable external link, and destructive local changes propagate outward when the provider supports the corresponding remote change
 - For recurring Google Calendar events and Google Tasks series, the Google master maps to the Origin series root
@@ -482,6 +489,7 @@ Any command examples in this document are illustrative summaries of the canonica
 
 - Selected Google calendars are bridge surfaces configured during onboarding or integration setup, not ad hoc per-item attachments
 - Each selected calendar has a server-owned poller and cursor under the shared provider ingress model
+- Origin planning objects stay canonical; the selected Google calendar is the external bridge surface that feeds or receives those objects
 - Status and repair live on the canonical CLI; this document does not define a separate operational surface
 - Use canonical CLI surfaces such as `origin planning google-calendar status`, `origin planning google-calendar reset-cursor`, and `origin planning google-calendar repair`
 
@@ -509,6 +517,7 @@ Any command examples in this document are illustrative summaries of the canonica
 
 - Selected Google task lists are bridge surfaces configured during onboarding or integration setup, not ad hoc per-item attachments
 - Each selected task list has a server-owned poller and cursor under the shared provider ingress model
+- Origin planning objects stay canonical; the selected Google task list is the external bridge surface that feeds or receives those objects
 - Status and repair live on the canonical CLI; this document does not define a separate operational surface
 - Use canonical CLI surfaces such as `origin planning google-tasks status`, `origin planning google-tasks reset-cursor`, and `origin planning google-tasks repair`
 
@@ -518,7 +527,10 @@ Any command examples in this document are illustrative summaries of the canonica
 - Imported Google Tasks entries create or update Origin tasks
 - Exported Origin tasks push to Google Tasks through stable external links
 - Google Tasks limitations do not reduce Origin's canonical task model
-- Fields unsupported by Google Tasks remain Origin-only metadata
+- Google Tasks v1 is a flat task-list bridge, not a full planning mirror
+- Fields unsupported by Google Tasks remain Origin-only metadata and are not expected to round-trip losslessly
+- In v1, the bridge does not model the full Origin recurrence series, dependency graph, project/label topology, or calendar-link relationships as first-class Google Tasks state
+- `dueFrom` remains Origin-only; Google Tasks can at best carry a simplified due value
 
 ### Representative canonical bridge commands
 
