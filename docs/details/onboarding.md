@@ -34,6 +34,8 @@ The onboarding flow should:
 - In `vps` mode, bring up the authoritative server before provider linking becomes authoritative.
 - In `vps` mode, collect only non-secret setup inputs until that server exists.
 - Provider OAuth, token storage, and server-owned pollers/cursors happen on the authoritative server.
+- The managed workspace root and vault path are scoped to the active Origin peer/instance, not shared as a profile-global path.
+- When a local deployment later migrates to VPS, replicated app state moves to the VPS but provider authority moves only after the VPS is deployed and rehydrated.
 - Persist only what is needed to complete setup, recover it, and operate the system afterward.
 
 ## Phase 1: Start Mode
@@ -90,7 +92,7 @@ Origin sets up the identities the agent will use.
 
 - agent display name
 - agent Google account email or OAuth target
-- agent GitHub account email or OAuth target
+- agent GitHub login or OAuth target
 - Telegram bot username plus an operator-only secure handoff for the bot token
 - any initial account naming or handle preferences
 
@@ -196,6 +198,7 @@ Origin configures the agent mailbox and planning surfaces.
 - Each attached calendar or task list should run through the shared ingress model with server-owned pollers and saved cursors or sync markers.
 - Establish which shared calendars belong to the agent workflow.
 - Selected calendars and task lists are setup/configuration state, not ad hoc item-level attachments.
+- Validate that each selected calendar and task list is actually accessible to the agent Google account before marking the attachment complete.
 
 ### Required user input
 
@@ -217,6 +220,7 @@ Origin configures the agent mailbox and planning surfaces.
 - Origin can sync the selected attached calendars.
 - Origin can sync the selected attached task lists.
 - Forwarded user emails land in the same agent mailbox as ordinary messages.
+- If forwarding is configured, Origin validates that a forwarded test message reaches the agent inbox through the configured forwarding path.
 - In `vps` mode, the selected calendars and task lists are configured on the deployed server, not only in local preflight state.
 
 ## Phase 6: Telegram Group Setup
@@ -225,12 +229,13 @@ Origin configures the Telegram bot for group use.
 
 ### Required user input
 
-- groups the bot should be added to
+- groups the bot should be added to and registered for inside Origin
 - confirmation that privacy mode and other bot settings are configured as needed
 
 ### Persistence
 
 - group membership references
+- Telegram group subscription records
 - bot configuration flags
 - any setup notes about visibility or permission constraints
 
@@ -238,6 +243,7 @@ Origin configures the Telegram bot for group use.
 
 - The bot is usable inside the selected groups.
 - The bot can receive the group traffic needed for summaries and participation.
+- Each selected group has an active Origin registration/subscription record, not just a raw bot membership reference.
 
 ### Failure / recovery
 
@@ -259,10 +265,13 @@ Origin attaches the managed workspace root, initializes or adopts the vault at t
 - If the target path exists and is empty, Origin adopts it as the managed workspace root and bootstraps `Origin/Memory.md`.
 - If the target path exists and is non-empty, Origin inspects and adopts the existing contents first.
 - First-attach adoption only applies when the profile does not already contain replicated note state for another attached workspace.
+- The managed workspace root is per-peer/instance state; a local peer and a VPS peer may each have their own attached root.
+- On a non-empty target path, Origin classifies the existing files before it writes anything.
 - During first-attach adoption, existing markdown files are imported as managed notes with their relative paths preserved and stable note ids assigned during import.
 - If `Origin/Memory.md` already exists, Origin adopts it in place as the canonical memory file rather than overwriting it.
 - Existing non-markdown files remain ordinary local workspace artifacts unless later imported or attached into managed note state explicitly.
 - If the profile already has replicated note state and the target path is already populated, attach must enter an explicit reconcile/repair flow instead of silently importing or overwriting.
+- The reconcile/repair flow must show the existing replicated note state and the on-disk contents, then require the user to choose an adopt/relocate/replace path before any write occurs.
 - A non-empty target path must be imported or adopted before Origin exports managed files into it.
 - Origin must never silently overwrite existing files, including an existing `Origin/Memory.md`, during first attach.
 - In v1, the vault is the workspace root; there is no separate vault subtree path.
@@ -279,6 +288,7 @@ Origin attaches the managed workspace root, initializes or adopts the vault at t
 - The vault exists at the workspace root and is writable.
 - `Origin/Memory.md` exists and is visible in the app.
 - The agent can read and update memory through the memory protocol.
+- Any existing markdown files under the managed workspace root are adopted as managed notes or moved out of the managed root during reconcile; they are never treated as opaque local artifacts once the workspace is attached.
 
 ## Phase 8: Notifications
 
@@ -327,6 +337,8 @@ This deployment step happens before Phases 4 through 6 become authoritative in `
 - The server can access its managed files and the host filesystem it is allowed to use.
 - The setup matches the bare-metal / systemd-first service model.
 - Provider linking and server-owned pollers now become authoritative on the deployed server.
+- Any local instance stops running provider pollers, cursors, and outbound provider actions for the same account set once the VPS is authoritative.
+- Local-only workspace artifacts are not treated as migrated replicated state unless they were explicitly imported.
 
 ### Failure / recovery
 
@@ -340,10 +352,13 @@ Origin validates the connected system end-to-end.
 ### Checks
 
 - agent Google account can authenticate
-- agent GitHub account and selected installation grants can authenticate
+- agent GitHub login and selected installation grants can authenticate and cover the intended repo/org working set
 - Telegram bot can operate in groups
 - email inbox can be read and written
+- if email forwarding is configured, forwarded mail reaches the agent inbox through the configured path
 - selected calendars and tasks sync correctly
+- selected Google surfaces are accessible to the linked agent account
+- selected Telegram groups are registered and subscribed in Origin
 - memory file exists and is editable
 - notifications are working
 - VPS deployment is healthy if applicable
@@ -366,7 +381,7 @@ During onboarding, Origin should persist:
 - vault and memory file location
 - notification preferences and tokens
 - VPS deployment metadata if applicable
-- If the user later moves from local to VPS mode, replicated app state syncs to the VPS, while secrets and provider operational state are re-established there instead of opaque-migrated.
+- If the user later moves from local to VPS mode, replicated app state syncs to the VPS, while secrets and provider operational state are re-established there instead of opaque-migrated. Local-only workspace artifacts stay on the original host unless they are explicitly imported or re-materialized.
 
 ## Implementation Notes
 

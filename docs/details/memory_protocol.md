@@ -10,7 +10,7 @@
 
 Origin should systematize memory behavior, not prematurely systematize memory schemas.
 
-Origin has a managed workspace root. In v1, that workspace root is also the markdown vault that participates in the replicated note model.
+Origin has a managed workspace root. That root is scoped to the active Origin peer/instance rather than being a profile-global path. In v1, that workspace root is also the markdown vault that participates in the replicated note model.
 
 The agent should know how to:
 
@@ -106,10 +106,10 @@ The agent should choose the simplest structure that serves the task.
 ## Replication Boundary
 
 - `Origin/Memory.md`, markdown notes in the managed workspace root, and note attachments inside that root are part of Origin's replicated note model.
+- Once a workspace is attached, markdown files that live in the managed workspace root are managed notes, not generic local artifacts.
 - Replicated note attachments only become replicated through an explicit attachment or import flow; mere presence in the workspace root does not make a file replicated.
 - Referencing a file from `Origin/Memory.md` or linking to it from another note does not by itself promote that file into replicated managed state.
-- Supporting markdown notes that live inside the managed workspace root are replicated managed state.
-- Linked JSON files, CSV files, folders, and other workspace artifacts are local workspace artifacts by default, even when they live inside the managed workspace root and `Origin/Memory.md` references them.
+- Linked JSON files, CSV files, folders, and other non-markdown workspace artifacts are local workspace artifacts by default, even when they live inside the managed workspace root and `Origin/Memory.md` references them.
 - A linked local workspace artifact becomes replicated managed state only if Origin explicitly imports it into the managed note set or re-materializes it from managed state.
 - Agents should treat links as references first and should not assume that every referenced artifact syncs across peers.
 
@@ -182,6 +182,7 @@ The system prompt for Origin agents should explicitly teach:
 - Supporting memory artifacts should be visible like other files in the managed workspace.
 - User edits to `Origin/Memory.md` and other markdown notes in the managed workspace root are authoritative inputs like any other vault edit.
 - Edits to linked local workspace artifacts remain local unless Origin explicitly imports or re-materializes them into replicated managed state.
+- If a peer moves from local to VPS, linked local workspace artifacts stay on the original host unless they are explicitly imported or re-materialized for the VPS peer.
 
 ## Relationship To Retrieval
 
