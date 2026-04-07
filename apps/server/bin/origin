@@ -1,0 +1,2 @@
+#!/usr/bin/env sh
+exec bun /Users/polarzero/code/projects/origin/apps/server/src/index.ts "$@"

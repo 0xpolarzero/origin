@@ -1,1 +1,3 @@
-console.log("Origin server bootstrap");
+import { origin } from './cli/contract.ts'
+
+await origin.serve()

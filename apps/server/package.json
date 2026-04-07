@@ -1,9 +1,17 @@
 {
   "name": "@origin/server",
   "private": true,
+  "version": "0.1.0",
   "type": "module",
+  "bin": {
+    "origin": "src/index.ts"
+  },
   "scripts": {
     "dev": "bun --watch src/index.ts",
-    "start": "bun src/index.ts"
+    "start": "bun src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "incur": "^0.3.19"
   }
 }
