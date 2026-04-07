@@ -117,7 +117,6 @@ New chats discovered by polling may create lightweight `TelegramChatRef` discove
 - `manual`
 - `scheduled`
 - `mention`
-- `threshold`
 - `agent_decision`
 
 ### `TelegramSummaryJobStatus`
@@ -144,14 +143,14 @@ Fields:
 - `privacyMode: TelegramPrivacyMode`
 - `allowedChatIds[]`
 - `defaultParticipationMode: TelegramParticipationMode`
-- `defaultSummaryWindowMinutes`
+- `defaultSummaryLookbackMinutes`
 - `createdAt`
 - `updatedAt`
 - `lastValidatedAt`
 - `revokedAt`
 
 `defaultParticipationMode` controls only the default interactive behavior for enabled groups.
-`defaultSummaryWindowMinutes` is a connection-level fallback for new or unset group summary policies; it seeds group policy but does not override an explicit group value.
+`defaultSummaryLookbackMinutes` is a connection-level fallback for new or unset group summary policies; it seeds group policy but does not override an explicit group value.
 Summary policy and subscription enablement are separate group-level settings.
 `allowedChatIds[]` is an operational allowlist derived from group subscriptions and bot membership, not the source of truth.
 
@@ -191,7 +190,7 @@ Fields:
 - `subscriptionState: TelegramGroupSubscriptionState`
 - `participationMode: TelegramParticipationMode`
 - `summaryEnabled`
-- `summaryWindowMinutes`
+- `summaryLookbackMinutes`
 - `mentionTrackingEnabled`
 - `messageCacheEnabled`
 - `createdAt`
@@ -203,7 +202,9 @@ Normative model:
 - `subscriptionState` controls whether the group is actively tracked by Origin.
 - `participationMode` applies only when `subscriptionState=enabled` and controls interactive bot behavior.
 - `summaryEnabled` is independent of `participationMode` and controls whether summary workflows may run or post for the group.
-- `summaryWindowMinutes` is the canonical per-group summary lookback window in minutes. If it is unset, the bot connection's `defaultSummaryWindowMinutes` can be used as the fallback seed when the subscription is created or repaired.
+- `summaryLookbackMinutes` is the canonical per-group summary lookback window in minutes. It is context for summary generation, not a posting cadence or scheduler.
+- Automatic summary scheduling is owned by Automation objects. Telegram group policy only gates whether those automations may run or post for the group and provides the default lookback window they should use.
+- If `summaryLookbackMinutes` is unset, the bot connection's `defaultSummaryLookbackMinutes` can be used as the fallback seed when the subscription is created or repaired.
 - `disabledAt` records when the subscription was last disabled; it is not a separate mode.
 - A discovered chat only becomes actively tracked after an explicit group registration creates or updates this subscription.
 - If the bot loses membership or the permissions needed for the requested mode, Origin must mark the subscription disabled, refresh the chat ref, and surface the loss as a validation / recovery problem until the operator restores access and re-registers or re-enables the group.
@@ -265,7 +266,8 @@ Fields:
 - `lastError`
 
 Automatic summaries are automation-owned. This record projects the resulting execution state for Telegram; it is not a second canonical workflow object.
-`windowStart` and `windowEnd` are the evaluated window for the specific run. They come from the active group policy or explicit operator request at scheduling time and do not replace `TelegramGroupSubscription.summaryWindowMinutes`.
+`triggerKind = "scheduled"` means a generic Automation schedule triggered the run. `triggerKind = "mention"` means an automation or explicit agent rule triggered the run from a mention-related ingress event. `triggerKind = "agent_decision"` means the agent chose to summarize without a standing schedule.
+`windowStart` and `windowEnd` are the evaluated lookback window for the specific run. They come from the active group policy or explicit operator request at scheduling time and do not replace `TelegramGroupSubscription.summaryLookbackMinutes`.
 
 ## Read / Query Surface
 
@@ -286,7 +288,7 @@ Origin should expose a Telegram query surface that is useful to the agent and th
 - get recent messages for a tracked chat
 - fetch a specific message by chat and message id
 - fetch recent updates relevant to a tracked chat
-- list unread mentions or summary triggers when supported by the cache
+- list unread mentions or groups whose summary policy and automations indicate a summary may be useful
 
 ### Search and retrieval
 
@@ -350,6 +352,7 @@ Participation mode and summary policy are separate settings on an enabled group.
 - Recent message caches are evictable and are not a durable history store.
 - Rehydration is best-effort for reachable recent history only; it can refill a bounded window after eviction, but it does not guarantee reconstruction of all prior messages or inaccessible state.
 - Local clients should read Telegram state through the server or from the server-synced local state, not by talking to Telegram directly.
+- Automatic summary schedules live in generic Automation objects; Telegram stores only per-group policy, recent context, and projected summary-job records.
 - The shared polling / cursor / cache / activity-event model is defined in [provider_ingress_api.md](./provider_ingress_api.md)
 
 ## Group Model
@@ -361,7 +364,7 @@ Origin models each tracked group on separate axes:
 - subscription state: `enabled` or `disabled`
 - participation mode: `observe` or `participate`
 - summary policy: enabled or disabled
-- summary window: per-group override or bot-level default
+- summary lookback: per-group override or bot-level default seed; scheduling remains Automation-owned
 
 These axes must not be collapsed into one overloaded mode field.
 
@@ -387,6 +390,15 @@ The bot must be able to operate with the maximum access model Telegram allows fo
 - Telegram's prohibition on acting like a normal user account
 
 ## Activity Events
+
+For provider-backed reactive automations, the canonical trigger surface is the ingress-emitted Telegram event family defined in [provider_ingress_api.md](./provider_ingress_api.md).
+
+That canonical ingress family is:
+
+- generic ingress lifecycle: `provider.ingress.started`, `provider.ingress.completed`, `provider.ingress.failed`
+- tracked-chat message changes: `telegram.message.received`, `telegram.message.mentioned`
+
+Bot validation, group subscription changes, participation-policy changes, summary-job records, and outbound action outcomes may still appear in Telegram-domain activity, but they are not alternate provider-backed trigger kinds for the same Telegram message.
 
 The Telegram integration must emit activity events for:
 
@@ -433,15 +445,18 @@ The integration should expose a small, composable CLI surface such as:
 
 - `telegram connection status`
 - `telegram connection set-token`
+- `telegram connection configure`
 - `telegram chat list`
-- `telegram chat show`
+- `telegram chat get`
 - `telegram chat refresh`
+- `telegram group register`
 - `telegram group enable`
 - `telegram group disable`
-- `telegram group summarize`
+- `telegram group policy summary-set`
+- `telegram summary run`
 - `telegram message send`
 - `telegram message reply`
-- `telegram cache refresh`
+- `telegram summary list`
 
 The exact command names can vary, but the model should be structured around the actions above.
 

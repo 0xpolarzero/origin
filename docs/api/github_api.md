@@ -82,7 +82,7 @@ GitHub state inside Origin should be selective and derived.
 
 ### `GitHubInstallationGrant`
 
-Represents a selected GitHub App installation that Origin can act through.
+Represents a discovered GitHub App installation grant that Origin may select for the working set.
 
 Suggested fields:
 
@@ -91,13 +91,50 @@ Suggested fields:
 - `accountType`
 - `accountLogin`
 - `repositorySelection`
-- `accessibleRepositoryIds[]`
+- `selected`
+- `selectedRepositories[]`
+- `accessibleRepositories[]`
 - `permissions`
 - `status`
+- `lastRefreshedAt`
 - `lastValidatedAt`
+- `selectionUpdatedAt`
 - `revokedAt`
 - `createdAt`
 - `updatedAt`
+
+Normative model:
+
+- OAuth completion discovers candidate installation grants, but does not select them automatically.
+- The operator explicitly selects which discovered grants Origin should rely on for the current repo/org working set.
+- `selectedRepositories[]` is optional narrowing metadata inside a selected installation when GitHub exposes broader installation scope than Origin needs.
+- `accessibleRepositories[]` is the current derived repository coverage Origin believes is actionable through that grant, using stable `owner/name` refs.
+- A repository is actionable only when at least one selected, non-revoked grant currently covers it.
+- If a selected grant later stops covering a repository, Origin keeps the local repository metadata and follow targets, but marks the repository out of scope and blocks provider refresh and write actions for it until grants are refreshed or reselected.
+- Deselecting the last usable grant leaves GitHub connected but incomplete for repo actions until a valid grant is selected again.
+- Unselected discovered grants are inspectable, but they do not authorize provider reads or writes for the working set.
+
+### Grant Lifecycle And Repo Eligibility
+
+Canonical v1 lifecycle:
+
+1. complete GitHub OAuth for the connected agent account
+2. discover installation grants from GitHub
+3. persist the operator-selected grants plus any repository narrowing
+4. derive actionable repository coverage from the selected grants
+5. refresh or revalidate grants when repo access changes, GitHub scope shrinks, or a grant is revoked
+
+Required behavior:
+
+- onboarding is not complete for GitHub until both OAuth and installation-grant selection are valid
+- local repo tracking may exist before a matching grant is selected, but provider-backed repo reads and writes must remain blocked until scope is valid
+- if scope later shrinks, Origin preserves the local repo/follow objects, marks the affected repo as out of provider scope, and stops direct GitHub actions until the operator refreshes or changes grant selection
+- validation should explain which selected grants are active, which are revoked or stale, and which repositories currently fall outside actionable scope
+
+Required grant-management surface:
+
+- onboarding: `setup provider github grant refresh|list|select|deselect`
+- runtime: `github account grant list|get|refresh|select|deselect`
 
 ### `GitHubRepository`
 
@@ -266,6 +303,8 @@ The CLI and app should be able to read:
 
 Recommended query categories:
 
+- `github account grant list`
+- `github account grant get`
 - `repo list`
 - `repo get`
 - `repo search`
@@ -343,6 +382,16 @@ Origin should not depend on GitHub's notifications inbox API in v1 because that 
 
 ## Activity Events
 
+For provider-backed reactive automations, the canonical trigger surface is the ingress-emitted GitHub event family defined in [provider_ingress_api.md](./provider_ingress_api.md).
+
+That canonical ingress family is:
+
+- generic ingress lifecycle: `provider.ingress.started`, `provider.ingress.completed`, `provider.ingress.failed`
+- issue changes: `github.issue.created`, `github.issue.updated`, `github.issue.commented`, `github.issue.closed`, `github.issue.reopened`
+- pull-request changes: `github.pr.created`, `github.pr.updated`, `github.pr.commented`, `github.pr.review_requested`, `github.pr.review_submitted`, `github.pr.merged`, `github.pr.closed`, `github.pr.reopened`
+
+Repo tracking changes, local follow-target dismiss or restore actions, and outbound write outcomes may still appear in GitHub-domain activity, but they are Origin-owned overlay or outbox events rather than alternate provider-ingress trigger kinds for the same upstream GitHub change.
+
 The activity log should record:
 
 - repo tracking added / removed
@@ -388,6 +437,7 @@ Recommended behavior:
 - retry with backoff for transient failures
 - surface failures in the activity log
 - preserve the outbound action record until it is clearly resolved or intentionally abandoned
+- if a target repository is outside the currently selected grant scope, fail fast with a clear scope error rather than attempting the provider action
 
 ## Provider Constraints
 
@@ -422,13 +472,16 @@ Official docs used for these constraints:
 
 The CLI should expose GitHub capabilities in a small number of composable verbs:
 
+- `setup provider github grant ...`
+- `github account ...`
 - `github repo ...`
 - `github follow ...`
 - `github issue ...`
 - `github pr ...`
+- `github refresh ...`
+- `github cache ...`
 - `github review ...`
 - `github search ...`
-- `github sync ...`
 
 The underlying implementation should map these verbs to the smallest stable set of API operations needed for follow-up.
 

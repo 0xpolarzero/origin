@@ -137,8 +137,9 @@ In `vps` mode, the inputs for this phase may be gathered earlier, but the actual
 - Complete OAuth through a secure callback or operator-only secure handoff that yields a stored connection reference rather than exposing raw token material to the agent CLI.
 - In `vps` mode, complete OAuth and store the resulting tokens on the authoritative server after deployment, not during pre-server setup.
 - Verify that the returned GitHub principal matches the pre-collected expected agent GitHub identity and fail linking on mismatch.
-- Collect or validate the selected GitHub App installation grants after OAuth; OAuth success alone is not sufficient for usable repo access.
-- Record which repositories or organizations are covered by the chosen GitHub App installation grants.
+- Discover the available GitHub App installation grants after OAuth; OAuth success alone is not sufficient for usable repo access.
+- Require the operator to select the grants Origin should rely on for its working set, then persist those selected grant records plus the derived repo/org coverage.
+- Record which repositories or organizations are covered by the selected GitHub App installation grants.
 - Request the minimum scopes required for:
   - follow-up workflows
   - repository observation
@@ -179,6 +180,7 @@ In `vps` mode, the inputs for this phase may be gathered earlier, but the actual
 - If OAuth fails, the user retries the provider flow.
 - If OAuth completes against the wrong Google or GitHub account, Origin rejects the link, reports the mismatch, and asks the user to retry with the expected agent account or correct the expected identity first.
 - If GitHub OAuth succeeds but no valid GitHub App installation grants are available for the selected repo/org scope, Origin keeps GitHub in an incomplete state and asks the user to install or extend the GitHub App grants before marking setup complete.
+- If selected GitHub App installation grants later stop covering part of the intended repo/org working set, Origin keeps the local follow-up state but marks those repos out of scope, blocks provider refresh and write actions for them, and asks the operator to refresh or reselect grants.
 - If a secure token handoff is invalid, Origin reports the failure and re-prompts for the secure credential handoff.
 - If a required scope is missing, Origin restarts the corresponding provider authorization flow.
 
@@ -254,9 +256,11 @@ Origin configures the Telegram bot for group use.
 
 Origin attaches the managed workspace root, initializes or adopts the vault at that same root, and ensures the agent memory file exists.
 
+In `vps` mode, this phase configures the current peer only. After Phase 9 deploys the authoritative server, that server peer may run the same attach/init flow against its own host path before server-side external filesystem editing is enabled there.
+
 ### Required user input
 
-- confirmation of the managed workspace root / attach path
+- confirmation of the managed workspace root / attach path for the current peer
 - any preferred initial folder names
 - any initial memory facts or preferences the user wants stored immediately
 
@@ -272,20 +276,21 @@ Origin attaches the managed workspace root, initializes or adopts the vault at t
 - If `Origin/Memory.md` already exists, Origin adopts it in place as the canonical memory file rather than overwriting it.
 - Existing non-markdown files remain ordinary local workspace artifacts unless later imported or attached into managed note state explicitly.
 - The reconcile/repair flow must show the existing replicated note state and the on-disk contents side by side, then require the user to choose one of three explicit paths before any write occurs: adopt the target path as the managed workspace root and import compatible markdown notes, keep the current managed root and leave the target path untouched, or replace the target path from an exported managed copy after explicit overwrite confirmation.
+- The machine-actionable contract for that decision is: `setup vault init` inspects and returns a stable reconcile id when a populated target needs operator choice, then `setup vault reconcile apply --resolution adopt|keep-current|replace-target` applies the chosen path. `replace-target` requires explicit overwrite confirmation.
 - A non-empty target path must be imported or adopted before Origin exports managed files into it, and Origin must never write to that path before the user has chosen a reconcile path.
 - Origin must never silently overwrite existing files, including an existing `Origin/Memory.md`, during first attach.
 - In v1, the vault is the workspace root; there is no separate vault subtree path.
 
 ### Persistence
 
-- managed workspace root
+- managed workspace root for the current peer
 - `Origin/Memory.md`
 - initial note/file structure
 
 ### Success criteria
 
-- The managed workspace root is attached and writable.
-- The vault exists at the workspace root and is writable.
+- The current peer's managed workspace root is attached and writable.
+- The vault exists at that peer-local workspace root and is writable.
 - `Origin/Memory.md` exists and is visible in the app.
 - The agent can read and update memory through the memory protocol.
 - Any existing markdown files under the managed workspace root are adopted as managed notes or moved out of the managed root during reconcile; they are never treated as opaque local artifacts once the workspace is attached.
@@ -379,7 +384,7 @@ During onboarding, Origin should persist:
 - GitHub App installation grant metadata and selected repo/org scope
 - Telegram bot token reference
 - selected calendars, tasks, and mailbox configuration
-- vault and memory file location
+- peer-local vault and memory file locations
 - notification preferences and tokens
 - VPS deployment metadata if applicable
 - If the user later moves from local to VPS mode, replicated app state syncs to the VPS, while secrets and provider operational state are re-established there instead of opaque-migrated. Local-only workspace artifacts stay on the original host unless they are explicitly imported or re-materialized.

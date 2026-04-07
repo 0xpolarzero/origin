@@ -11,7 +11,7 @@
 Origin should systematize memory behavior, not prematurely systematize memory schemas.
 
 Origin has a managed workspace root. That root is scoped to the active Origin peer/instance rather than being a profile-global path. In v1, that workspace root is also the markdown vault that participates in the replicated note model.
-For replicated note state, the active peer's managed workspace root is the source of truth; other peers receive re-materialized copies of that state rather than independent divergent stores.
+Replicated note state is the canonical source of truth for notes and memory. Each peer's managed workspace root is a local materialized markdown vault that can accept direct filesystem edits, and the local note bridge imports those edits back into replicated note state before sync.
 
 The agent should know how to:
 
@@ -60,7 +60,7 @@ It is the durable index and operating memory for the agent.
 - Transient one-off output should stay in chat unless there is a clear reason to persist it.
 - The user must be able to inspect and edit memory directly.
 - The replication boundary must stay explicit: links from memory do not by themselves make an artifact part of replicated managed state.
-- The active peer's replicated workspace is authoritative for markdown notes and note attachments; linked artifacts remain references until Origin explicitly imports or re-materializes them.
+- The replicated note model is authoritative for markdown notes and explicit managed note attachments; peer-local workspace files are a materialized editable projection and import path, not a second canonical history layer.
 
 ## What Belongs In `Origin/Memory.md`
 
@@ -171,7 +171,7 @@ Agents operating in Origin should follow these rules:
 The system prompt for Origin agents should explicitly teach:
 
 - where `Origin/Memory.md` lives
-- that in v1 the managed workspace root itself is the replicated markdown vault
+- that in v1 the managed workspace root itself is the local materialized markdown vault on peers that host one
 - that it is the curated durable memory index
 - that supporting files and datasets may be created and maintained
 - that schemas are not fixed upfront

@@ -75,15 +75,76 @@ So:
 When a device is offline and the user or agent requests an external action:
 
 1. the client writes replicated Origin state locally, including any first-party overlay changes and the durable external-action intent
-2. that intent carries a stable `intentId` plus the target provider scope needed for later materialization
+2. that intent carries a stable intent id plus the target provider scope needed for later materialization
 3. that replicated state syncs to the server when connectivity returns
 4. the server validates the intent against provider auth and current scope
-5. the server creates or updates the provider-specific outbox record, carrying forward the same `intentId` as the origin link and dedupe root
+5. the server creates or updates the provider-specific outbox record, carrying forward the same intent id as the origin link and dedupe root
 6. provider dispatch, retry, and dedupe happen from the server-owned outbox
 
 For planning bridges, that durable external-action intent is the local request to attach, detach, pull, push, or reconcile a selected Google surface; it is not a guarantee that the provider side effect has already happened.
 
 This keeps offline behavior local-first without pretending provider outboxes are peer-replicated state.
+
+## `ExternalActionIntent`
+
+`ExternalActionIntent` is the shared replicated first-party handoff object for offline or peer-local actions that eventually need provider or job execution on the authoritative server.
+
+Required v1 fields:
+
+- `id`
+- `kind`
+- `provider`
+- `scope`
+- `action`
+- `targetRef`
+- `payload`
+- `status`
+- `createdAt`
+- `updatedAt`
+- `createdByActor`
+- `updatedByActor`
+- `materializedAt`
+- `completedAt`
+- `failedAt`
+- `canceledAt`
+- `lastError`
+- `outboxRefs[]`
+
+`provider` is optional when the intent targets an internal subsystem job rather than a third-party provider. `scope` remains required in either case because it is the authoritative materialization and dedupe boundary.
+
+Canonical v1 status model:
+
+- `pending`
+- `materialized`
+- `succeeded`
+- `failed`
+- `canceled`
+
+`pending` covers both cases where the intent has not yet replicated to the authoritative server and where it has replicated but has not yet been materialized into provider or job outbox work.
+
+Normative lifecycle:
+
+1. a device or server peer records the intent in replicated state with a stable intent id
+2. the authoritative server validates auth and scope after the intent reaches it while the intent remains `pending`
+3. the authoritative server creates or updates at most one logical provider/job outbox record per `(intent id, provider, scope)`
+4. the intent transitions to `materialized` once the authoritative outbox linkage is durable
+5. downstream dispatch/retry happens from the server-owned outbox while the intent remains the origin link and dedupe root
+6. the intent transitions to `succeeded`, `failed`, or `canceled` when the logical action reaches a terminal state
+
+Required behavior:
+
+- the intent id is stable across retries, reconnects, and replica sync
+- canceling an intent before materialization must prevent outbox creation
+- canceling an already materialized intent must stop further dispatch attempts where the provider/domain supports cancelation and otherwise mark the intent canceled while preserving audit history
+- provider-specific outbox retries must not create a second logical intent
+- the intent remains queryable after terminal state for audit and repair
+
+Canonical read / repair surface:
+
+- `sync intent list`
+- `sync intent get <intent-id>`
+- `sync intent retry <intent-id>`
+- `sync intent cancel <intent-id>`
 
 ## Why This Model
 
@@ -196,11 +257,13 @@ Origin should emit events for meaningful changes such as:
 
 - new email thread
 - new email message in an existing thread
-- meaningful email thread update
-- email triage-relevant state change
-- new or updated followed GitHub issue/PR/review/comment
+- email thread archived or unarchived
+- email thread label or state change that matters to workflows
+- new or updated followed GitHub issue
+- new or updated followed GitHub pull request
+- new GitHub comment or review event that matters to followed work
 - new Telegram message in a tracked chat
-- summary trigger becoming true
+- Telegram mention in a tracked chat
 - new or changed Google Calendar event
 - new or changed Google Task
 
@@ -221,10 +284,17 @@ That event id is the replay and dedupe boundary for provider-backed reactive aut
 
 Required behavior:
 
-- retries should reuse the same activity event id for the same logical provider change whenever the provider object ref and change boundary are unchanged
+- retries and repairs should reuse the same activity event id for the same logical provider change whenever the provider object refs, event kind, and upstream change boundary are unchanged
 - reactive automation runs dedupe on `(automationId, activityEventId)`
 - scheduled automation runs dedupe on `(automationId, scheduledAt)`
 - rerunning a failed automation attempt should reuse the same run record rather than creating a second logical run for the same triggering event
+
+Canonical event-identity rule:
+
+- The durable ingress event identity is derived from `(provider, poller scope, event kind, provider object refs, upstream change boundary)`.
+- The upstream change boundary should use the provider's strongest stable incremental token when one exists, such as history id, sync token, update offset, ETag/version, review id, comment id, or changed-at watermark plus object ref.
+- If the provider later replays the same logical change during repair, Origin must reuse the same activity event id when that tuple is unchanged.
+- Downstream first-party audit events may be emitted separately, but if they represent the same logical provider change they must carry the originating ingress event id as `causedByActivityEventId` rather than inventing a second dedupe identity.
 
 ## Automation Trigger Semantics
 
@@ -271,10 +341,25 @@ Every provider ingress pass may emit:
 - provider-backed domain events
   - `email.thread.created`
   - `email.message.received`
+  - `email.thread.archived`
+  - `email.thread.unarchived`
+  - `email.thread.labels_changed`
   - `email.thread.updated`
+  - `github.issue.created`
   - `github.issue.updated`
+  - `github.issue.commented`
+  - `github.issue.closed`
+  - `github.issue.reopened`
+  - `github.pr.created`
   - `github.pr.updated`
+  - `github.pr.commented`
+  - `github.pr.review_requested`
+  - `github.pr.review_submitted`
+  - `github.pr.merged`
+  - `github.pr.closed`
+  - `github.pr.reopened`
   - `telegram.message.received`
+  - `telegram.message.mentioned`
   - `planning.google-calendar.changed`
   - `planning.google-tasks.changed`
 
@@ -284,12 +369,80 @@ Each event should include:
 - provider
 - actor
 - poller id
+- source scope
 - cursor before / after when useful
 - provider object refs
 - Origin entity refs when already linked
+- `changeKinds[]`
+- `attributes`
 - activity timestamp
 - outcome status
 - shared trace id when the ingress event later causes first-party object updates or automation runs
+
+Top-level event `status` is the outcome of the ingress or domain event record itself, not the lifecycle state of the provider object that changed. Provider or domain object state that automations may filter on belongs in `attributes.status`.
+
+Canonical `sourceScope` keys in v1:
+
+- `provider`
+- `accountId`
+- `mailboxId`
+- `calendarId`
+- `taskListId`
+- `repo`
+- `followTargetId`
+- `chatId`
+- `entityId`
+
+`sourceScope` is a structured object, not an open-ended map. In v1:
+
+- `provider` is a single exact-match string
+- every other `sourceScope` key is an array of exact ids or refs, even when only one value is present
+- a trigger `sourceScope` matches an event `sourceScope` for one of those array-valued keys when at least one requested value overlaps the event's values for that key
+
+Canonical `changeKinds[]` examples in v1:
+
+- `created`
+- `updated`
+- `archived`
+- `unarchived`
+- `commented`
+- `review_requested`
+- `review_submitted`
+- `mentioned`
+- `merged`
+- `closed`
+- `reopened`
+
+Canonical `attributes` keys in v1:
+
+- `status`
+- `labels[]`
+- `reviewDecision`
+- `summaryTriggerKind`
+- `authorRole`
+- `isMention`
+
+These keys are present only when the event family makes them meaningful. They are the normalized payload surface that automation filters match instead of provider-specific raw payload fields.
+
+Automation-filter mapping in v1:
+
+- `filters.changeKinds[]` matches `changeKinds[]`
+- `filters.status[]` matches `attributes.status`
+- `filters.labels[]` matches `attributes.labels[]`
+- `filters.reviewDecisions[]` matches `attributes.reviewDecision`
+- `filters.summaryTriggerKinds[]` matches `attributes.summaryTriggerKind`
+- `filters.authorRoles[]` matches `attributes.authorRole`
+- `filters.isMention` matches `attributes.isMention`; ingress should also include `mentioned` in `changeKinds[]` when that boolean is true
+
+Event-kind granularity rule in v1:
+
+- email, GitHub, and Telegram use fine-grained event kinds where follow-up behavior materially differs by object family or interaction type
+- Google Calendar and Google Tasks bridge ingress stays on the coarser `planning.google-calendar.changed` and `planning.google-tasks.changed` event kinds in v1
+- implementations distinguish create/update/archive/complete-style planning changes through `changeKinds[]`, `sourceScope`, and provider object refs rather than multiplying planning event kinds
+
+Array-valued filters are exact-match intersection checks against the normalized event payload. Scalar filter fields such as `attributes.status`, `reviewDecision`, `summaryTriggerKind`, and `authorRole` match when one requested filter value exactly equals the normalized event value.
+
+`planning.google-calendar.changed` and `planning.google-tasks.changed` intentionally remain coarse event kinds in v1. Consumers must disambiguate them with `changeKinds[]`, `sourceRefs[]`, and `entityRefs[]` rather than inventing ad hoc planning event names.
 
 When available, `actor` should preserve the Origin-attributed source of the change, such as a user, agent, sync actor, or external peer identity.
 
@@ -378,14 +531,16 @@ Instead:
 - integration-specific `refresh` commands control ingress
 - integration-specific `cache` commands control current-state caches
 - automations target normalized activity-event triggers
+- `sync intent ...` inspects, retries, and cancels the replicated external-intent layer that feeds provider outboxes
 
 Examples:
 
 - `email refresh status|run|reset-cursor`
 - `github refresh status|run|reset-cursor`
-- `telegram refresh status|run`
-- `planning google-calendar status|pull|push|reconcile`
-- `planning google-tasks status|pull|push|reconcile`
+- `telegram chat refresh`
+- `telegram connection refresh-metadata`
+- `google-calendar status|pull|push|reconcile`
+- `google-tasks status|pull|push|reconcile`
 
 ## Summary
 

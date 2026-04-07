@@ -315,11 +315,67 @@ Event triggers are used for things like:
 
 Allowed event families in v1 are the normalized durable events emitted by provider ingress and first-party domain lifecycle events. Event triggers must match those durable event kinds exactly; they do not match raw cache diffs or ad hoc payload changes.
 
-For provider-backed reactive workflows, `eventKinds[]` should point at provider ingress activity kinds, not raw cache diffs.
+For provider-backed reactive workflows, `eventKinds[]` should point at fine-grained provider ingress activity kinds such as `email.message.received`, `github.pr.review_requested`, `telegram.message.mentioned`, or `planning.google-calendar.changed`, not raw cache diffs.
 
 `filters` are conjunctive: all supplied filters must pass after the event kind matches.
 
 `sourceScope` limits which objects or providers can emit matching events; it does not redefine the event kind itself.
+
+Filter evaluation is against the normalized ingress event contract from [provider_ingress_api.md](./provider_ingress_api.md), not provider-native webhook or polling payloads.
+
+`sourceScope` is a structured object, not an open-ended map. In v1, `provider` is a single exact-match string and the remaining keys are arrays of exact ids or refs. A trigger matches when every supplied scope key matches and each array-valued key has at least one overlapping value with the event's `sourceScope`.
+
+Canonical `sourceScope` keys in v1:
+
+- `provider`
+- `accountId`
+- `mailboxId`
+- `calendarId`
+- `taskListId`
+- `repo`
+- `followTargetId`
+- `chatId`
+- `entityId`
+
+Canonical `filters` keys in v1:
+
+- `changeKinds[]`
+- `status[]`
+- `labels[]`
+- `reviewDecisions[]`
+- `summaryTriggerKinds[]`
+- `isMention`
+- `authorRoles[]`
+
+Canonical filter-field mapping in v1:
+
+- `changeKinds[]` matches event `changeKinds[]`
+- `status[]` matches event `attributes.status`
+- `labels[]` matches event `attributes.labels[]`
+- `reviewDecisions[]` matches event `attributes.reviewDecision`
+- `summaryTriggerKinds[]` matches event `attributes.summaryTriggerKind`
+- `authorRoles[]` matches event `attributes.authorRole`
+- `isMention` matches event `attributes.isMention`
+
+Matching semantics in v1:
+
+- `eventKinds[]` match exact durable event-kind strings.
+- `sourceScope` keys are conjunctive. Scalar keys such as `provider` must match exactly. List-valued keys such as `repo`, `chatId`, or `calendarId` match when the event carries at least one overlapping value.
+- `changeKinds[]`, `labels[]`, `reviewDecisions[]`, `summaryTriggerKinds[]`, and `authorRoles[]` also match by non-empty intersection with the event payload.
+- If a filter refers to an attribute the event does not carry, the filter fails rather than silently passing.
+
+Array-valued filters are exact-match intersection checks against the event payload. Scalar normalized fields such as `attributes.status`, `reviewDecision`, `summaryTriggerKind`, and `authorRole` match when one requested value exactly equals the event value.
+
+`summaryTriggerKinds[]` is for Telegram summary-job style events only. Supported v1 values are:
+
+- `manual`
+- `scheduled`
+- `mention`
+- `agent_decision`
+
+Telegram automatic summaries are still ordinary automations. Their schedule or event trigger lives here; Telegram group policy only gates whether summary automation may run or post for a group and provides default lookback context.
+
+Unknown filter keys should be rejected by the canonical CLI/runtime rather than treated as silently ignored hints.
 
 ### Manual Trigger
 
@@ -564,12 +620,12 @@ The intended flow is:
 Examples:
 
 - `on new email` should trigger from an email ingress event such as `email.thread.created` or `email.message.received`
-- `on followed GitHub PR updated` should trigger from a GitHub ingress event
-- `on Telegram message in tracked group` should trigger from a Telegram ingress event
+- `on followed GitHub PR review requested` should trigger from a GitHub ingress event such as `github.pr.review_requested`
+- `on Telegram mention in tracked group` should trigger from a Telegram ingress event such as `telegram.message.mentioned`
 
 First-party domain events may still be emitted after reconciliation, but they are a separate audit and object-lifecycle surface.
 
-They should not become a second trigger surface for the same provider change unless the implementation explicitly preserves the same durable event identity across both surfaces.
+They should not become a second trigger surface for the same provider change unless the implementation explicitly preserves the same durable event identity across both surfaces by carrying the originating ingress event id forward.
 
 This keeps the trigger surface edge-based and makes retries, observability, and duplicate suppression much cleaner.
 

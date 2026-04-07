@@ -158,6 +158,23 @@ The distinction between `external:macbook:filesystem` and `external:server:files
 - `saturday`
 - `sunday`
 
+`RecurrenceFrequency` and `Weekday` remain useful helper vocab for UI, previews, and rule editing, but the canonical persisted recurrence contract in v1 is the recurrence `rule` described below rather than a second field-by-field recurrence object.
+
+### Canonical recurrence contract
+
+- V1 persists one canonical recurrence shape for both tasks and calendar items:
+  - `rule`
+  - `startDate`
+  - `endDate`
+  - `timezone`
+  - `seriesId`
+  - `occurrenceKey`
+  - `occurrenceIndex`
+  - `materializationKind`
+- `rule` is an RRULE-style cadence expression for the series. Series bounds live in `startDate` and `endDate`, not inside the rule itself.
+- `startDate` and `endDate` are local series-date bounds. For timed series, the time-of-day still comes from the root task due fields or the root calendar item's scheduled start/end fields.
+- There is no separate hidden series header in v1. The series root occurrence is both the canonical series definition and the first scheduled occurrence.
+
 ## Object Model
 
 ## `Project`
@@ -265,18 +282,19 @@ Represents a unit of work in Origin's first-party planning system.
 - In particular:
   - `dueFrom` has no direct Google Tasks equivalent
   - dependency edges remain Origin-only
-  - recurrence remains Origin-canonical even if mirrored externally in a simpler form
-  - Google Tasks v1 does not model the full Origin recurrence series or planning-bridge relationship graph
+  - recurrence remains Origin-canonical and does not round-trip as a full Google Tasks recurring series in v1
+  - Google Tasks v1 does not model the full Origin recurrence series, exception graph, or planning-bridge relationship graph
 
 ### Recurrence semantics
 
 - Recurrence is modeled as a canonical series plus materialized occurrences, not as one task whose due window mutates forever
 - The series root plus explicit exceptions are the canonical records for the series
 - Materialized recurring occurrences behave like normal tasks for status, history, links, and due window when they are present
-- Recurrence is occurrence-based
-- The series root is the occurrence whose `occurrenceIndex = 0`
+- Every occurrence has a stable `occurrenceKey` representing its original scheduled slot inside the series
+- `occurrenceIndex` is a zero-based projection for ordering and display; it is not the sole cross-system identity for bridge reconciliation
+- The series root is the occurrence whose `materializationKind = "root"` and whose `occurrenceIndex = 0`
 - Series-level recurrence mutations operate on the series root task occurrence
-- A single-occurrence edit creates or updates an explicit exception occurrence for that `occurrenceIndex`; it does not rewrite the series root
+- A single-occurrence edit creates or updates an explicit exception occurrence for that `occurrenceKey`; it does not rewrite the series root
 - This preserves clean per-occurrence history and keeps completion semantics intuitive
 - The same materialization and exception rules below apply to task series and calendar item series
 
@@ -287,25 +305,37 @@ Represents recurrence metadata attached to a task occurrence.
 ### Fields
 
 - `seriesId`
-- `frequency: RecurrenceFrequency`
-- `interval`
-- `byWeekday[]`
-- `byMonthDay[]`
+- `rule`
+- `startDate`
+- `endDate`
 - `timezone`
+- `occurrenceKey`
 - `occurrenceIndex`
+- `materializationKind: "root" | "exception" | "derived"`
 - `previousOccurrenceTaskId`
 - `nextOccurrenceTaskId`
+- `providerRef`
+- `providerHash`
 - `advanceMode: "on_completion" | "on_schedule"`
 
 ### Rules
 
-- `interval >= 1`
-- `byWeekday[]` is only valid for weekly recurrence
-- `byMonthDay[]` is only valid for monthly recurrence
+- `rule` is the canonical persisted RRULE-style cadence expression for the series
+- `startDate` is the canonical local series start bound
+- `endDate` is optional and bounds a finite series in v1 when present; no occurrence whose scheduled local series date falls after `endDate` belongs to the series
 - `timezone` is required for datetime-based recurring tasks
-- `occurrenceIndex` is zero-based within a recurrence series
-- The series root is the occurrence whose `occurrenceIndex = 0`
+- For timed recurring tasks, the root task's due/schedule fields carry the canonical time-of-day; the recurrence object carries the cadence and local date bounds
+- `occurrenceKey` is the canonical occurrence identity for exceptions, bridge reconciliation, and history joins
+- `occurrenceKey` is a recurrence-id-style slot key derived from the occurrence's original scheduled local slot before exception edits:
+  - date-based series use `YYYY-MM-DD`
+  - datetime-based series use local `YYYY-MM-DDTHH:mm:ss` in the series timezone
+- `occurrenceIndex` is zero-based within a recurrence series projection and may change if the rule or series bounds change
+- The series root is the occurrence whose `materializationKind = "root"` and whose `occurrenceIndex = 0`
+- Explicit exceptions use `materializationKind = "exception"` and are keyed by `occurrenceKey`
+- Generated occurrences use `materializationKind = "derived"` and do not introduce a second canonical record
 - Series-level recurrence mutations operate on the series root task
+- Root-level provider linkage and hashes live in the task's stable `externalLinks[]`
+- `providerRef` and `providerHash` are only populated on explicit exception occurrences when the attached provider exposes per-occurrence remote objects
 - `advanceMode = "on_completion"` means the next occurrence is created when the current occurrence is completed
 - `advanceMode = "on_schedule"` means the system creates or maintains the next occurrence according to the recurrence rule even if the current occurrence is not yet completed
 - A non-recurring task has `recurrence = null`
@@ -360,10 +390,11 @@ Represents a scheduled block or event in Origin's planning domain.
 - Recurrence is modeled as a canonical series plus materialized occurrences, not as one calendar item whose time mutates forever
 - The series root plus explicit exceptions are the canonical records for the series
 - Materialized recurring occurrences behave like normal calendar items for history, sync links, and status when they are present
-- Recurrence is occurrence-based
-- The series root is the occurrence whose `occurrenceIndex = 0`
+- Every occurrence has a stable `occurrenceKey` representing its original scheduled slot inside the series
+- `occurrenceIndex` is a zero-based projection for ordering and display; it is not the sole bridge identity
+- The series root is the occurrence whose `materializationKind = "root"` and whose `occurrenceIndex = 0`
 - Series-level recurrence mutations operate on the series root calendar item occurrence
-- A single-occurrence edit creates or updates an explicit exception occurrence for that `occurrenceIndex`; it does not rewrite the series root
+- A single-occurrence edit creates or updates an explicit exception occurrence for that `occurrenceKey`; it does not rewrite the series root
 - The recurrence rule defines how future occurrences are generated and related
 
 ### Recurrence materialization and exceptions
@@ -371,7 +402,7 @@ Represents a scheduled block or event in Origin's planning domain.
 - The series root is the canonical recurrence definition for both tasks and calendar items
 - Origin may materialize future occurrences ahead of time for planning, sync, and history views, but generated occurrences are derived from the root rule and are not alternate canonical roots
 - Only the series root and explicit exception occurrences are canonical records for the series
-- A single-occurrence edit creates or updates an explicit exception occurrence for that `occurrenceIndex`; it does not rewrite the series root
+- A single-occurrence edit creates or updates an explicit exception occurrence for that `occurrenceKey`; it does not rewrite the series root
 - For tasks, single-occurrence completion, due window, schedule, or status changes are stored as task-occurrence exceptions
 - For calendar items, single-occurrence time or status changes are stored as calendar-item-occurrence exceptions
 - Series-level edits update the root recurrence rule and apply to future generated occurrences; existing explicit exceptions remain exceptions unless edited directly
@@ -384,24 +415,36 @@ Represents recurrence metadata attached to a calendar item occurrence.
 ### Fields
 
 - `seriesId`
-- `frequency: RecurrenceFrequency`
-- `interval`
-- `byWeekday[]`
-- `byMonthDay[]`
+- `rule`
+- `startDate`
+- `endDate`
 - `timezone`
+- `occurrenceKey`
 - `occurrenceIndex`
+- `materializationKind: "root" | "exception" | "derived"`
 - `previousOccurrenceCalendarItemId`
 - `nextOccurrenceCalendarItemId`
+- `providerRef`
+- `providerHash`
 
 ### Rules
 
-- `interval >= 1`
-- `byWeekday[]` is only valid for weekly recurrence
-- `byMonthDay[]` is only valid for monthly recurrence
+- `rule` is the canonical persisted RRULE-style cadence expression for the series
+- `startDate` is the canonical local series start bound
+- `endDate` is optional and bounds a finite series in v1 when present; no occurrence whose scheduled local series date falls after `endDate` belongs to the series
 - `timezone` is required for datetime-based recurring calendar items
-- `occurrenceIndex` is zero-based within a recurrence series
-- The series root is the occurrence whose `occurrenceIndex = 0`
+- For timed recurring calendar items, the root calendar item's `startAt` / `endAt` fields carry the canonical time-of-day; the recurrence object carries the cadence and local date bounds
+- `occurrenceKey` is the canonical occurrence identity for exceptions, bridge reconciliation, and history joins
+- `occurrenceKey` is a recurrence-id-style slot key derived from the occurrence's original scheduled local slot before exception edits:
+  - all-day series use `YYYY-MM-DD`
+  - timed series use local `YYYY-MM-DDTHH:mm:ss` in the series timezone
+- `occurrenceIndex` is zero-based within a recurrence series projection and may change if the rule or series bounds change
+- The series root is the occurrence whose `materializationKind = "root"` and whose `occurrenceIndex = 0`
+- Explicit exceptions use `materializationKind = "exception"` and are keyed by `occurrenceKey`
+- Generated occurrences use `materializationKind = "derived"` and do not introduce a second canonical record
 - Series-level recurrence mutations operate on the series root calendar item
+- Root-level provider linkage and hashes live in the calendar item's stable `externalLinks[]`
+- `providerRef` and `providerHash` are only populated on explicit exception occurrences when the attached provider exposes per-occurrence remote objects
 - A non-recurring calendar item has `recurrence = null`
 
 ## `ExternalLink`
@@ -434,17 +477,19 @@ Planning objects may keep external linkage metadata.
 ### Lifecycle rules
 
 - External links carry `syncMode: "import" | "mirror" | "detached"`
-- For recurring series, `attach` and `detach` apply at the series root; occurrences inherit the linkage and do not carry independent attach state.
+- For recurring series, `attach` and `detach` apply at the series root; explicit exception occurrences may additionally carry per-occurrence `providerRef` / `providerHash` in recurrence metadata when the provider exposes distinct remote exception objects
 - `attach` creates or updates the stable external link for an Origin object
 - If provider object ids are supplied by the canonical CLI/runtime, `attach` may bind the Origin object to an existing Google event or Google task instead of creating a fresh external object
 - The planning object remains the source of truth for its own external-link metadata; the selected Google calendar or task list is the server-owned bridge surface that defines where that link may dispatch
 - If `attach`, `detach`, `pull`, `push`, or `reconcile` is requested while a peer is offline, Origin records the requested bridge state locally first and treats provider dispatch as pending until the server-owned bridge job applies it
-- `syncMode = "import"` means the next pull or reconcile imports from the linked external object into the Origin object without making Google canonical, and it never propagates destructive local deletes or cancels outward
-- `syncMode = "mirror"` means Origin and Google sync bidirectionally through the stable external link, and destructive local changes propagate outward when the provider supports the corresponding remote change
-- For recurring Google Calendar events and Google Tasks series, the Google master maps to the Origin series root
-- A single Google recurring exception maps to an explicit Origin exception occurrence tied to the same series and `occurrenceIndex`
-- Mirror mode exports explicit Origin exceptions back as Google exceptions when the provider supports them
-- Import mode keeps Origin canonical; Google-side recurrence exceptions are read as external representations of Origin exceptions, not as a separate series branch
+- `syncMode = "import"` binds to an existing external object or selected bridge surface and imports shared external fields into Origin on the next pull or reconcile; it does not create a new remote object and it never propagates destructive local deletes or cancels outward
+- `syncMode = "mirror"` means Origin and Google sync bidirectionally through the stable external link, and a remote object may be created if no provider object id is already bound
+- For recurring Google Calendar events, the Google master maps to the Origin series root and a Google exception instance maps to an explicit Origin exception keyed by `occurrenceKey`
+- The series root's Google master id and hash stay in `externalLinks[]`; per-occurrence Google exception ids and hashes stay on explicit exception recurrence metadata
+- Mirror mode exports explicit Origin calendar exceptions back as Google Calendar exceptions when the provider supports them
+- Import mode keeps Origin canonical; Google Calendar exceptions are read as external representations of Origin exceptions, not as a separate series branch
+- Google Tasks v1 does not model or mirror a remote recurring master/exception graph; recurring Origin tasks remain Origin-only series and any linked Google task is a lossy root/current-task projection
+- Google Tasks recurrence linking never creates per-occurrence provider refs or hashes in v1 because the bridge has no recurring master/exception identity model there
 - If a provider deletes one occurrence of a recurring series, Origin preserves the series root and records that occurrence as an explicit canceled or skipped exception
 - If the linked Google object is deleted or otherwise disappears remotely, Origin preserves the local object, detaches the external link, and records the situation for review or conflict resolution
 - `detach` leaves the external provider object untouched, preserves the local object, and changes the local link state to `detached`
@@ -500,6 +545,7 @@ Any command examples in this document are illustrative summaries of the canonica
 - Exported Origin calendar items push to Google Calendar through stable external links
 - Recurring Google events reconcile into first-party recurring calendar item series
 - Recurring Origin calendar item series remain Origin-canonical even when mirrored to Google Calendar
+- Explicit Origin exception occurrences may carry Google Calendar exception refs and hashes in their recurrence metadata when the provider exposes them
 - Google Calendar only sees events; Origin keeps the richer planning semantics
 
 ### Representative canonical bridge commands
@@ -531,7 +577,10 @@ Any command examples in this document are illustrative summaries of the canonica
 - Google Tasks limitations do not reduce Origin's canonical task model
 - Google Tasks v1 is a flat task-list bridge, not a full planning mirror
 - Fields unsupported by Google Tasks remain Origin-only metadata and are not expected to round-trip losslessly
-- In v1, the bridge does not model the full Origin recurrence series, dependency graph, project/label topology, or calendar-link relationships as first-class Google Tasks state
+- In v1, the bridge does not model the full Origin recurrence series, exception graph, dependency graph, project/label topology, or calendar-link relationships as first-class Google Tasks state
+- Recurring Origin tasks may still be linked to Google Tasks, but the linked Google task is a lossy projection of the root/current task state rather than a bridged recurring series
+- `syncMode = "import"` for Google Tasks binds to an existing Google task or selected task-list import path; it does not create a remote task
+- `syncMode = "mirror"` for Google Tasks may create or update a remote Google task for the root/current task state, but never creates a recurring master/exception graph
 - `dueFrom` remains Origin-only; Google Tasks can at best carry a simplified due value
 
 ### Representative canonical bridge commands

@@ -417,6 +417,11 @@ Origin should emit activity events for important email actions and mailbox state
 
 For provider-backed reactive automations, the canonical trigger surface is the ingress-emitted email event family defined in [provider_ingress_api.md](./provider_ingress_api.md).
 
+That canonical ingress family is:
+
+- generic ingress lifecycle: `provider.ingress.started`, `provider.ingress.completed`, `provider.ingress.failed`
+- email mailbox changes: `email.thread.created`, `email.message.received`, `email.thread.updated`, `email.thread.archived`, `email.thread.unarchived`, `email.thread.labels_changed`
+
 Email-domain activity entries may still include richer message-level detail, but they should not create a second competing trigger surface for the same provider change.
 Provider mailbox archive changes and Origin triage changes must be separate event families: use thread archive events for provider archive state and triage state events for Origin-owned overlay changes.
 
@@ -428,22 +433,22 @@ Incoming provider ingress should distinguish:
 
 Examples:
 
-- `email.sync.started`
-- `email.sync.completed`
-- `email.sync.failed`
-- `email.thread.fetched`
+- `provider.ingress.started`
+- `provider.ingress.completed`
+- `provider.ingress.failed`
 - `email.thread.created`
 - `email.message.received`
 - `email.thread.updated`
+- `email.thread.labels_changed`
+- `email.thread.archived`
+- `email.thread.unarchived`
+- `email.thread.fetched`
 - `email.message.forwarded`
 - `email.outgoing.queued`
 - `email.outgoing.attempted`
 - `email.outgoing.sent`
 - `email.reply.sent`
 - `email.outgoing.failed`
-- `email.label.updated`
-- `email.thread.archived`
-- `email.thread.unarchived`
 - `email.triage.state.changed`
 - `email.followup.scheduled`
 

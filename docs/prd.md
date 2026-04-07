@@ -154,8 +154,13 @@ Origin should distinguish between:
 - A domain may define explicit Origin-owned overlays or linkage metadata as replicated first-party state, but provider-derived caches are not peer-replicated source-of-truth.
 - Examples of replicated provider-domain overlays in v1 are `EmailTriageRecord`, `GitHubFollowTarget`, and `TelegramGroupSubscription`.
 - Clients do not write provider outboxes directly. Offline or local user intent syncs as replicated first-party external-action intent state, and the server materializes provider-specific outbox records from that intent when it is online and authorized to act.
-- An `ExternalActionIntent` is a replicated first-party record with a stable `intentId`, target/scope metadata, payload, and actor/timestamp attribution.
-- The authoritative server must materialize at most one logical provider or job action per `intentId` plus provider scope, and every derived outbox record carries that `intentId` forward as its origin link and dedupe root.
+- An `ExternalActionIntent` is a replicated first-party record with a stable intent id, target/scope metadata, action kind, payload, actor/timestamp attribution, and lifecycle status.
+- V1 intent lifecycle is: `pending -> materialized -> succeeded|failed|canceled`.
+- `pending` covers both "recorded durably on a peer but not yet replicated to the authoritative server" and "seen by the authoritative server but not yet materialized into durable provider or job outbox work."
+- `materialized` means the authoritative server has created provider or job outbox work from that intent.
+- `succeeded`, `failed`, and `canceled` are durable terminal states for the logical intent itself, even if the underlying provider outbox has its own attempt history.
+- The authoritative server must materialize at most one logical provider or job action per intent id plus provider scope, and every derived outbox record carries that same intent id forward as its origin link and dedupe root.
+- The CLI must expose inspect and repair surfaces for these intents rather than hiding them entirely behind provider-specific outboxes, including `sync intent list|get|retry|cancel`.
 - Clients consume provider domains through server-mediated read models, activity, and targeted fetches rather than by owning full replicated provider mirrors.
 
 ### Local-First Requirement
@@ -301,14 +306,14 @@ Every peer, including each Apple device and the server, should have a local Orig
 - The app writes immediately to its local replicated store
 - The UI updates from local state with no network round-trip
 - A change record is stored locally with actor identity and metadata
-- If the action targets an external service or the AI, the device records a replicated external-action intent locally with a stable `intentId` rather than writing provider/server outboxes directly
+- If the action targets an external service or the AI, the device records a replicated external-action intent locally with a stable intent id rather than writing provider/server outboxes directly
 
 #### What happens when the device comes back online
 
 - The device syncs its replicated changes to the server peer
 - The server syncs any newer changes back to the device
 - For external-service or AI work, the server materializes its own provider/job outbox records from the synced replicated intent and executes them with server-held credentials or capabilities
-- That materialization reuses the intent's stable `intentId` as the origin link and dedupe root so one synced intent becomes one logical provider or job action
+- That materialization reuses the intent's stable intent id as the origin link and dedupe root so one synced intent becomes one logical provider or job action
 - If there were concurrent edits, the replicated data model preserves both and merges according to the document rules
 - If there is a semantic conflict that still needs resolution, that conflict is represented in state rather than causing silent data loss
 
@@ -500,6 +505,10 @@ Origin should be deliberate about which domains it owns directly and which it tr
   - Google Tasks tasks can be imported into Origin tasks
   - Origin tasks can be exported or mirrored to Google Tasks tasks
   - changes from either side should reconcile through Origin's local-first planning model
+- `import` binds Origin to an existing Google object or selected bridge surface and never creates a new remote object
+- `mirror` may create a remote Google object when no provider object is already bound
+- In v1, Google Calendar recurrence round-trips through the bridge as a series root plus explicit per-occurrence exceptions keyed by the original scheduled slot
+- In v1, Google Tasks bridging does not mirror a recurring master/exception graph; recurring Origin tasks stay Origin-canonical series and any Google Tasks link is only a lossy root/current-task projection
 - Each synced item should keep stable linkage metadata between the Origin object and its external Google object
 - Metadata may be stored in the external object body or another practical carrier when needed, but the canonical planning state remains inside Origin
 
@@ -612,6 +621,7 @@ Origin should be deliberate about which domains it owns directly and which it tr
 - Existing non-markdown files remain ordinary local workspace artifacts unless the user or agent later explicitly imports or attaches them into managed state
 - If a profile already has replicated note state and the target path is already populated, attach must go through an explicit reconcile/repair flow instead of silently importing or overwriting
 - That reconcile flow must show the existing replicated note state and on-disk contents side by side, then require an explicit choice to adopt the target path, keep the current managed root, or replace the target path from an exported managed copy before any write occurs
+- The machine-actionable contract is: `setup vault init` stops with a stable reconcile id when such a choice is required, and `setup vault reconcile apply` performs the chosen `adopt`, `keep-current`, or `replace-target` path before any write occurs
 - Origin must not silently clobber existing files during attach, adoption, or first export
 
 #### External editing import path
