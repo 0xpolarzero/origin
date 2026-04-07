@@ -1,10 +1,10 @@
-# Origin CLI Implementation Notes
+# Origin CLI Implementation Report
 
-This note preserves the small amount of useful material that came out of the
+This report preserves the small amount of useful material that came out of the
 temporary `.codex-reports/` scratch files during the initial incur-based CLI
 implementation on 2026-04-07.
 
-This file is not the CLI source of truth.
+This report is not the CLI source of truth.
 
 Authoritative sources:
 - Runtime contract: [apps/server/src/cli/spec.ts](/Users/polarzero/code/projects/origin/apps/server/src/cli/spec.ts)
