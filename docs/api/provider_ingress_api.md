@@ -44,18 +44,24 @@ This is the canonical v1 "subscription" model.
 
 Use this split consistently:
 
+- `overlay/config`
+  - first-party durable selections or policies that scope provider work
+- `read model`
+  - a provider-derived snapshot exposed through the app/CLI and eligible for bounded offline visibility
 - `poller`
   - how Origin learns about new provider state
 - `cache`
-  - the latest provider-derived working set inside Origin
+  - execution-home-local hydration/materialization state that backs read models or fetch-on-demand
 - `activity event`
   - the normalized signal that something changed
 - `automation`
-  - reacts to the event, then reads the cache for context
+  - reacts to the event, then reads the read model and cache-backed context it needs
 
 So:
 
-- cache answers "what is true now?"
+- overlay/config answers "what provider scope or policy did Origin choose?"
+- read model answers "what last-synced provider state may clients inspect?"
+- cache answers "what provider detail does the execution home currently have hydrated?"
 - activity events answer "what just changed?"
 
 ## Storage Scope
@@ -63,12 +69,14 @@ So:
 - Pollers are server-owned operational state.
 - Poller state includes cursors, status, interval/backoff, rate-limit handling, and last-error metadata.
 - Provider caches are selective, evictable working sets and are usually server-local.
+- Provider domains may also materialize bounded replicated read-model snapshots so synced clients can inspect the last known provider state offline.
+- Those replicated read-model snapshots are derived from the last successful provider-execution-home sync. They are read-only on clients, rebuildable, and are not a second provider source of truth.
 - Queued provider mutations are outbox records, separate from pollers.
 - Provider caches and outboxes are not the replicated app-state layer.
-- A provider domain may define explicit Origin-owned overlay objects separately, but that does not make provider-derived caches peer-replicated source-of-truth.
-- Examples of replicated overlay objects in v1 are `EmailTriageRecord`, `GitHubFollowTarget`, and `TelegramGroupSubscription`.
+- A provider domain may define explicit Origin-owned overlay/config objects separately, but that does not make provider-derived caches peer-replicated source-of-truth.
+- Examples of replicated overlay/config objects in v1 are `EmailTriageRecord`, `GitHubFollowTarget`, `TelegramGroupSubscription`, selected GitHub installation grants, and selected Google bridge surfaces.
 - Clients never enqueue provider outbox records directly. They sync Origin-owned intent or overlay mutations, and the server materializes provider-specific outbox records from those replicated changes before dispatch.
-- Clients consume provider domains through server-mediated read models and activity rather than full replicated provider mirrors.
+- Clients consume provider domains through read models, activity, and targeted fetches rather than full replicated provider mirrors.
 
 ## Provider Execution Home (v1)
 
@@ -128,21 +136,56 @@ This keeps offline behavior local-first without pretending provider outboxes are
 
 ## `ExternalActionIntent`
 
-`ExternalActionIntent` is the shared replicated first-party handoff object for offline or peer-local actions that eventually need provider or job execution on the provider execution home.
+`ExternalActionIntent` is the shared replicated first-party handoff object for offline or peer-local actions that eventually need provider or bridge execution on the provider execution home.
 
-Required v1 fields:
+`ExternalActionIntent` is a closed v1 union:
+
+- `kind: "provider_write" | "planning_bridge_action"`
+- `provider`: required
+- `scope`: structured provider-surface object, not a free-form string
+- `targetRef`
+- `action`
+- `payload`
+
+`scope` names the provider surface that authorizes and materializes the action.
+`targetRef` names the specific logical object being mutated within that surface when one exists.
+`action` is a provider-specific enum from the owning domain contract, not free-form prose.
+`payload` is the action-specific typed options object from the owning domain contract. Unknown keys are invalid for the owning domain action. The shared `sync intent` inspect surface preserves `payload` as a structured object, but exhaustive payload-key validation is owned by the domain command that authored the intent and by the execution-home materializer. Provider raw request blobs, cursor tokens, retry metadata, cache hints, and provider outbox state are forbidden in `payload`.
+
+Initial v1 scope registry:
+
+- `email`: `{ accountId }`
+- `github`: `{ repo }`
+- `telegram`: `{ chatId }`
+- `google-calendar`: `{ calendarId }`
+- `google-tasks`: `{ taskListId }`
+
+Bulk bridge commands such as Google `pull`, `push`, or `reconcile` without an explicit surface id are command-level sugar in v1. They do not introduce an all-surfaces scope object. Instead, the runtime expands them into one `planning_bridge_action` intent per selected calendar or task list surface.
+
+Initial v1 action registry:
+
+- `email`: `send`, `reply`, `reply_all`, `forward`, `archive`, `unarchive`, `mark_read`, `mark_unread`, `star`, `unstar`, `spam`, `unspam`, `trash`, `restore`, `label_add`, `label_remove`
+- `github`: `star`, `unstar`, `issue_create`, `issue_update`, `issue_comment`, `issue_label`, `issue_assignee`, `issue_close`, `issue_reopen`, `issue_lock`, `issue_unlock`, `pr_open`, `pr_update`, `pr_comment`, `pr_close`, `pr_reopen`, `pr_merge`, `pr_request_reviewer`, `pr_unrequest_reviewer`, `pr_ready`, `pr_draft`, `review_submit`, `review_thread_reply`
+- `telegram`: `send`, `reply`
+- `google-calendar`: `pull`, `push`, `reconcile`, `attach`, `detach`
+- `google-tasks`: `pull`, `push`, `reconcile`, `attach`, `detach`
+
+Always-present v1 fields:
 
 - `id`
 - `kind`
 - `provider`
 - `scope`
 - `action`
-- `targetRef`
-- `payload`
 - `status`
 - `createdAt`
-- `updatedAt`
 - `createdByActor`
+
+Lifecycle-conditional or action-conditional fields:
+
+- `targetRef` when the logical action targets a specific object inside the scope
+- `payload` when the owning domain action requires typed options beyond the action enum itself
+- `updatedAt`
 - `updatedByActor`
 - `materializedAt`
 - `succeededAt`
@@ -150,8 +193,6 @@ Required v1 fields:
 - `canceledAt`
 - `lastError`
 - `outboxRefs[]`
-
-`provider` is optional when the intent targets an internal subsystem job rather than a third-party provider. `scope` remains required in either case because it is the materialization and dedupe boundary.
 
 Canonical v1 status model:
 
@@ -161,13 +202,13 @@ Canonical v1 status model:
 - `failed`
 - `canceled`
 
-`pending` covers both cases where the intent has not yet replicated to the provider execution home and where it has replicated but has not yet been materialized into provider or job outbox work.
+`pending` covers both cases where the intent has not yet replicated to the provider execution home and where it has replicated but has not yet been materialized into provider or bridge outbox work.
 
 Normative lifecycle:
 
 1. a device or server peer records the intent in replicated state with a stable intent id
 2. the provider execution home validates auth and scope after the intent reaches it while the intent remains `pending`
-3. the provider execution home creates or updates at most one logical provider/job outbox record per `(intent id, provider, scope)`
+3. the provider execution home creates or updates at most one logical provider/bridge outbox record per `(intent id, kind, provider, scope, action, targetRef?)`
 4. the intent transitions to `materialized` once the outbox linkage on the provider execution home is durable
 5. downstream dispatch/retry happens from the server-owned outbox while the intent remains the origin link and dedupe root
 6. the intent transitions to `succeeded`, `failed`, or `canceled` when the logical action reaches a terminal state
@@ -175,9 +216,11 @@ Normative lifecycle:
 Required behavior:
 
 - the intent id is stable across retries, reconnects, and replica sync
+- pure overlay/config mutations do not create `ExternalActionIntent`; only actions that require later execution-home materialization into provider or bridge outbox work do
 - canceling an intent before materialization must prevent outbox creation
 - canceling an already materialized intent must stop further dispatch attempts where the provider/domain supports cancelation and otherwise mark the intent canceled while preserving audit history
 - provider-specific outbox retries must not create a second logical intent
+- every derived provider or bridge outbox record must carry `originIntentId` explicitly and reuse the logical action represented by that intent rather than inventing a second origin record
 - the intent remains queryable after terminal state for audit and repair
 
 Canonical read / repair surface:
@@ -266,6 +309,7 @@ Provider caches are:
 - evictable
 - current-state oriented
 - usually server-local
+- subordinate to any replicated read-model snapshot already exposed to clients
 
 They are not:
 
@@ -280,6 +324,7 @@ The cache should usually keep:
 - local overlays and workflow metadata
 - provider ids and cursors
 - enough context for agent actions and automation execution
+- hydrated provider details such as raw bodies, diff blobs, recent-message windows, or retention metadata that do not need to replicate directly to every peer
 
 ## Change Detection
 
@@ -352,9 +397,9 @@ They should not continuously diff provider cache state directly.
 
 For provider-backed workflows, ingress activity events are the canonical trigger surface.
 
-Provider-domain docs may also define first-party object events such as `planning.task.updated` or `email.triage.state.changed`.
+Provider-domain docs may also define first-party object events such as `planning.task.updated`, `telegram.summary.generated`, or `email.triage.state.changed`.
 
-Those downstream domain events are useful for audit, read models, and first-party workflows, but they do not replace the ingress event surface for provider-backed reactive automation unless a domain explicitly re-emits the same logical event with the same durable event identity.
+Those downstream domain events are useful for audit, read models, and first-party workflows. When a first-party domain event is itself triggerable by automation in v1, it must reuse the same normalized `sourceScope` / `changeKinds[]` / `attributes` envelope defined below. They still do not replace the ingress event surface for provider-backed reactive automation unless a domain explicitly re-emits the same logical event with the same durable event identity.
 
 Correct model:
 
@@ -453,6 +498,10 @@ Canonical `changeKinds[]` examples in v1:
 - `merged`
 - `closed`
 - `reopened`
+- `completed`
+- `canceled`
+- `linked`
+- `unlinked`
 
 Canonical `attributes` keys in v1:
 
@@ -462,8 +511,12 @@ Canonical `attributes` keys in v1:
 - `summaryTriggerKind`
 - `authorRole`
 - `isMention`
+- `changedFields[]`
+- `syncDirection`
 
 These keys are present only when the event family makes them meaningful. They are the normalized payload surface that automation filters match instead of provider-specific raw payload fields.
+
+The same normalized envelope is reused by triggerable first-party domain events in v1. A domain event may omit fields that are not meaningful for that event family, but if a field is present it must follow this contract.
 
 Automation-filter mapping in v1:
 
@@ -474,6 +527,8 @@ Automation-filter mapping in v1:
 - `filters.summaryTriggerKinds[]` matches `attributes.summaryTriggerKind`
 - `filters.authorRoles[]` matches `attributes.authorRole`
 - `filters.isMention` matches `attributes.isMention`; ingress should also include `mentioned` in `changeKinds[]` when that boolean is true
+- `filters.changedFields[]` matches `attributes.changedFields[]`
+- `filters.syncDirection[]` matches `attributes.syncDirection`
 
 Event-kind granularity rule in v1:
 
@@ -539,14 +594,16 @@ The important contract is:
 
 - one mailbox poller for the agent inbox
 - cursor is mailbox/provider specific
-- cache stores recent relevant threads/messages as server read models plus the Origin triage overlay
+- read models expose recent relevant threads/messages plus the Origin triage overlay
+- cache stores mailbox cursor state, body/attachment hydration, recent-message working sets, and other execution-home-local detail behind those read models
 - events drive things like `on new email`
 
 ### GitHub
 
 - one server-side poller pass over the followed repos covered by the selected installation grants
 - follow targets define Origin's local working set and attention model within those server-side scopes
-- cache stores selected repo / issue / PR / review state
+- read models expose the selected installation-grant snapshot plus the repo / issue / PR / review summaries clients inspect offline
+- cache stores execution-home-local GitHub detail such as cursors, ETags, hydrated bodies, diff payloads, and other richer fetch state behind those read models
 - server pollers own repository cursors and refresh state
 - follow-target dismissal is overlay state, not cache state: `dismissedThroughCursor` stores the repo refresh cursor watermark, and automatic resurfacing requires a later refresh beyond that watermark plus newer matching target activity
 - events drive things like `on followed PR updated`
@@ -554,7 +611,8 @@ The important contract is:
 ### Telegram
 
 - one server-side bot-update poller for the connected Telegram bot; tracked chats narrow work inside that scope
-- cache stores recent tracked messages plus server read models for bot/chat state
+- read models expose bot connection state, chat refs, and summary-job projections
+- cache stores recent tracked-message windows and other execution-home-local detail behind those read models
 - `TelegramGroupSubscription` is the replicated overlay for tracked-group policy; connection state, recent message caches, and outgoing actions remain server-owned operational state
 - summary lifecycle events are downstream Telegram-domain activity emitted after automation or outbox work, not alternate provider-ingress message events
 - events drive things like `on Telegram message in tracked group`

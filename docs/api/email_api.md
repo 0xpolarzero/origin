@@ -65,9 +65,9 @@ Email remains provider-canonical, but Origin guarantees the following minimum cl
 - Message snapshot floor: for those cached threads, at least the most recent 1,000 message envelopes (`from/to/subject/sentAt/snippet/labels`) remain client-visible from the last successful sync.
 - Body residency floor: full message body content is guaranteed offline only for messages explicitly opened, composed against, or fetched by Origin in the last 30 days, up to at least 200 bodies per account.
 - Attachment residency floor: attachment bytes are offline-guaranteed only for files the user or agent explicitly downloaded/imported through Origin; metadata refs may exist without local bytes.
-- Outbound intent floor: offline send/reply/archive/triage requests are durably captured as replicated intent/overlay updates and are replayed by the provider execution home after sync; provider side effects are not guaranteed until replay succeeds.
+- Outbound intent floor: offline provider-write requests become `ExternalActionIntent` records and are replayed by the provider execution home after sync. Triage, follow-up, task-link, and note changes are replicated overlay mutations and do not wait on provider replay.
 
-Outside these minimums, older or colder provider-derived cache entries may be evicted and re-fetched from the provider.
+These offline floors apply to the email read-model surface already synced to the client, not to direct ownership of raw provider-cache rows. Outside these minimums, older or colder provider-derived snapshots may be evicted and re-fetched from the provider.
 
 ### Object identity
 
@@ -110,7 +110,8 @@ Represents a connected mailbox account that Origin can operate on.
 - `displayName`
 - `status`
 - `scope`
-- `syncCursor`
+- `lastSyncAt`
+- `syncState`
 - `defaultFromAddress`
 - `createdAt`
 - `updatedAt`
@@ -119,7 +120,9 @@ Represents a connected mailbox account that Origin can operate on.
 
 - The account is connected directly to the provider API
 - The account is the working inbox for the agent
-- Account status and sync cursor state are server-side read models derived from provider ingress, not client-authored replica state
+- `EmailAccount` is a provider-derived read model, not a replicated overlay object
+- Account status and mailbox refresh state are read-only projections derived from provider ingress, not client-authored replica state
+- Cursor state is owned by mailbox refresh/poller status surfaces rather than by the `EmailAccount` object itself
 - Multiple accounts are not a v1 goal, but the model should not hardcode a single mailbox in case the product later needs more than one
 
 ## `EmailThread`
@@ -148,6 +151,7 @@ Represents a mail thread as Origin sees it.
 ### Notes
 
 - A thread is the primary object for triage
+- `EmailThread` is a provider-derived read model for the thread snapshot Origin exposes to clients
 - Thread triage fields are derived projections of the canonical `EmailTriageRecord`
 - In v1, the thread read model projects only `triageState` and `followUpAt` from the triage overlay
 - Provider unread, starred, label, and archive state remain provider-derived mailbox read-model state rather than triage-overlay state
@@ -185,6 +189,7 @@ Represents a message in a thread.
 ### Notes
 
 - `bodyRef` may point to cached full body content or a fetched-on-demand blob
+- `EmailMessage` is a provider-derived read model for the message envelope and any hydrated body/bodyRef currently available through Origin
 - Not every message body must be cached locally
 - Attachments are handled as blobs or cached references when needed
 
@@ -229,6 +234,7 @@ Represents the server-side outbox record for a mail mutation that still needs to
 - `payload`
 - `providerMessageId`
 - `status`
+- `originIntentId`
 - `dedupeKey`
 - `attemptCount`
 - `queuedAt`
@@ -244,6 +250,7 @@ Represents the server-side outbox record for a mail mutation that still needs to
 - Outgoing actions are dispatch state, not composition state
 - `kind` should distinguish at least send, reply, reply-all, and forward dispatch
 - A draft may exist without an outgoing action, but send / reply / reply-all / forward mutations should create or reuse an outgoing action when they are ready to leave Origin
+- `originIntentId` links the outbox record back to the canonical replicated `ExternalActionIntent` that caused it
 - Retries must reuse the same `dedupeKey` so a repeated dispatch cannot duplicate mail
 
 ## `EmailTriageRecord`
@@ -333,6 +340,12 @@ Represents the provider sync position for an account.
 - `error`
 - `createdAt`
 - `updatedAt`
+
+### Notes
+
+- `EmailSyncCursor` is a provider-ingress read model for the mailbox poller, not a first-class replicated email-domain object
+- Cursor inspection, reset, and repair live on the mailbox refresh/poller surfaces
+- Non-home peers never author this object directly
 
 ## Read / Query Surface
 
@@ -426,13 +439,16 @@ The email API should support at least the following mutations.
 - Attachments should be cached selectively
 - `EmailTriageRecord` is the only replicated Origin-owned overlay for a thread and owns exactly `triageState`, `followUpAt`, `linkedTaskId`, and `notesMd`
 - `EmailAccount`, `EmailThread`, `EmailMessage`, unread/starred/label/archive mailbox state, and cache residency metadata are provider-derived server read models or server-local cache state, not replicated overlay state
+- `EmailAccount`, `EmailThread`, and `EmailMessage` are the client-visible email read-model surface. The baseline read model does not replicate every full body or attachment byte.
+- Full bodies and attachment bytes normally remain execution-home-local cache state, but explicit body opens/composition fetches and explicit attachment downloads may promote those specific blobs into the synced client-visible residency floor described above
 - Unread, starred, label, and archive state are provider-derived mailbox state carried in the read models, not `EmailTriageRecord` fields
 - Cache pinning affects eviction / retention only and is not replicated triage state
 - Cache controls such as warm, hydrate, pin, unpin, and evict affect cache materialization or retention only; they must not create, clear, or mutate `EmailTriageRecord`
 - Provider mailbox actions such as archive, unarchive, read, unread, star, unstar, and label changes update provider state and derived read models only; they must not implicitly change Origin triage state. `triageState = "archived"` remains a separate Origin-owned overlay state
 - Sync should be cursor-based and provider-driven
 - If the cursor becomes invalid, Origin should be able to fall back to a broader resync of the account
-- The account, sync, and thread state exposed through Origin should be treated as server-side read models derived from provider ingress
+- Mailbox cursor state, last-sync timestamps, poller health, and last-error metadata are owned by provider ingress on the provider execution home. `EmailAccount.lastSyncAt` and `EmailAccount.syncState` are read-only projections for convenience.
+- The canonical operational surface for cursor inspection, cursor reset, and poller repair is the mailbox refresh/poller surface, not `EmailAccount`
 - The local email state should be treated as an evictable projection, not a durable mailbox replica
 - The shared polling / cursor / cache / activity-event model is defined in [provider_ingress_api.md](./provider_ingress_api.md)
 

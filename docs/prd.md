@@ -155,18 +155,22 @@ Origin should distinguish between:
 
 - First-party Origin objects remain replicated local-first state.
 - Provider ingress operational state is server-local operational state: pollers, cursors, backoff/rate-limit state, provider execution queues, and primary provider caches.
-- A domain may define explicit Origin-owned overlays or linkage metadata as replicated first-party state, but provider-derived caches are not peer-replicated source-of-truth.
-- Examples of replicated provider-domain overlays in v1 are `EmailTriageRecord`, `GitHubFollowTarget`, and `TelegramGroupSubscription`.
+- Provider domains in v1 use three storage layers:
+  - replicated first-party overlays/config such as selected provider surfaces, follow targets, group subscriptions, bridge selections, and durable offline intent
+  - bounded replicated provider read-model snapshots that expose the last synced provider state clients may inspect offline
+  - execution-home-local provider cache and execution state used to hydrate those read models and perform provider work
+- Provider read-model snapshots are derived, read-only on clients, and rebuildable from provider state plus replicated overlays/config. They are not peer-replicated provider source-of-truth mirrors.
+- Examples of replicated provider-domain overlays/config in v1 are `EmailTriageRecord`, `GitHubFollowTarget`, `TelegramGroupSubscription`, selected GitHub installation grants, and selected Google bridge surfaces.
 - Clients do not write provider outboxes directly. Offline or local user intent syncs as replicated first-party external-action intent state, and the provider execution home materializes provider-specific outbox records from that intent when it is online and authorized to act.
-- An `ExternalActionIntent` is a replicated first-party record with a stable intent id, target/scope metadata, action kind, payload, actor/timestamp attribution, and lifecycle status.
+- An `ExternalActionIntent` is a typed replicated first-party record with a stable intent id, closed v1 `kind` (`provider_write` or `planning_bridge_action`), required provider/scope metadata, canonical action enum, typed payload, actor/timestamp attribution, and lifecycle status.
 - V1 intent lifecycle is: `pending -> materialized -> succeeded|failed|canceled`.
-- `pending` covers both "recorded durably on a peer but not yet replicated to the provider execution home" and "seen by the provider execution home but not yet materialized into durable provider or job outbox work."
-- `materialized` means the provider execution home has created provider or job outbox work from that intent.
+- `pending` covers both "recorded durably on a peer but not yet replicated to the provider execution home" and "seen by the provider execution home but not yet materialized into durable provider or bridge outbox work."
+- `materialized` means the provider execution home has created provider or bridge outbox work from that intent.
 - `succeeded`, `failed`, and `canceled` are durable terminal states for the logical intent itself, even if the underlying provider outbox has its own attempt history.
-- The provider execution home must materialize at most one logical provider or job action per intent id plus provider scope, and every derived outbox record carries that same intent id forward as its origin link and dedupe root.
+- The provider execution home must materialize at most one logical provider or bridge action per intent id plus provider scope, and every derived outbox record carries that same intent id forward as `originIntentId`, its origin link, and dedupe root.
 - The CLI must expose inspect and repair surfaces for these intents rather than hiding them entirely behind provider-specific outboxes, including `sync intent list|get|retry|cancel`.
 - The shared schema, lifecycle, and trigger-facing event contract for these intents and provider ingress are defined in [provider_ingress_api.md](./api/provider_ingress_api.md) and surfaced through the stable CLI docs entrypoint [origin_incur_cli.ts](./api/origin_incur_cli.ts), which re-exports the app-owned spec at `apps/server/src/cli/spec.ts`.
-- Clients consume provider domains through server-mediated read models, activity, and targeted fetches rather than by owning full replicated provider mirrors.
+- Clients consume provider domains through replicated read-model snapshots, activity, and targeted fetches rather than by owning full replicated provider mirrors.
 
 ### Provider Execution Home (Global)
 
@@ -185,7 +189,7 @@ Provider surfaces still narrow what that one machine does:
 
 - email scopes to the connected mailbox
 - GitHub scopes to the selected installation grants and the followed repos inside them
-- Telegram scopes to the connected bot and the chats/groups Origin tracks inside it
+- Telegram scopes to the connected bot and the registered tracked groups/supergroups Origin follows in v1; other chats may still exist as discovery or direct-action targets
 - Google Calendar scopes to the selected calendars
 - Google Tasks scopes to the selected task lists
 
@@ -205,9 +209,10 @@ Minimum global guarantees:
 
 - Clients always retain replicated first-party overlays and `ExternalActionIntent` history offline.
 - Clients can always inspect the last synced provider read-model snapshot they already have for each configured domain.
+- Those offline provider surfaces are bounded replicated read models derived from the last successful provider execution home sync. They are not guarantees about the full server-local cache rowset or hydration state.
 - Clients can always queue new provider-targeted intent offline; execution waits for sync to the provider execution home.
 - Clients are not guaranteed full provider-history search or full raw-content availability offline.
-- Server-owned provider caches are recoverable/evictable; they are not peer-replicated source-of-truth mirrors.
+- Server-owned provider caches are recoverable/evictable; they are not peer-replicated source-of-truth mirrors. Cache eviction may reduce freshness or hydrated detail, but it must not clear selected provider surfaces, replicated overlays/config, or the last synced lightweight read-model snapshot already visible to clients.
 
 Per-domain minimum offline/client contracts are normative in:
 
@@ -358,14 +363,14 @@ Every peer, including each Apple device and the server, should have a local Orig
 - The app writes immediately to its local replicated store
 - The UI updates from local state with no network round-trip
 - A change record is stored locally with actor identity and metadata
-- If the action targets an external service or the AI, the device records a replicated external-action intent locally with a stable intent id rather than writing provider/server outboxes directly
+- If the action targets an external service or planning bridge, the device records a replicated external-action intent locally with a stable intent id rather than writing provider/server outboxes directly
 
 #### What happens when the device comes back online
 
 - The device syncs its replicated changes to the server
 - The server syncs any newer changes back to the device
-- For external-service or AI work, the server materializes its own provider/job outbox records from the synced replicated intent and executes them with server-held credentials or capabilities
-- That materialization reuses the intent's stable intent id as the origin link and dedupe root so one synced intent becomes one logical provider or job action
+- For external-service or planning-bridge work, the server materializes its own provider/bridge outbox records from the synced replicated intent and executes them with server-held credentials or capabilities
+- That materialization reuses the intent's stable intent id as the origin link and dedupe root so one synced intent becomes one logical provider or bridge action
 - If there were concurrent edits, the replicated data model preserves both and merges according to the document rules
 - If there is a semantic conflict that still needs resolution, that conflict is represented in state rather than causing silent data loss
 
@@ -400,7 +405,7 @@ Every peer, including each Apple device and the server, should have a local Orig
 - Google provider pollers, cursors, backoff/rate-limit state, and execution queues remain server-local operational state
 - Provider changes from Google bridges reconcile into replicated planning objects; Origin planning changes sync outward through server-owned bridge jobs
 - Email, GitHub, and Telegram remain external-service domains rather than replicated first-party object sets
-- The server owns their pollers, primary caches, and provider outboxes; clients consume them through server-mediated read models and activity, with only domain-defined first-party overlays such as `EmailTriageRecord`, `GitHubFollowTarget`, and `TelegramGroupSubscription` replicated when needed
+- The server owns their pollers, primary caches, and provider outboxes; clients consume them through bounded replicated read-model snapshots plus activity, with only domain-defined first-party overlays/config such as `EmailTriageRecord`, `GitHubFollowTarget`, and `TelegramGroupSubscription` replicated when needed
 - Offline client actions that target those providers are recorded first as replicated Origin intent, then converted by the provider execution home into provider-specific outbox work once sync reaches that machine
 
 ### Recommended Library Stack
@@ -557,7 +562,7 @@ Origin should be deliberate about which domains it owns directly and which it tr
   - Google Tasks tasks can be imported into Origin tasks
   - Non-recurring Origin tasks can be exported or mirrored to Google Tasks tasks
   - changes from either side should reconcile through Origin's local-first planning model
-- `import` binds Origin to an existing Google object or selected bridge surface and never creates a new remote object
+- `import` binds Origin to an existing Google object id on a selected bridge surface and never creates a new remote object
 - `mirror` may create a remote Google object when no provider object is already bound
 - In v1, Google Calendar recurrence round-trips through the bridge as a series root plus explicit per-occurrence exceptions keyed by the original scheduled slot
 - In v1, Google Tasks bridging does not mirror recurring Origin task series. Recurring Origin tasks stay Origin-only for Google Tasks, and the bridge supports only non-recurring task links there
@@ -623,6 +628,7 @@ Origin should be deliberate about which domains it owns directly and which it tr
 - Canonical file format: `.md` files plus simple YAML properties where useful
 - The managed workspace should be treated as a single shared assistant workspace rather than split into separate user and agent areas
 - On filesystem-bearing peers, Origin materializes note state into this vault and treats direct file edits as a supported input path
+- iPhone is a non-filesystem-bearing peer in v1: it edits the replicated note model in-app, but it does not attach a user-managed vault path or run the filesystem bridge
 - Any file inside the managed workspace root is accessible to the agent like any other host file
 - The vault should include a stable managed memory file at `Origin/Memory.md`
 - Origin behavior:
@@ -661,6 +667,7 @@ Origin should be deliberate about which domains it owns directly and which it tr
 #### Recommended vault workflow
 
 - macOS and the server keep local materialized vaults for supported external editing workflows
+- iPhone consumes and edits the same replicated note state without hosting a local materialized vault
 - Origin converts current replicated note state into markdown files in the vault
 - Origin watches for external file changes and imports them back into replicated note state
 - The vault remains a materialized editable projection of replicated note state, not a separate note-history system
@@ -922,36 +929,37 @@ All core libraries and tools used by the system should be cloned locally into `d
 15. Automerge is the note sync and history substrate in v1; there is no separate VCS layer for notes.
 16. `Automerge` is the chosen live sync substrate and `automerge-swift` is the chosen Apple-side implementation base for v1.
 17. External markdown editing is a supported first-class workflow on filesystem-bearing peers; file edits are imported back into replicated state and then sync normally.
-18. Tasks and calendar items are first-party Origin planning objects, not thin wrappers around an external provider.
-19. Google Calendar is a bidirectional sync target and import surface for Origin calendar items, not the primary internal planning model.
-20. Google Tasks is a bidirectional sync target and import surface for non-recurring Origin tasks, not the primary internal planning model.
-21. Agent workflows should generally operate against Origin planning objects rather than directly against Google provider semantics.
-22. Tasks support an optional `dueFrom` in addition to `dueAt`, allowing due windows that can span multiple days in planning views.
-23. The full v1 calendar/tasks API surface is specified in [calendar_tasks_api.md](./api/calendar_tasks_api.md).
-24. Tasks support dependency edges and recurring task series in v1.
-25. Calendar items also support first-party recurrence in v1.
-26. Email remains an external-service domain in v1; Origin does not build a full offline mailbox and only keeps selective caches/operational metadata for agent workflows.
-27. The agent mailbox is a real working inbox connected directly through the provider API; forwarded user emails are simply normal messages inside that inbox, optionally with lightweight provenance metadata.
-28. GitHub remains an external-service domain in v1; Origin does not build a full offline mirror and only keeps selective caches/operational metadata for agent workflows.
-29. Telegram remains an external-service domain in v1; Origin does not build a full offline mirror and only keeps selective caches/operational metadata for agent workflows.
-30. Origin can operate both on its own managed files and on arbitrary files/folders accessible on the server host filesystem.
-31. Onboarding should collect the user's own identity handles across supported services so Origin can identify the user correctly.
-32. The Telegram bot must be usable inside Telegram groups.
-33. Telegram should use the maximum bot access model Telegram supports in v1, including group participation and disabled privacy mode where needed, while respecting remaining bot-only platform limits.
-34. Origin should have a first-party agent memory object implemented in v1 as a managed markdown file at `Origin/Memory.md`, editable in the app and explicitly referenced by agent prompts.
-35. Chat uses ordinary session-based conversations in v1; each chat is its own session and there are no special-purpose chat workspace types.
-36. The app must expose a first-class activity-event log so the user can inspect what the agent did across jobs, tool actions, and integration actions.
-37. Automations are chat-first but may also be reviewed and edited through structured UI in v1.
-38. The normal execution posture is direct action, not dry-run-first behavior.
-39. Apple clients are assumed to be SwiftUI-native, but the PRD should stay focused on functionality rather than detailed UI design.
-40. Retrieval should use a hybrid model: structured filters and exact search first, with embeddings / vector retrieval as a first-class derived layer where semantic search improves context quality.
-41. Origin should support proactive notifications through in-app surfaces and push notifications, but not through outbound email or Telegram notifications in v1.
-42. Persisted agent-authored documents should be ordinary notes in the vault organized as needed; transient one-off output should remain in chat by default.
-43. The managed workspace is a single shared assistant workspace, and in v1 the vault is that workspace root itself rather than a separate subtree or user/agent split.
-44. Agent memory behavior is defined by [memory_protocol.md](./details/memory_protocol.md): `Origin/Memory.md` is the curated memory index, and the agent may create supporting files or datasets referenced from it without requiring fixed schemas upfront.
-45. Origin itself should use the simplest viable single-owner auth model in v1 and should not introduce an internal multi-user account system.
-46. The preferred v1 deployment target is a single Linux VPS compatible with Hetzner-style deployment, using a bare-metal / systemd-first service model rather than container-first packaging.
-47. SQLite is the chosen lightweight operational database where Origin needs relational/local metadata storage beyond the replicated Automerge state.
+18. Non-filesystem-bearing peers still edit the same replicated note state, but they do not host the materialized vault projection or filesystem bridge.
+19. Tasks and calendar items are first-party Origin planning objects, not thin wrappers around an external provider.
+20. Google Calendar is a bidirectional sync target and import surface for Origin calendar items, not the primary internal planning model.
+21. Google Tasks is a bidirectional sync target and import surface for non-recurring Origin tasks, not the primary internal planning model.
+22. Agent workflows should generally operate against Origin planning objects rather than directly against Google provider semantics.
+23. Tasks support an optional `dueFrom` in addition to `dueAt`, allowing due windows that can span multiple days in planning views.
+24. The full v1 calendar/tasks API surface is specified in [calendar_tasks_api.md](./api/calendar_tasks_api.md).
+25. Tasks support dependency edges and recurring task series in v1.
+26. Calendar items also support first-party recurrence in v1.
+27. Email remains an external-service domain in v1; Origin does not build a full offline mailbox and only keeps selective caches/operational metadata for agent workflows.
+28. The agent mailbox is a real working inbox connected directly through the provider API; forwarded user emails are simply normal messages inside that inbox, optionally with lightweight provenance metadata.
+29. GitHub remains an external-service domain in v1; Origin does not build a full offline mirror and only keeps selective caches/operational metadata for agent workflows.
+30. Telegram remains an external-service domain in v1; Origin does not build a full offline mirror and only keeps selective caches/operational metadata for agent workflows.
+31. Origin can operate both on its own managed files and on arbitrary files/folders accessible on the server host filesystem.
+32. Onboarding should collect the user's own identity handles across supported services so Origin can identify the user correctly.
+33. The Telegram bot must be usable inside Telegram groups.
+34. Telegram should use the maximum bot access model Telegram supports in v1, including group participation and disabled privacy mode where needed, while respecting remaining bot-only platform limits.
+35. Origin should have a first-party agent memory object implemented in v1 as a managed markdown file at `Origin/Memory.md`, editable in the app and explicitly referenced by agent prompts.
+36. Chat uses ordinary session-based conversations in v1; each chat is its own session and there are no special-purpose chat workspace types.
+37. The app must expose a first-class activity-event log so the user can inspect what the agent did across jobs, tool actions, and integration actions.
+38. Automations are chat-first but may also be reviewed and edited through structured UI in v1.
+39. The normal execution posture is direct action, not dry-run-first behavior.
+40. Apple clients are assumed to be SwiftUI-native, but the PRD should stay focused on functionality rather than detailed UI design.
+41. Retrieval should use a hybrid model: structured filters and exact search first, with embeddings / vector retrieval as a first-class derived layer where semantic search improves context quality.
+42. Origin should support proactive notifications through in-app surfaces and push notifications, but not through outbound email or Telegram notifications in v1.
+43. Persisted agent-authored documents should be ordinary notes in the vault organized as needed; transient one-off output should remain in chat by default.
+44. The managed workspace is a single shared assistant workspace, and in v1 the vault is that workspace root itself rather than a separate subtree or user/agent split.
+45. Agent memory behavior is defined by [memory_protocol.md](./details/memory_protocol.md): `Origin/Memory.md` is the curated memory index, and the agent may create supporting files or datasets referenced from it without requiring fixed schemas upfront.
+46. Origin itself should use the simplest viable single-owner auth model in v1 and should not introduce an internal multi-user account system.
+47. The preferred v1 deployment target is a single Linux VPS compatible with Hetzner-style deployment, using a bare-metal / systemd-first service model rather than container-first packaging.
+48. SQLite is the chosen lightweight operational database where Origin needs relational/local metadata storage beyond the replicated Automerge state.
 
 ## V1 Shape
 

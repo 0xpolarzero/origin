@@ -40,6 +40,7 @@ const isoDate = z.string().describe('ISO 8601 date string.')
 const isoDateTime = z.string().describe('ISO 8601 datetime string.')
 const duration = z.string().describe('Human-friendly duration string such as `15m` or `24h`.')
 const path = z.string().describe('Filesystem path.')
+const artifactLocator = z.string().describe('Artifact locator. Replicated managed notes use logical workspace-relative paths; local-only artifacts use filesystem paths on the hosting filesystem-bearing peer.')
 const markdown = z.string().describe('Markdown content.')
 const secureRef = z
   .string()
@@ -141,8 +142,8 @@ const activityEvent = z.object({
     .string()
     .optional()
     .describe('Stable provider change token, watermark, or version boundary that participates in durable ingress event identity when known.'),
-  ['change-kinds']: z.array(z.string()).optional().describe('Normalized change labels such as `created`, `updated`, `commented`, `review_requested`, or `mentioned`.'),
-  attributes: z.record(z.string(), z.unknown()).optional().describe('Normalized provider or domain attributes used by automation filters when relevant, such as `status`, `labels`, `reviewDecision`, `summaryTriggerKind`, `authorRole`, or `isMention`.'),
+  ['change-kinds']: z.array(z.string()).optional().describe('Normalized change labels such as `created`, `updated`, `commented`, `review_requested`, `mentioned`, `completed`, `canceled`, `linked`, or `unlinked`.'),
+  attributes: z.record(z.string(), z.unknown()).optional().describe('Normalized provider or domain attributes used by automation filters when relevant, such as `status`, `labels`, `reviewDecision`, `summaryTriggerKind`, `authorRole`, `isMention`, `changedFields`, or `syncDirection`.'),
   ['details-md']: markdown.optional().describe('Optional extended event details.'),
   ['caused-by-activity-event-id']: z.string().optional().describe('Originating ingress event id when this event is a downstream projection of the same logical provider change.'),
   ['trace-id']: z.string().optional().describe('Trace id that correlates related events.'),
@@ -252,14 +253,14 @@ const providerSurfaceStatus = z.object({
   ['provider-ref']: z.string().optional().describe('Provider-side container ref for the surface when known.'),
   ['display-name']: z.string().optional().describe('Display label for the surface when known.'),
   selected: z.boolean().optional().describe('Whether this surface is currently selected for active ingress or sync.'),
-  ['cached-items']: z.number().optional().describe('Approximate cached item count for this surface.'),
+  ['cached-items']: z.number().optional().describe('Approximate server-local cached item count for this surface on the provider execution home.'),
   pollers: z.array(providerPollerStatus).optional().describe('Pollers that serve this surface.'),
 })
 
 const providerIngressStatus = z.object({
   provider: z.string().describe('Provider key.'),
-  status: z.string().describe('Overall ingress or cache status.'),
-  summary: z.string().describe('Overall ingress or cache summary.'),
+  status: z.string().describe('Overall execution-home ingress/cache status.'),
+  summary: z.string().describe('Overall execution-home ingress/cache summary.'),
   surfaces: z.array(providerSurfaceStatus).optional().describe('Selected or known provider surfaces.'),
   pollers: z.array(providerPollerStatus).describe('Known pollers across the provider or selected surfaces.'),
   ['last-refreshed-at']: isoDateTime.optional().describe('Most recent provider refresh completion time when known.'),
@@ -374,8 +375,8 @@ const queueStatus = z.object({
 
 const pathSummary = z.object({
   state: path.describe('Origin state directory.'),
-  workspace: path.describe('Managed workspace root that contains the synced note vault plus local workspace artifacts.'),
-  vault: path.describe('Synced note vault path. In v1 this is the same path as the managed workspace root.'),
+  workspace: path.optional().describe('Managed workspace root on filesystem-bearing peers. Non-filesystem peers may omit this.'),
+  vault: path.optional().describe('Synced note-vault path on filesystem-bearing peers. In v1 this is the same path as the managed workspace root there; non-filesystem peers may omit it.'),
   sqlite: path.describe('SQLite file path.'),
   blobs: path.optional().describe('Blob/cache root when present.'),
 })
@@ -402,13 +403,13 @@ const chatOutboxItem = z.object({
 })
 
 const memoryFile = z.object({
-  path: path.describe('Path to `Origin/Memory.md` inside the synced vault.'),
+  path: z.string().describe('Logical managed note path for `Origin/Memory.md`. On filesystem-bearing peers this also materializes as a vault path; on non-filesystem peers it remains the reserved logical path `Origin/Memory.md`.'),
   content: markdown.describe('Current memory markdown content.'),
-  ['linked-artifacts']: z.array(path).optional().describe('Linked supporting artifacts.'),
+  ['linked-artifacts']: z.array(z.string()).optional().describe('Linked supporting artifact locators. Managed notes use logical workspace-relative paths; local-only artifacts use filesystem paths only on peers that host them.'),
 })
 
 const memoryArtifact = z.object({
-  path: path.describe('Managed workspace path for the artifact. Non-note artifacts remain local workspace artifacts by default unless explicitly imported into replicated state.'),
+  path: z.string().describe('Artifact locator. Replicated note artifacts use logical managed paths; local-only artifacts use filesystem paths on the hosting filesystem-bearing peer.'),
   kind: z.string().describe('Artifact kind.'),
   summary: z.string().describe('Artifact purpose summary.'),
   ['replicated-state']: z
@@ -549,51 +550,84 @@ const fileSearchResult = z.object({
 
 const googleCalendarExternalLink = z.object({
   provider: z.literal('google-calendar').describe('Provider name.'),
-  ref: z.string().describe('Canonical provider ref, typically `<calendar-id>/<event-id>` when the remote event exists.'),
-  ['sync-mode']: z.enum(['import', 'mirror', 'detached']).describe('Local Google Calendar linkage mode.'),
+  ref: z.string().describe('Canonical provider ref, typically `<calendar-id>/<event-id>` when the remote event exists. Detached links may retain the last-known ref for audit and explicit repair only.'),
+  ['sync-mode']: z.enum(['import', 'mirror', 'detached']).describe('Requested steady-state Google bridge policy for this local link.'),
   ['lifecycle-status']: z
-    .enum(['linked', 'detached'])
-    .describe('Lifecycle of the local link. `detached` means the local object is preserved and the remote Google event is left untouched.'),
+    .enum(['pending', 'linked', 'detached'])
+    .describe('Application state of the local bridge link. `pending` means the requested attach, detach, or re-bind has been recorded in replicated state but has not yet been applied by the provider execution home. `detached` means the local object is preserved and the remote Google event is left untouched; any retained provider ref is historical only and must not be treated as active linkage during automatic reconcile.'),
   ['calendar-id']: z.string().describe('Google calendar id for the linked or previously linked surface.'),
   ['google-event-id']: z.string().optional().describe('Bound Google event id when one exists.'),
-  ['last-pulled-at']: isoDateTime.optional().describe('Most recent successful import time.'),
-  ['last-pushed-at']: isoDateTime.optional().describe('Most recent successful export time.'),
+  ['last-pulled-at']: isoDateTime.optional().describe('Most recent successful provider-to-Origin import time. Not updated when a request is only pending.'),
+  ['last-pushed-at']: isoDateTime.optional().describe('Most recent successful Origin-to-provider export time. Not updated when a request is only pending.'),
   ['last-external-hash']: z.string().optional().describe('Last observed Google-side content hash when tracked.'),
 })
 
 const googleTasksExternalLink = z.object({
   provider: z.literal('google-tasks').describe('Provider name.'),
-  ref: z.string().describe('Canonical provider ref, typically `<task-list-id>/<google-task-id>` when the remote task exists.'),
-  ['sync-mode']: z.enum(['import', 'mirror', 'detached']).describe('Local Google Tasks linkage mode.'),
+  ref: z.string().describe('Canonical provider ref, typically `<task-list-id>/<google-task-id>` when the remote task exists. Detached links may retain the last-known ref for audit and explicit repair only.'),
+  ['sync-mode']: z.enum(['import', 'mirror', 'detached']).describe('Requested steady-state Google bridge policy for this local link.'),
   ['lifecycle-status']: z
-    .enum(['linked', 'detached'])
-    .describe('Lifecycle of the local link. `detached` means the local object is preserved and the remote Google task is left untouched.'),
+    .enum(['pending', 'linked', 'detached'])
+    .describe('Application state of the local bridge link. `pending` means the requested attach, detach, or re-bind has been recorded in replicated state but has not yet been applied by the provider execution home. `detached` means the local object is preserved and the remote Google task is left untouched; any retained provider ref is historical only and must not be treated as active linkage during automatic reconcile.'),
   ['task-list-id']: z.string().describe('Google task list id for the linked or previously linked surface.'),
   ['google-task-id']: z.string().optional().describe('Bound Google task id when one exists.'),
-  ['last-pulled-at']: isoDateTime.optional().describe('Most recent successful import time.'),
-  ['last-pushed-at']: isoDateTime.optional().describe('Most recent successful export time.'),
+  ['last-pulled-at']: isoDateTime.optional().describe('Most recent successful provider-to-Origin import time. Not updated when a request is only pending.'),
+  ['last-pushed-at']: isoDateTime.optional().describe('Most recent successful Origin-to-provider export time. Not updated when a request is only pending.'),
   ['last-external-hash']: z.string().optional().describe('Last observed Google-side content hash when tracked.'),
 })
 
 const externalLink = z.discriminatedUnion('provider', [googleCalendarExternalLink, googleTasksExternalLink])
 
+const projectStatus = z.enum(['active', 'paused', 'completed', 'archived'])
+const taskStatus = z.enum(['backlog', 'todo', 'in_progress', 'done', 'canceled'])
+const taskPriority = z.enum(['none', 'low', 'medium', 'high', 'urgent'])
+const calendarItemStatus = z.enum(['confirmed', 'tentative', 'canceled'])
+const calendarItemKind = z.enum(['event', 'time_block'])
+const emailTriageState = z.enum(['new', 'needs_reply', 'waiting_on_them', 'waiting_on_us', 'done', 'archived'])
+const automationStatus = z.enum(['active', 'paused', 'disabled', 'archived'])
+const automationRunStatus = z.enum(['queued', 'running', 'succeeded', 'failed', 'canceled', 'skipped'])
+const telegramConnectionStatus = z.enum(['unconfigured', 'valid', 'invalid', 'revoked'])
+const telegramPrivacyMode = z.enum(['enabled', 'disabled'])
+const telegramChatKind = z.enum(['direct_message', 'group', 'supergroup', 'channel'])
+const telegramGroupOperabilityStatus = z.enum(['active', 'degraded_privacy', 'degraded_membership', 'degraded_permissions'])
+const telegramSummaryJobStatus = z.enum(['queued', 'running', 'completed', 'failed', 'canceled'])
+
 const project = z.object({
   id: id('Project id.'),
   name: z.string().describe('Project name.'),
-  status: z.string().describe('Project status.'),
+  slug: z.string().optional().describe('Stable project slug when present.'),
+  status: projectStatus.describe('Project status.'),
   description: markdown.optional().describe('Project description.'),
+  color: z.string().optional().describe('Project color token when present.'),
+  ['label-ids']: z.array(z.string()).optional().describe('Linked label ids.'),
+  source: z.enum(['manual', 'agent', 'imported', 'synced']).optional().describe('Project source kind.'),
+  ['created-at']: isoDateTime.optional().describe('Project creation time.'),
+  ['updated-at']: isoDateTime.optional().describe('Most recent project update time.'),
+  ['created-by-actor']: z.string().optional().describe('Actor that created the project.'),
+  ['updated-by-actor']: z.string().optional().describe('Actor that last updated the project.'),
+  ['archived-at']: isoDateTime.optional().describe('When the project was archived, if applicable.'),
+  ['deleted-at']: isoDateTime.optional().describe('When the project was tombstoned, if applicable.'),
 })
 
 const label = z.object({
   id: id('Label id.'),
   name: z.string().describe('Label name.'),
+  slug: z.string().optional().describe('Stable label slug when present.'),
   color: z.string().optional().describe('Optional color token.'),
+  ['description-md']: markdown.optional().describe('Label description markdown.'),
+  ['created-at']: isoDateTime.optional().describe('Label creation time.'),
+  ['updated-at']: isoDateTime.optional().describe('Most recent label update time.'),
+  ['created-by-actor']: z.string().optional().describe('Actor that created the label.'),
+  ['updated-by-actor']: z.string().optional().describe('Actor that last updated the label.'),
+  ['archived-at']: isoDateTime.optional().describe('When the label was archived, if applicable.'),
+  ['deleted-at']: isoDateTime.optional().describe('When the label was tombstoned, if applicable.'),
 })
 
 const recurrence = z.object({
   rule: z.string().describe('Canonical RRULE-style cadence string for the series. Series bounds live in `start-date` and `end-date`, not inside the rule itself.'),
   ['start-date']: isoDate.describe('Canonical local series start date. For timed series, the root task due fields or root calendar-item start/end fields still carry the time-of-day.'),
   ['end-date']: isoDate.optional().describe('Optional finite series end date.'),
+  timezone: z.string().optional().describe('IANA series timezone. Required for timed task series and timed calendar series. RRULE expansion, occurrence keys, local date bounds, and DST handling use this timezone.'),
   ['series-id']: z.string().describe('Stable recurrence series id shared by every occurrence in the series.'),
   ['occurrence-key']: z
     .string()
@@ -603,7 +637,7 @@ const recurrence = z.object({
     .describe('Zero-based projection index for this occurrence in the current series expansion. The series root is the occurrence whose `occurrence-index` is `0`, but bridge reconciliation must not rely on this index alone.'),
   ['materialization-kind']: z
     .enum(['root', 'exception', 'derived'])
-    .describe('How this occurrence exists within the series. There is no separate hidden series header in v1: `root` is both the canonical series definition and the first scheduled occurrence. `exception` and `root` are canonical records; `derived` is a generated/materialized occurrence projected from them.'),
+    .describe('How this occurrence exists within the series. There is no separate hidden series header in v1: `root` is both the canonical series definition and the first scheduled occurrence. `exception` and `root` are canonical records; `derived` is a projected occurrence reconstructed from them.'),
   ['previous-occurrence-id']: z.string().optional().describe('Previous occurrence id when this is not the series root.'),
   ['next-occurrence-id']: z.string().optional().describe('Next occurrence id when it already exists.'),
   ['provider-ref']: z
@@ -623,13 +657,15 @@ const recurrence = z.object({
 const task = z.object({
   id: id('Task id.'),
   title: z.string().describe('Task title.'),
-  status: z.string().describe('Task status.'),
-  priority: z.string().optional().describe('Task priority.'),
+  status: taskStatus.describe('Task status.'),
+  priority: taskPriority.optional().describe('Task priority.'),
+  ['project-id']: z.string().optional().describe('Linked project id when present.'),
   project: project.optional().describe('Linked project when present.'),
+  ['label-ids']: z.array(z.string()).optional().describe('Linked label ids.'),
   labels: z.array(label).optional().describe('Linked labels.'),
   ['description-md']: markdown.optional().describe('Task description markdown.'),
   ['note-id']: z.string().optional().describe('Linked note id when present.'),
-  ['calendar-item-ids']: z.array(z.string()).optional().describe('Linked calendar item ids.'),
+  ['calendar-item-ids']: z.array(z.string()).optional().describe('Canonical mirrored calendar-item link ids for this task. This set must match the calendar items whose `task-ids` contain this task id.'),
   ['due-kind']: z
     .enum(['date', 'datetime'])
     .optional()
@@ -637,17 +673,29 @@ const task = z.object({
   ['due-from']: z.string().optional().describe('Due window start, date or datetime depending on due-kind.'),
   ['due-at']: z.string().optional().describe('Due window end, date or datetime depending on due-kind.'),
   ['due-timezone']: z.string().optional().describe('IANA timezone for datetime due windows.'),
+  ['blocked-by-task-ids']: z.array(z.string()).optional().describe('Blocking task ids.'),
   ['blocked-by']: z.array(id('Blocking task id.')).optional().describe('Blocking task ids.'),
   recurrence: recurrence.optional().describe('Recurrence definition when present. The series root plus explicit exceptions are canonical; `materialization-kind=derived` is projected from them.'),
+  ['completed-at']: isoDateTime.optional().describe('When the task was completed, if applicable.'),
+  ['canceled-at']: isoDateTime.optional().describe('When the task was canceled, if applicable.'),
+  source: z.enum(['manual', 'agent', 'imported', 'synced']).optional().describe('Task source kind.'),
   ['external-links']: z.array(externalLink).optional().describe('Provider links.'),
+  ['created-at']: isoDateTime.optional().describe('Task creation time.'),
+  ['updated-at']: isoDateTime.optional().describe('Most recent task update time.'),
+  ['created-by-actor']: z.string().optional().describe('Actor that created the task.'),
+  ['updated-by-actor']: z.string().optional().describe('Actor that last updated the task.'),
+  ['archived-at']: isoDateTime.optional().describe('When the task was archived, if applicable.'),
+  ['deleted-at']: isoDateTime.optional().describe('When the task was tombstoned, if applicable.'),
 })
 
 const calendarItem = z.object({
   id: id('Calendar item id.'),
   title: z.string().describe('Calendar item title.'),
-  status: z.string().describe('Calendar item status.'),
-  kind: z.string().optional().describe('Calendar item kind.'),
+  status: calendarItemStatus.describe('Calendar item status.'),
+  kind: calendarItemKind.optional().describe('Calendar item kind.'),
+  ['project-id']: z.string().optional().describe('Linked project id when present.'),
   project: project.optional().describe('Linked project when present.'),
+  ['label-ids']: z.array(z.string()).optional().describe('Linked label ids.'),
   labels: z.array(label).optional().describe('Linked labels.'),
   ['description-md']: markdown.optional().describe('Calendar item description markdown.'),
   location: z.string().optional().describe('Location text when present.'),
@@ -658,8 +706,15 @@ const calendarItem = z.object({
   timezone: z.string().optional().describe('IANA timezone for timed or all-day events.'),
   ['all-day']: z.boolean().optional().describe('Whether the item is all-day.'),
   recurrence: recurrence.optional().describe('Recurrence definition when present. The series root plus explicit exceptions are canonical; `materialization-kind=derived` is projected from them.'),
-  ['task-ids']: z.array(z.string()).optional().describe('Linked task ids when present.'),
+  ['task-ids']: z.array(z.string()).optional().describe('Canonical mirrored task link ids for this calendar item. This set must match the tasks whose `calendar-item-ids` contain this calendar item id.'),
+  source: z.enum(['manual', 'agent', 'imported', 'synced']).optional().describe('Calendar-item source kind.'),
   ['external-links']: z.array(externalLink).optional().describe('Provider links.'),
+  ['created-at']: isoDateTime.optional().describe('Calendar-item creation time.'),
+  ['updated-at']: isoDateTime.optional().describe('Most recent calendar-item update time.'),
+  ['created-by-actor']: z.string().optional().describe('Actor that created the calendar item.'),
+  ['updated-by-actor']: z.string().optional().describe('Actor that last updated the calendar item.'),
+  ['archived-at']: isoDateTime.optional().describe('When the calendar item was archived, if applicable.'),
+  ['deleted-at']: isoDateTime.optional().describe('When the calendar item was tombstoned, if applicable.'),
 })
 
 const googleCalendarSurfaceStatus = z.object({
@@ -764,8 +819,8 @@ const emailAccount = z.object({
   address: z.string().describe('Connected mailbox address.'),
   status: z.string().describe('Connection status.'),
   summary: z.string().describe('Account summary.'),
-  ['last-sync-at']: isoDateTime.optional().describe('Last sync timestamp.'),
-  ['sync-state']: z.string().optional().describe('Current provider sync state.'),
+  ['last-sync-at']: isoDateTime.optional().describe('Read-only projection of the mailbox poller last-successful sync time on the provider execution home.'),
+  ['sync-state']: z.string().optional().describe('Read-only projection of mailbox refresh state owned by provider ingress on the provider execution home.'),
   labels: z.array(z.string()).optional().describe('Known provider labels.'),
   aliases: z.array(z.string()).optional().describe('Known send-as aliases.'),
 })
@@ -803,7 +858,7 @@ const emailMessage = z.object({
 
 const emailTriageRecord = z.object({
   ['thread-id']: id('Thread id.'),
-  state: z.string().describe('Origin triage state.'),
+  state: emailTriageState.describe('Origin triage state.'),
   ['follow-up-at']: isoDateTime.optional().describe('Scheduled follow-up time.'),
   ['linked-task-id']: z.string().optional().describe('Linked task id.'),
   ['notes-md']: markdown.optional().describe('Internal triage note stored on the canonical email triage record.'),
@@ -815,7 +870,8 @@ const emailThread = z.object({
   status: z.string().describe('Provider thread status summary.'),
   ['archived-at']: isoDateTime.optional().describe('Provider mailbox archive timestamp when the thread is archived remotely.'),
   messages: z.array(emailMessage).optional().describe('Messages when expanded.'),
-  triage: emailTriageRecord.optional().describe('Origin triage metadata.'),
+  ['triage-state']: emailTriageState.optional().describe('Projected Origin triage state from the canonical triage record.'),
+  ['follow-up-at']: isoDateTime.optional().describe('Projected follow-up timestamp from the canonical triage record.'),
   ['last-message-at']: isoDateTime.optional().describe('Most recent message timestamp.'),
   labels: z.array(z.string()).optional().describe('Provider labels applied to the thread.'),
   freshness: z.string().optional().describe('Cache freshness summary.'),
@@ -873,14 +929,14 @@ const githubInstallationGrant = z.object({
   ['account-login']: z.string().describe('Owning user or organization login.'),
   ['account-type']: z.string().describe('Owning account type.'),
   ['repository-selection']: z.string().describe('Repository selection shape reported by GitHub for this installation.'),
-  ['selected-repositories']: z.array(z.string()).optional().describe('Optional repository owner/name filters Origin selected within this installation.'),
-  ['accessible-repositories']: z.array(z.string()).optional().describe('Accessible repositories when Origin has materialized the selected working set.'),
-  permissions: z.record(z.string(), z.string()).optional().describe('Effective installation permissions when known.'),
+  ['selected-repositories']: z.array(z.string()).optional().describe('Optional repository owner/name narrowing selected by Origin within this installation. This is replicated overlay/config state.'),
+  ['accessible-repositories']: z.array(z.string()).optional().describe('Derived actionable repository coverage for the selected grant. This is a provider-derived read-model projection, not the operator-authored selection itself.'),
+  permissions: z.record(z.string(), z.string()).optional().describe('Effective installation permissions when known. This is provider-derived read-model state.'),
   selected: z.boolean().describe('Whether Origin currently relies on this grant for the working set.'),
-  status: z.string().describe('Grant status such as active, out_of_scope, revoked, or auth_failed.'),
-  ['last-refreshed-at']: isoDateTime.optional().describe('Most recent discovery or refresh time for this grant record.'),
-  ['last-validated-at']: isoDateTime.optional().describe('Most recent validation time.'),
-  ['selection-updated-at']: isoDateTime.optional().describe('When the current selected or narrowed scope was last changed.'),
+  status: z.string().describe('Provider-derived grant status such as active, out_of_scope, revoked, or auth_failed.'),
+  ['last-refreshed-at']: isoDateTime.optional().describe('Most recent discovery or refresh time for this provider-derived grant snapshot.'),
+  ['last-validated-at']: isoDateTime.optional().describe('Most recent provider-derived validation time.'),
+  ['selection-updated-at']: isoDateTime.optional().describe('When the current selected or narrowed scope was last changed in replicated overlay/config state.'),
   ['revoked-at']: isoDateTime.optional().describe('When GitHub reported the installation grant as revoked, if known.'),
 })
 
@@ -938,9 +994,10 @@ const githubPullRequestContext = z.object({
 })
 
 const telegramConnection = z.object({
-  status: z.string().describe('Connection status.'),
+  status: telegramConnectionStatus.describe('Connection status.'),
   ['bot-username']: z.string().optional().describe('Connected bot username.'),
-  ['privacy-mode']: z.string().optional().describe('Observed privacy mode state used for validation. Tracked-group workflows require `disabled` in v1; `enabled` is a recovery/degraded state only.'),
+  ['expected-privacy-mode']: z.union([telegramPrivacyMode, z.literal('unknown')]).optional().describe('Operator-expected Telegram privacy mode used for validation. Tracked-group workflows require expected `disabled` in v1.'),
+  ['observed-privacy-mode']: z.union([telegramPrivacyMode, z.literal('unknown')]).optional().describe('Last observed Telegram privacy mode from validation. A valid token may still be recovery-only for tracked groups when this is `enabled` or unknown.'),
   ['default-mode']: z.enum(['observe', 'participate']).optional().describe('Default participation mode seeded onto newly enabled groups.'),
   ['default-summary-enabled']: z.boolean().optional().describe('Whether summaries are enabled by default for newly registered groups.'),
   ['default-summary-lookback']: duration.optional().describe('Default summary lookback used only to seed group policy when a group has no explicit group lookback.'),
@@ -950,7 +1007,7 @@ const telegramConnection = z.object({
 const telegramChat = z.object({
   id: id('Telegram chat id.'),
   title: z.string().describe('Chat title.'),
-  kind: z.string().describe('Chat kind.'),
+  kind: telegramChatKind.describe('Chat kind.'),
   summary: z.string().describe('Chat summary.'),
   ['is-registered']: z.boolean().optional().describe('Whether the chat is registered in Origin.'),
   ['message-cache-state']: z.string().optional().describe('Recent message cache state.'),
@@ -964,12 +1021,13 @@ const telegramSummaryPolicy = z.object({
 const telegramGroupPolicy = z.object({
   ['chat-id']: id('Telegram chat id.'),
   enabled: z.boolean().describe('Whether the group is enabled in Origin.'),
+  ['operability-status']: telegramGroupOperabilityStatus.optional().describe('Derived tracked-group readiness such as active or degraded because privacy, membership, or permissions are insufficient.'),
   ['participation-mode']: z
     .enum(['observe', 'participate'])
     .optional()
     .describe('Bot participation mode when the group is enabled.'),
   ['summary-policy']: telegramSummaryPolicy.optional().describe('Per-group canonical summary policy.'),
-  ['mention-tracking-enabled']: z.boolean().optional().describe('Whether mention tracking is enabled.'),
+  ['mention-tracking-enabled']: z.boolean().optional().describe('Whether derived mention signals and mention-triggered workflows are enabled. This does not change baseline message visibility.'),
   ['message-cache-enabled']: z.boolean().optional().describe('Whether best-effort recent message caching above the mandatory offline floor is enabled.'),
   summary: z.string().optional().describe('Group policy summary.'),
 })
@@ -981,11 +1039,23 @@ const telegramMessage = z.object({
   at: isoDateTime.describe('Telegram message time.'),
 })
 
+const telegramMention = z.object({
+  id: id('Telegram mention signal id.'),
+  ['activity-event-id']: id('Underlying `telegram.message.mentioned` activity-event id.'),
+  ['chat-id']: id('Telegram chat id.'),
+  ['message-id']: id('Telegram message id.'),
+  status: z.enum(['unread', 'acknowledged']).describe('Mention-signal status.'),
+  at: isoDateTime.describe('When the mention occurred.'),
+  ['acknowledged-at']: isoDateTime.optional().describe('When the mention signal was acknowledged.'),
+  ['acknowledged-by-actor']: z.string().optional().describe('Actor that acknowledged the mention signal.'),
+  summary: z.string().describe('Mention summary.'),
+})
+
 const telegramSummaryJob = z.object({
   id: id('Summary job id.'),
   ['chat-id']: id('Telegram chat id.'),
   ['trigger-kind']: z.enum(['manual', 'scheduled', 'mention', 'agent_decision']).describe('Why the summary job exists. `scheduled` comes from Automation schedule ownership, `mention` comes from mention-triggered automation or agent rules, and `agent_decision` is an unscheduled agent-initiated run.'),
-  status: z.string().describe('Summary job status.'),
+  status: telegramSummaryJobStatus.describe('Summary job status.'),
   summary: z.string().describe('Generated or queued summary.'),
   ['output-message-id']: z.string().optional().describe('Telegram message id of the posted summary when one exists.'),
   ['window-start']: isoDateTime.optional().describe('Evaluated lower bound of the summarized message window when known.'),
@@ -995,6 +1065,15 @@ const telegramSummaryJob = z.object({
   ['failed-at']: isoDateTime.optional().describe('When the summary job failed.'),
   ['last-error']: z.string().optional().describe('Most recent execution error when the summary job failed.'),
   at: isoDateTime.optional().describe('Most relevant summary-job timestamp for compact displays.'),
+})
+
+const telegramSummaryCandidate = z.object({
+  ['chat-id']: id('Telegram chat id.'),
+  title: z.string().optional().describe('Chat title when known.'),
+  summary: z.string().describe('Why this group is a summary candidate right now.'),
+  ['suggested-lookback']: duration.optional().describe('Lookback window the candidate summary would likely use.'),
+  ['automation-ids']: z.array(z.string()).optional().describe('Active summary automation ids that currently target this group.'),
+  ['last-summary-at']: isoDateTime.optional().describe('Most recent completed summary time when known.'),
 })
 
 const telegramChatContext = z.object({
@@ -1012,6 +1091,8 @@ const automationEventFilter = z.object({
   ['review-decisions']: z.array(z.string()).optional().describe('Allowed review decisions when the event carries review metadata. Matching uses non-empty intersection.'),
   ['summary-trigger-kinds']: z.array(z.string()).optional().describe('Allowed summary trigger kinds on `telegram.summary.generated` or `telegram.summary.posted` events when they carry summary metadata. Matching uses non-empty intersection.'),
   ['author-roles']: z.array(z.string()).optional().describe('Allowed author roles when the event carries author-role metadata. Matching uses non-empty intersection.'),
+  ['changed-fields']: z.array(z.string()).optional().describe('Allowed changed-field keys when the event carries normalized `attributes.changedFields[]` metadata. Matching uses non-empty intersection.'),
+  ['sync-direction']: z.array(z.enum(['from_provider', 'to_provider'])).optional().describe('Allowed sync directions when the event carries normalized `attributes.syncDirection`.'),
   ['is-mention']: z.boolean().optional().describe('Whether the triggering event must carry the normalized mention boolean.'),
 }).strict()
 
@@ -1069,8 +1150,8 @@ const automationAction = z.object({
 })
 
 const automationRunPolicy = z.object({
-  ['allow-overlap']: z.boolean().default(false).describe('Whether runs of the same automation may overlap. Defaults to false.'),
-  ['catch-up']: z.enum(['skip', 'one', 'all']).default('skip').describe('How missed scheduled runs are handled. Defaults to `skip`.'),
+  ['allow-overlap']: z.boolean().default(false).describe('Whether more than one run of the same automation may be `running` at the same time. When false, later distinct triggers may still queue runs, but execution must stay serial. Defaults to false.'),
+  ['catch-up']: z.enum(['skip', 'one', 'all']).default('skip').describe('How past-due schedule boundaries are materialized after the execution home was unavailable while the automation remained active. `skip` creates no retroactive run, `one` creates one run for the latest eligible missed boundary, and `all` creates one run per eligible missed boundary in order. Applies only to the schedule side of schedule/hybrid automations. Defaults to `skip`.'),
   ['continue-on-error']: z.boolean().default(false).describe('Whether later actions continue after an action failure. Defaults to false.'),
 })
 
@@ -1084,11 +1165,11 @@ const automation = z.object({
   name: z.string().describe('Canonical automation name.'),
   slug: z.string().optional().describe('Stable automation slug or machine key when available.'),
   ['description-md']: markdown.optional().describe('Canonical automation description markdown.'),
-  status: z.string().describe('Automation status.'),
+  status: automationStatus.describe('Automation status. `paused` suppresses automatic starts only, `disabled` suppresses all new starts, and `archived` is non-runnable/history-only.'),
   kind: z.enum(['scheduled', 'reactive', 'manual', 'hybrid']).describe('Derived automation kind based on the trigger shape.'),
   summary: z.string().optional().describe('Compact derived automation summary. This is read-model text, not a second canonical description field.'),
-  trigger: automationTrigger.optional().describe('Typed trigger definition.'),
-  actions: z.array(automationAction).optional().describe('Ordered action definitions.'),
+  trigger: automationTrigger.describe('Typed trigger definition.'),
+  actions: z.array(automationAction).describe('Ordered action definitions.'),
   ['linked-task-ids']: z.array(z.string()).optional().describe('Linked task ids.'),
   ['linked-calendar-item-ids']: z.array(z.string()).optional().describe('Linked calendar item ids.'),
   ['linked-project-ids']: z.array(z.string()).optional().describe('Linked project ids.'),
@@ -1099,20 +1180,34 @@ const automation = z.object({
   source: z.string().optional().describe('Where the automation definition came from when known.'),
   ['last-run-at']: isoDateTime.optional().describe('Most recent run start or completion time.'),
   ['next-run-at']: isoDateTime.optional().describe('Next eligible run time when scheduled.'),
-  ['last-run-status']: z.string().optional().describe('Most recent run status when known.'),
+  ['last-run-status']: automationRunStatus.optional().describe('Most recent run status when known.'),
+  ['created-at']: isoDateTime.describe('When the canonical automation record was created.'),
+  ['updated-at']: isoDateTime.describe('Most recent canonical automation update time.'),
+  ['created-by-actor']: z.string().describe('Actor that created the automation.'),
+  ['updated-by-actor']: z.string().describe('Actor that last updated the automation.'),
+  ['archived-at']: isoDateTime.optional().describe('When the automation was archived, if applicable.'),
+  ['deleted-at']: isoDateTime.optional().describe('When the automation was tombstoned, if applicable.'),
 })
 
 const automationRun = z.object({
   id: id('Automation run id.'),
   ['automation-id']: id('Automation id.'),
-  status: z.string().describe('Run status.'),
+  status: automationRunStatus.describe('Run status.'),
   summary: z.string().describe('Run summary.'),
   ['triggered-at']: isoDateTime.optional().describe('Logical trigger time for the run.'),
   ['scheduled-at']: isoDateTime.optional().describe('Scheduled trigger boundary when this is a scheduled run.'),
   ['activity-event-id']: z.string().optional().describe('Triggering activity-event id when this is a reactive run.'),
   ['trigger-reason']: z.string().optional().describe('Why the run started, such as schedule, matching event, or manual request.'),
+  actor: z.string().optional().describe('Actor that caused the run to exist, such as a user, automation scheduler, or provider-sync actor.'),
+  ['input-summary-md']: markdown.optional().describe('Compact markdown summary of the evaluated inputs for the run.'),
+  ['output-summary-md']: markdown.optional().describe('Compact markdown summary of the run output when one exists.'),
+  ['error-md']: markdown.optional().describe('Markdown error summary when the run fails.'),
+  ['retry-count']: z.number().int().optional().describe('Number of prior retry attempts on this logical run.'),
+  ['attempt-number']: z.number().int().optional().describe('Current attempt number for this logical run, starting at 1.'),
   ['started-at']: isoDateTime.optional().describe('Run start time.'),
-  ['ended-at']: isoDateTime.optional().describe('Run end time.'),
+  ['finished-at']: isoDateTime.optional().describe('Run end time.'),
+  ['created-at']: isoDateTime.optional().describe('When the logical run record was created.'),
+  ['updated-at']: isoDateTime.optional().describe('Most recent update time for the logical run record.'),
   ['trace-id']: z.string().optional().describe('Correlated trace id.'),
 })
 
@@ -1182,7 +1277,7 @@ const outboxItem = z.object({
   kind: z.string().describe('Outbox item kind.'),
   status: z.string().describe('Outbox item status.'),
   provider: z.string().optional().describe('Owning provider or subsystem when applicable.'),
-  ['origin-intent-id']: z.string().optional().describe('Stable replicated intent id or other origin record id that produced this logical outbox item.'),
+  ['origin-intent-id']: z.string().optional().describe('Stable replicated intent id that produced this logical outbox item.'),
   ['target-ref']: z.string().optional().describe('Primary provider or entity target for the outbox item when known.'),
   ['dedupe-key']: z.string().optional().describe('Stable dedupe key reused across retries for the same logical action.'),
   ['queued-at']: isoDateTime.optional().describe('When the outbox item was queued.'),
@@ -1193,20 +1288,22 @@ const outboxItem = z.object({
   summary: z.string().describe('Outbox item summary.'),
 })
 
-const externalActionIntent = z.object({
+const externalActionIntentPayload = z
+  .record(z.string(), z.unknown())
+  .optional()
+  .describe('Action-specific typed options from the owning domain contract. The shared sync-intent inspect surface preserves this as structured provider-specific options, but exhaustive key validation is owned by the domain command that authored the intent and by the execution-home materializer. Provider raw request blobs, cursor tokens, retry metadata, cache hints, and outbox state are forbidden.')
+
+const providerWriteIntentBase = z.object({
   id: id('Intent id.'),
-  kind: z.string().describe('Intent family such as provider_action or planning_bridge_action.'),
-  provider: z.string().optional().describe('Target provider or subsystem key when this intent maps to provider or internal job work.'),
-  scope: z.string().describe('Canonical target scope for materialization and dedupe.'),
-  ['target-ref']: z.string().optional().describe('Primary provider or entity target for the logical action when one exists.'),
-  action: z.string().describe('Requested logical action such as attach, detach, pull, push, reconcile, send, reply, or comment.'),
+  kind: z.literal('provider_write').describe('Closed v1 intent kind for provider-backed writes.'),
+  ['target-ref']: z.string().optional().describe('Primary provider or Origin entity target for the logical action when one exists.'),
   status: z.enum(['pending', 'materialized', 'succeeded', 'failed', 'canceled']).describe('Intent lifecycle status.'),
-  payload: z.record(z.string(), z.unknown()).optional().describe('Structured payload for the logical action.'),
+  payload: externalActionIntentPayload,
   ['created-by-actor']: z.string().describe('Actor that authored the intent.'),
   ['updated-by-actor']: z.string().optional().describe('Actor that last updated the intent state.'),
   ['created-at']: isoDateTime.describe('Intent creation time.'),
   ['updated-at']: isoDateTime.optional().describe('Most recent intent update time.'),
-  ['materialized-at']: isoDateTime.optional().describe('When the provider execution home materialized this intent into provider or job outbox work.'),
+  ['materialized-at']: isoDateTime.optional().describe('When the provider execution home materialized this intent into provider outbox work.'),
   ['succeeded-at']: isoDateTime.optional().describe('When the logical intent reached a succeeded terminal state.'),
   ['failed-at']: isoDateTime.optional().describe('When the logical intent reached a failed terminal state.'),
   ['canceled-at']: isoDateTime.optional().describe('When the logical intent was canceled.'),
@@ -1214,6 +1311,184 @@ const externalActionIntent = z.object({
   ['last-error']: z.string().optional().describe('Most recent materialization or execution error when the intent is failed.'),
   summary: z.string().describe('Intent summary.'),
 })
+
+const emailProviderWriteIntent = providerWriteIntentBase.extend({
+  provider: z.literal('email').describe('Target provider key.'),
+  scope: z
+    .object({
+      ['account-id']: z.string().describe('Email account id that authorizes the provider write.'),
+    })
+    .strict()
+    .describe('Structured email-surface object for the provider write.'),
+  action: z
+    .enum([
+      'send',
+      'reply',
+      'reply_all',
+      'forward',
+      'archive',
+      'unarchive',
+      'mark_read',
+      'mark_unread',
+      'star',
+      'unstar',
+      'spam',
+      'unspam',
+      'trash',
+      'restore',
+      'label_add',
+      'label_remove',
+    ])
+    .describe('Email logical action enum.'),
+})
+
+const githubProviderWriteIntent = providerWriteIntentBase.extend({
+  provider: z.literal('github').describe('Target provider key.'),
+  scope: z
+    .object({
+      repo: z.string().describe('GitHub `owner/name` repository ref that authorizes the provider write.'),
+    })
+    .strict()
+    .describe('Structured GitHub-surface object for the provider write.'),
+  action: z
+    .enum([
+      'star',
+      'unstar',
+      'issue_create',
+      'issue_update',
+      'issue_comment',
+      'issue_label',
+      'issue_assignee',
+      'issue_close',
+      'issue_reopen',
+      'issue_lock',
+      'issue_unlock',
+      'pr_open',
+      'pr_update',
+      'pr_comment',
+      'pr_close',
+      'pr_reopen',
+      'pr_merge',
+      'pr_request_reviewer',
+      'pr_unrequest_reviewer',
+      'pr_ready',
+      'pr_draft',
+      'review_submit',
+      'review_thread_reply',
+    ])
+    .describe('GitHub logical action enum.'),
+})
+
+const telegramProviderWriteIntent = providerWriteIntentBase.extend({
+  provider: z.literal('telegram').describe('Target provider key.'),
+  scope: z
+    .object({
+      ['chat-id']: z.string().describe('Telegram chat id that authorizes the provider write.'),
+    })
+    .strict()
+    .describe('Structured Telegram-surface object for the provider write.'),
+  action: z.enum(['send', 'reply']).describe('Telegram logical action enum.'),
+})
+
+const providerWriteIntent = z.union([emailProviderWriteIntent, githubProviderWriteIntent, telegramProviderWriteIntent])
+
+const planningBridgeIntentBase = z.object({
+  id: id('Intent id.'),
+  kind: z.literal('planning_bridge_action').describe('Closed v1 intent kind for Google bridge actions.'),
+  ['target-ref']: z.string().optional().describe('Primary Origin planning entity or bridge surface target when one exists.'),
+  action: z.enum(['pull', 'push', 'reconcile', 'attach', 'detach']).describe('Planning-bridge logical action enum.'),
+  status: z.enum(['pending', 'materialized', 'succeeded', 'failed', 'canceled']).describe('Intent lifecycle status.'),
+  payload: externalActionIntentPayload,
+  ['created-by-actor']: z.string().describe('Actor that authored the intent.'),
+  ['updated-by-actor']: z.string().optional().describe('Actor that last updated the intent state.'),
+  ['created-at']: isoDateTime.describe('Intent creation time.'),
+  ['updated-at']: isoDateTime.optional().describe('Most recent intent update time.'),
+  ['materialized-at']: isoDateTime.optional().describe('When the provider execution home materialized this intent into planning-bridge outbox work.'),
+  ['succeeded-at']: isoDateTime.optional().describe('When the logical intent reached a succeeded terminal state.'),
+  ['failed-at']: isoDateTime.optional().describe('When the logical intent reached a failed terminal state.'),
+  ['canceled-at']: isoDateTime.optional().describe('When the logical intent was canceled.'),
+  ['outbox-refs']: z.array(z.string()).optional().describe('Derived outbox records created from this intent.'),
+  ['last-error']: z.string().optional().describe('Most recent materialization or execution error when the intent is failed.'),
+  summary: z.string().describe('Intent summary.'),
+})
+
+const googleCalendarPlanningBridgeIntent = planningBridgeIntentBase.extend({
+  provider: z.literal('google-calendar').describe('Target provider key.'),
+  scope: z
+    .object({
+      ['calendar-id']: z.string().describe('Google calendar id that authorizes the planning bridge action.'),
+    })
+    .strict()
+    .describe('Structured Google Calendar bridge-surface object for the planning bridge action.'),
+})
+
+const googleTasksPlanningBridgeIntent = planningBridgeIntentBase.extend({
+  provider: z.literal('google-tasks').describe('Target provider key.'),
+  scope: z
+    .object({
+      ['task-list-id']: z.string().describe('Google task list id that authorizes the planning bridge action.'),
+    })
+    .strict()
+    .describe('Structured Google Tasks bridge-surface object for the planning bridge action.'),
+})
+
+const planningBridgeIntent = z.union([googleCalendarPlanningBridgeIntent, googleTasksPlanningBridgeIntent])
+
+const externalActionIntent = z.union([
+  emailProviderWriteIntent,
+  githubProviderWriteIntent,
+  telegramProviderWriteIntent,
+  googleCalendarPlanningBridgeIntent,
+  googleTasksPlanningBridgeIntent,
+])
+
+const externalActionIntentProviderFilter = z.enum(['email', 'github', 'telegram', 'google-calendar', 'google-tasks'])
+const externalActionIntentKindFilter = z.enum(['provider_write', 'planning_bridge_action'])
+const externalActionIntentActionFilter = z.enum([
+  'send',
+  'reply',
+  'reply_all',
+  'forward',
+  'archive',
+  'unarchive',
+  'mark_read',
+  'mark_unread',
+  'star',
+  'unstar',
+  'spam',
+  'unspam',
+  'trash',
+  'restore',
+  'label_add',
+  'label_remove',
+  'issue_create',
+  'issue_update',
+  'issue_comment',
+  'issue_label',
+  'issue_assignee',
+  'issue_close',
+  'issue_reopen',
+  'issue_lock',
+  'issue_unlock',
+  'pr_open',
+  'pr_update',
+  'pr_comment',
+  'pr_close',
+  'pr_reopen',
+  'pr_merge',
+  'pr_request_reviewer',
+  'pr_unrequest_reviewer',
+  'pr_ready',
+  'pr_draft',
+  'review_submit',
+  'review_thread_reply',
+  'pull',
+  'push',
+  'reconcile',
+  'attach',
+  'detach',
+])
+const externalActionIntentStatusFilter = z.enum(['pending', 'materialized', 'succeeded', 'failed', 'canceled'])
 
 const setupVaultReconcile = z.object({
   id: id('Vault reconcile id.'),
@@ -1995,12 +2270,12 @@ const setup = Cli.create('setup', {
               output: actionResult,
             }),
           )
-          .command('configure', doc({ description: 'Persist initial Telegram onboarding configuration.', options: z.object({ ['privacy-mode']: z.enum(['enabled', 'disabled', 'unknown']).optional().describe('Observed or operator-expected privacy mode state used for validation. Tracked-group setup requires `disabled` in v1.'), ['group-ids']: z.array(z.string()).optional().describe('Initial Telegram groups to register.') }), output: actionResult })),
+          .command('configure', doc({ description: 'Persist initial Telegram onboarding configuration.', options: z.object({ ['expected-privacy-mode']: z.enum(['enabled', 'disabled', 'unknown']).optional().describe('Operator-expected privacy mode used for later validation. Tracked-group setup requires expected `disabled` in v1.'), ['group-ids']: z.array(z.string()).optional().describe('Initial Telegram groups to register. Only `group` and `supergroup` chats become tracked surfaces in v1.') }), output: actionResult })),
       ),
   )
   .command(
     Cli.create('vault', { description: 'Managed workspace and vault setup inputs.' })
-      .command('init', doc({ description: 'Set or validate the managed workspace root. In v1 the synced vault path is the same root. If the target path is non-empty and this is the first attach, Origin adopts existing markdown files there before any export, adopts an existing `Origin/Memory.md` in place, and leaves non-markdown files local unless explicitly imported later. Managed markdown paths are unique and `Origin/Memory.md` is reserved for the canonical memory note. If replicated note state already exists and the target path is populated, Origin must stop for an explicit reconcile flow that shows managed state, disk state, and any per-path markdown collisions before any write. Under `adopt`, a same-path managed note keeps its note id and imports disk content as a new revision; disk-only markdown paths create new notes; managed-only paths are re-materialized after reconcile; the reserved `Origin/Memory.md` path always binds to the single canonical memory note. Origin must not silently overwrite files. When that reconcile is required, the action result returns a stable `reconcile-id` for the follow-up commands below.', options: z.object({ path, ['create-if-missing']: z.boolean().default(true).describe('Create the workspace root if it does not exist.') }), output: actionResult }))
+      .command('init', doc({ description: 'Set or validate the managed workspace root on a filesystem-bearing peer. In v1 the synced vault path is the same root. If the target path is non-empty and this is the first attach, Origin adopts existing markdown files there before any export, adopts an existing `Origin/Memory.md` in place, and leaves non-markdown files local unless explicitly imported later. Managed markdown paths are unique and `Origin/Memory.md` is reserved for the canonical memory note. If replicated note state already exists and the target path is populated, Origin must stop for an explicit reconcile flow that shows managed state, disk state, and any per-path markdown collisions before any write. Under `adopt`, a same-path managed note keeps its note id and imports disk content as a new revision; disk-only markdown paths create new notes; managed-only paths are re-materialized after reconcile; the reserved `Origin/Memory.md` path always binds to the single canonical memory note. Origin must not silently overwrite files. When that reconcile is required, the action result returns a stable `reconcile-id` for the follow-up commands below. Non-filesystem peers such as iPhone do not use this command in v1.', options: z.object({ path, ['create-if-missing']: z.boolean().default(true).describe('Create the workspace root if it does not exist.') }), output: actionResult }))
       .command(
         Cli.create('reconcile', { description: 'Inspect and apply the explicit first-attach vault reconcile flow when the target path and replicated state both already contain managed note content.' })
           .command('get', doc({ description: 'Get one pending or completed vault reconcile record.', args: z.object({ ['reconcile-id']: id('Vault reconcile id.') }), output: setupVaultReconcile }))
@@ -2172,7 +2447,7 @@ const memory = Cli.create('memory', {
         'get',
         doc({
           description: 'Get one linked memory artifact.',
-          args: z.object({ path }),
+          args: z.object({ path: artifactLocator }),
           output: memoryArtifact,
         }),
       )
@@ -2190,10 +2465,10 @@ const memory = Cli.create('memory', {
       .command(
         'create',
         doc({
-          description: 'Create a supporting memory artifact and link it from memory. Markdown notes become replicated managed notes; non-note artifacts remain local workspace artifacts unless explicitly imported into managed state later. When `kind=note`, the target path must be unique among managed markdown notes and may not be the reserved `Origin/Memory.md` path.',
+          description: 'Create a supporting memory artifact and link it from memory. Markdown notes become replicated managed notes; non-note artifacts remain local workspace artifacts unless explicitly imported into managed state later. When `kind=note`, the target path must be unique among managed markdown notes and may not be the reserved `Origin/Memory.md` path. On non-filesystem peers, only replicated managed-note artifacts are valid locally; creating local-only artifact files must be delegated to a filesystem-bearing peer.',
           options: z.object({
             kind: z.enum(['note', 'folder', 'json', 'csv', 'markdown-table']).describe('Artifact kind.'),
-            path,
+            path: artifactLocator,
             summary: z.string().optional().describe('Artifact summary.'),
           }),
           output: actionResult,
@@ -2203,7 +2478,7 @@ const memory = Cli.create('memory', {
         'update',
         doc({
           description: 'Update metadata for a memory artifact.',
-          args: z.object({ path }),
+          args: z.object({ path: artifactLocator }),
           options: z.object({
             summary: z.string().optional().describe('Updated artifact summary.'),
           }),
@@ -2214,32 +2489,32 @@ const memory = Cli.create('memory', {
         'move',
         doc({
           description: 'Move a memory artifact and preserve its link from memory. A replicated markdown note artifact must move to a unique managed path and may not target the reserved `Origin/Memory.md` path.',
-          args: z.object({ path }),
+          args: z.object({ path: artifactLocator }),
           options: z.object({
-            to: path.describe('Destination path.'),
+            to: artifactLocator.describe('Destination artifact locator.'),
           }),
           output: actionResult,
         }),
       )
-      .command('delete', doc({ description: 'Delete a memory artifact and unlink it from memory.', args: z.object({ path }), output: actionResult }))
+      .command('delete', doc({ description: 'Delete a memory artifact and unlink it from memory.', args: z.object({ path: artifactLocator }), output: actionResult }))
       .command(
         'link',
         doc({
-          description: 'Link an existing artifact from Origin/Memory.md. Linking does not by itself import the artifact into replicated managed state.',
+          description: 'Link an existing artifact from Origin/Memory.md. Linking does not by itself import the artifact into replicated managed state. On non-filesystem peers, local-only artifact links are inspectable only when another filesystem-bearing peer hosts the target path.',
           options: z.object({
-            path,
+            path: artifactLocator,
             summary: z.string().describe('Artifact summary.'),
           }),
           output: actionResult,
         }),
       )
-      .command('unlink', doc({ description: 'Unlink an artifact from Origin/Memory.md without deleting the file.', args: z.object({ path }), output: actionResult }))
-      .command('history', doc({ description: 'Inspect revision history for one memory artifact when that artifact has been explicitly imported into replicated managed state.', args: z.object({ path }), output: list(workspaceRevision, 'Artifact revisions.') }))
+      .command('unlink', doc({ description: 'Unlink an artifact from Origin/Memory.md without deleting the file.', args: z.object({ path: artifactLocator }), output: actionResult }))
+      .command('history', doc({ description: 'Inspect revision history for one memory artifact when that artifact has been explicitly imported into replicated managed state.', args: z.object({ path: artifactLocator }), output: list(workspaceRevision, 'Artifact revisions.') }))
       .command(
         'restore',
         doc({
           description: 'Restore one memory artifact to a prior revision when that artifact participates in replicated managed state.',
-          args: z.object({ path, ['revision-id']: id('Revision id.') }),
+          args: z.object({ path: artifactLocator, ['revision-id']: id('Revision id.') }),
           output: actionResult,
         }),
       ),
@@ -2565,7 +2840,7 @@ const projectCli = Cli.create('project', {
   .command('get', doc({ description: 'Get one project.', args: z.object({ ['project-id']: id('Project id.') }), output: project }))
   .command('search', doc({ description: 'Search projects by name or description.', options: z.object({ query: z.string().describe('Project search query.'), limit: z.number().optional().describe('Maximum project count.') }), output: list(project, 'Matching projects.') }))
   .command('create', doc({ description: 'Create a project.', options: z.object({ name: z.string().describe('Project name.'), description: markdown.optional().describe('Project description.') }), output: actionResult }))
-  .command('update', doc({ description: 'Update a project.', args: z.object({ ['project-id']: id('Project id.') }), options: z.object({ name: z.string().optional().describe('New project name.'), status: z.string().optional().describe('New project status.'), description: markdown.optional().describe('New description.') }), output: actionResult }))
+  .command('update', doc({ description: 'Update a project.', args: z.object({ ['project-id']: id('Project id.') }), options: z.object({ name: z.string().optional().describe('New project name.'), status: projectStatus.optional().describe('New project status.'), description: markdown.optional().describe('New description.') }), output: actionResult }))
   .command('archive', doc({ description: 'Archive a project.', args: z.object({ ['project-id']: id('Project id.') }), output: actionResult }))
   .command('unarchive', doc({ description: 'Unarchive a project.', args: z.object({ ['project-id']: id('Project id.') }), output: actionResult }))
   .command('delete', doc({ description: 'Delete a project.', args: z.object({ ['project-id']: id('Project id.') }), output: actionResult }))
@@ -2589,18 +2864,18 @@ const labelCli = Cli.create('label', {
 const taskCli = Cli.create('task', {
   description: 'First-party task commands.',
 })
-  .command('list', doc({ description: 'List tasks.', options: z.object({ status: z.array(z.string()).optional().describe('Task status filter.'), project: z.array(z.string()).optional().describe('Project id filter.'), label: z.array(z.string()).optional().describe('Label id filter.'), due: z.enum(['today', 'overdue', 'upcoming', 'none']).optional().describe('Due-window filter.'), ['linked-calendar-item']: z.string().optional().describe('Optional linked calendar item id.'), ['google-tasks-synced']: z.boolean().optional().describe('Only tasks attached to Google Tasks.'), limit: z.number().optional().describe('Maximum task count.') }), output: list(task, 'Tasks.') }))
+  .command('list', doc({ description: 'List tasks.', options: z.object({ status: z.array(taskStatus).optional().describe('Task status filter.'), project: z.array(z.string()).optional().describe('Project id filter.'), label: z.array(z.string()).optional().describe('Label id filter.'), due: z.enum(['today', 'overdue', 'upcoming', 'none']).optional().describe('Due-window filter.'), ['linked-calendar-item']: z.string().optional().describe('Optional linked calendar item id.'), ['google-tasks-synced']: z.boolean().optional().describe('Only tasks attached to Google Tasks.'), limit: z.number().optional().describe('Maximum task count.') }), output: list(task, 'Tasks.') }))
   .command('get', doc({ description: 'Get one task.', args: z.object({ ['task-id']: id('Task id.') }), output: task }))
   .command('search', doc({ description: 'Search tasks by title, description, metadata, or semantic relevance.', options: z.object({ query: z.string().describe('Task search query.'), mode: z.enum(['exact', 'semantic', 'hybrid']).default('hybrid').describe('Search mode.'), limit: z.number().optional().describe('Maximum task count.') }), output: list(task, 'Matching tasks.') }))
   .command('related', doc({ description: 'List entities related to a task.', args: z.object({ ['task-id']: id('Task id.') }), output: list(originEntity, 'Related entities.') }))
-  .command('create', doc({ description: 'Create a task.', options: z.object({ title: z.string().describe('Task title.'), ['description-md']: markdown.optional().describe('Task description markdown.'), project: z.string().optional().describe('Project id.'), labels: z.array(z.string()).optional().describe('Label ids.'), priority: z.string().optional().describe('Priority.'), ['due-kind']: z.enum(['date', 'datetime']).optional().describe('Due-kind semantics.'), ['due-from']: z.string().optional().describe('Due window start.'), ['due-at']: z.string().optional().describe('Due window end.'), ['due-timezone']: z.string().optional().describe('Due window timezone.'), ['blocked-by']: z.array(z.string()).optional().describe('Initial blocking task ids.') }), output: actionResult }))
-  .command('update', doc({ description: 'Update a task.', args: z.object({ ['task-id']: id('Task id.') }), options: z.object({ title: z.string().optional().describe('New title.'), ['description-md']: markdown.optional().describe('New description.'), status: z.string().optional().describe('New status.'), priority: z.string().optional().describe('New priority.') }), output: actionResult }))
+  .command('create', doc({ description: 'Create a task.', options: z.object({ title: z.string().describe('Task title.'), ['description-md']: markdown.optional().describe('Task description markdown.'), project: z.string().optional().describe('Project id.'), labels: z.array(z.string()).optional().describe('Label ids.'), priority: taskPriority.optional().describe('Priority.'), ['due-kind']: z.enum(['date', 'datetime']).optional().describe('Due-kind semantics.'), ['due-from']: z.string().optional().describe('Due window start.'), ['due-at']: z.string().optional().describe('Due window end.'), ['due-timezone']: z.string().optional().describe('Due window timezone.'), ['blocked-by']: z.array(z.string()).optional().describe('Initial blocking task ids.') }), output: actionResult }))
+  .command('update', doc({ description: 'Update a task.', args: z.object({ ['task-id']: id('Task id.') }), options: z.object({ title: z.string().optional().describe('New title.'), ['description-md']: markdown.optional().describe('New description.'), status: taskStatus.optional().describe('New status.'), priority: taskPriority.optional().describe('New priority.') }), output: actionResult }))
   .command('complete', doc({ description: 'Mark a task done.', args: z.object({ ['task-id']: id('Task id.') }), output: actionResult }))
   .command('reopen', doc({ description: 'Reopen a completed or canceled task.', args: z.object({ ['task-id']: id('Task id.') }), output: actionResult }))
-  .command('cancel', doc({ description: 'Cancel a task.', args: z.object({ ['task-id']: id('Task id.') }), output: actionResult }))
-  .command('archive', doc({ description: 'Archive a task.', args: z.object({ ['task-id']: id('Task id.') }), output: actionResult }))
+  .command('cancel', doc({ description: 'Cancel a task. If the object is mirrored to Google, this changes local Origin state and detaches the link; it does not delete or cancel the remote Google object.', args: z.object({ ['task-id']: id('Task id.') }), output: actionResult }))
+  .command('archive', doc({ description: 'Archive a task. If the object is mirrored to Google, this changes local Origin state and detaches the link; it does not delete or cancel the remote Google object.', args: z.object({ ['task-id']: id('Task id.') }), output: actionResult }))
   .command('unarchive', doc({ description: 'Unarchive a task.', args: z.object({ ['task-id']: id('Task id.') }), output: actionResult }))
-  .command('delete', doc({ description: 'Delete a task.', args: z.object({ ['task-id']: id('Task id.') }), output: actionResult }))
+  .command('delete', doc({ description: 'Delete a task. If the object is mirrored to Google, this changes local Origin state and detaches the link; it does not delete or cancel the remote Google object.', args: z.object({ ['task-id']: id('Task id.') }), output: actionResult }))
   .command('history', doc({ description: 'Inspect task history.', args: z.object({ ['task-id']: id('Task id.') }), output: list(entityHistoryEntry, 'Task history entries.') }))
   .command('restore', doc({ description: 'Restore a task to a prior revision.', args: z.object({ ['task-id']: id('Task id.'), ['revision-id']: id('Revision id.') }), output: actionResult }))
   .command(
@@ -2639,15 +2914,15 @@ const taskCli = Cli.create('task', {
   )
   .command(
     Cli.create('schedule', { description: 'Task scheduling via linked calendar items.' })
-      .command('set', doc({ description: 'Create or update a linked calendar item for a task.', args: z.object({ ['task-id']: id('Task id.') }), options: z.object({ ['calendar-item-id']: z.string().optional().describe('Existing linked calendar item to reuse.'), ['start-at']: isoDateTime.optional().describe('Scheduled start time.'), ['end-at']: isoDateTime.optional().describe('Scheduled end time.'), ['start-date']: isoDate.optional().describe('All-day start date.'), ['end-date-exclusive']: isoDate.optional().describe('All-day end date.') }), output: actionResult, hint: 'This changes Origin planning state first. Provider sync happens through planning google-calendar or planning google-tasks bridges.' }))
-      .command('clear', doc({ description: 'Detach one or all linked calendar items from a task.', args: z.object({ ['task-id']: id('Task id.') }), options: z.object({ ['calendar-item-id']: z.string().optional().describe('Specific linked calendar item to detach.') }), output: actionResult })),
+      .command('set', doc({ description: 'Create or update a linked calendar item for a task. This mutates the canonical task<->calendar-item relationship and must update both objects. When the resulting calendar item is timed, `timezone` is required unless an existing linked calendar item already supplies the authoritative timezone.', args: z.object({ ['task-id']: id('Task id.') }), options: z.object({ ['calendar-item-id']: z.string().optional().describe('Existing linked calendar item to reuse.'), ['start-at']: isoDateTime.optional().describe('Scheduled start time.'), ['end-at']: isoDateTime.optional().describe('Scheduled end time.'), ['start-date']: isoDate.optional().describe('All-day start date.'), ['end-date-exclusive']: isoDate.optional().describe('All-day end date.'), timezone: z.string().optional().describe('IANA timezone for the linked calendar item. Required when the resulting item is timed and no existing linked calendar item already defines it.') }), output: actionResult, hint: 'This changes Origin planning state first. Provider sync happens through planning google-calendar or planning google-tasks bridges.' }))
+      .command('clear', doc({ description: 'Detach one or all linked calendar items from a task. This removes the canonical task<->calendar-item relationship from both objects without deleting either object.', args: z.object({ ['task-id']: id('Task id.') }), options: z.object({ ['calendar-item-id']: z.string().optional().describe('Specific linked calendar item to detach.') }), output: actionResult })),
   )
   .command(
     Cli.create('recurrence', { description: 'Recurring-task series controls.' })
-      .command('set', doc({ description: 'Set recurrence on a task series root. The series root is the occurrence whose `occurrence-index` is `0` and `materialization-kind` is `root`.', args: z.object({ ['task-id']: id('Task series root id. The series root is the occurrence whose `occurrence-index` is `0` and `materialization-kind` is `root`.') }), options: z.object({ rule: z.string().describe('Canonical RRULE-style cadence string. Bounds live in `start-date` and `end-date`.'), ['start-date']: isoDate.describe('Canonical local series start date.'), ['end-date']: isoDate.optional().describe('Optional finite local series end date.'), timezone: z.string().optional().describe('Recurrence timezone for datetime-based series.'), ['advance-mode']: z.enum(['on_completion', 'on_schedule']).optional().describe('How the task series advances after the root or later occurrences are scheduled or completed.') }), output: actionResult }))
+      .command('set', doc({ description: 'Set recurrence on a task series root. The series root is the occurrence whose `occurrence-index` is `0` and `materialization-kind` is `root`.', args: z.object({ ['task-id']: id('Task series root id. The series root is the occurrence whose `occurrence-index` is `0` and `materialization-kind` is `root`.') }), options: z.object({ rule: z.string().describe('Canonical RRULE-style cadence string. Bounds live in `start-date` and `end-date`.'), ['start-date']: isoDate.describe('Canonical local series start date.'), ['end-date']: isoDate.optional().describe('Optional finite local series end date.'), timezone: z.string().optional().describe('Recurrence timezone. Required when the series uses timed due boundaries.'), ['advance-mode']: z.enum(['on_completion', 'on_schedule']).optional().describe('How the task series advances after the root or later occurrences are scheduled or completed.') }), output: actionResult }))
       .command('clear', doc({ description: 'Remove recurrence metadata from a task series root. The series root is the occurrence whose `occurrence-index` is `0`.', args: z.object({ ['task-id']: id('Task series root id. The series root is the occurrence whose `occurrence-index` is `0`.') }), output: actionResult }))
       .command('preview', doc({ description: 'Preview upcoming task occurrences projected from a task series root without mutating state. The series root is the occurrence whose `occurrence-index` is `0` and `materialization-kind` is `root`.', args: z.object({ ['task-id']: id('Task series root id. The series root is the occurrence whose `occurrence-index` is `0` and `materialization-kind` is `root`.') }), options: z.object({ count: z.number().default(10).describe('Occurrence count to preview.') }), output: list(task, 'Preview task occurrences.') }))
-      .command('occurrences', doc({ description: 'List materialized recurring task occurrences and explicit exceptions for a task series root. The series root is the occurrence whose `occurrence-index` is `0` and `materialization-kind` is `root`.', args: z.object({ ['task-id']: id('Task series root id. The series root is the occurrence whose `occurrence-index` is `0` and `materialization-kind` is `root`.') }), options: z.object({ from: isoDate.optional().describe('Inclusive lower bound.'), to: isoDate.optional().describe('Inclusive upper bound.'), limit: z.number().optional().describe('Maximum occurrence count.') }), output: list(task, 'Recurring task occurrences.') })),
+      .command('occurrences', doc({ description: 'List projected recurring task occurrences and explicit exceptions for a task series root. The series root is the occurrence whose `occurrence-index` is `0` and `materialization-kind` is `root`.', args: z.object({ ['task-id']: id('Task series root id. The series root is the occurrence whose `occurrence-index` is `0` and `materialization-kind` is `root`.') }), options: z.object({ from: isoDate.optional().describe('Inclusive lower bound.'), to: isoDate.optional().describe('Inclusive upper bound.'), limit: z.number().optional().describe('Maximum occurrence count.') }), output: list(task, 'Recurring task occurrences.') })),
   )
   .command(
     Cli.create('conflict', { description: 'Inspect and resolve task conflicts.' })
@@ -2659,18 +2934,18 @@ const taskCli = Cli.create('task', {
 const calendarItemCli = Cli.create('calendar-item', {
   description: 'First-party calendar item commands.',
 })
-  .command('list', doc({ description: 'List calendar items.', options: z.object({ kind: z.array(z.string()).optional().describe('Kind filter.'), ['date-from']: isoDate.optional().describe('Lower day bound.'), ['date-to']: isoDate.optional().describe('Upper day bound.'), limit: z.number().optional().describe('Maximum item count.') }), output: list(calendarItem, 'Calendar items.') }))
+  .command('list', doc({ description: 'List calendar items.', options: z.object({ kind: z.array(calendarItemKind).optional().describe('Kind filter.'), ['date-from']: isoDate.optional().describe('Lower day bound.'), ['date-to']: isoDate.optional().describe('Upper day bound.'), limit: z.number().optional().describe('Maximum item count.') }), output: list(calendarItem, 'Calendar items.') }))
   .command('get', doc({ description: 'Get one calendar item.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), output: calendarItem }))
   .command('search', doc({ description: 'Search calendar items.', options: z.object({ query: z.string().describe('Calendar-item search query.'), mode: z.enum(['exact', 'semantic', 'hybrid']).default('hybrid').describe('Search mode.'), limit: z.number().optional().describe('Maximum item count.') }), output: list(calendarItem, 'Matching calendar items.') }))
   .command('related', doc({ description: 'List entities related to a calendar item.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), output: list(originEntity, 'Related entities.') }))
-  .command('create', doc({ description: 'Create a calendar item.', options: z.object({ title: z.string().describe('Calendar title.'), kind: z.string().optional().describe('Item kind.'), ['project-id']: z.string().optional().describe('Linked project id.'), labels: z.array(z.string()).optional().describe('Label ids.'), ['description-md']: markdown.optional().describe('Calendar item description.'), ['task-id']: z.array(z.string()).optional().describe('Linked task ids.'), ['all-day']: z.boolean().default(false).describe('Whether the item is all-day.'), ['start-date']: isoDate.optional().describe('All-day start date.'), ['end-date-exclusive']: isoDate.optional().describe('All-day exclusive end date.'), ['start-at']: isoDateTime.optional().describe('Timed start.'), ['end-at']: isoDateTime.optional().describe('Timed end.'), timezone: z.string().optional().describe('Item timezone.'), location: z.string().optional().describe('Location.') }), output: actionResult }))
-  .command('update', doc({ description: 'Update a calendar item.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), options: z.object({ title: z.string().optional().describe('New title.'), kind: z.string().optional().describe('New kind.'), status: z.string().optional().describe('New status.'), ['description-md']: markdown.optional().describe('New description.'), location: z.string().optional().describe('New location.'), ['all-day']: z.boolean().optional().describe('Whether the item is all-day.'), ['start-date']: isoDate.optional().describe('All-day start date.'), ['end-date-exclusive']: isoDate.optional().describe('All-day exclusive end date.'), ['start-at']: isoDateTime.optional().describe('Timed start.'), ['end-at']: isoDateTime.optional().describe('Timed end.'), timezone: z.string().optional().describe('Item timezone.') }), output: actionResult }))
-  .command('move', doc({ description: 'Reschedule a calendar item.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), options: z.object({ ['all-day']: z.boolean().optional().describe('Whether the moved item is all-day.'), ['start-date']: isoDate.optional().describe('All-day start date.'), ['end-date-exclusive']: isoDate.optional().describe('All-day exclusive end date.'), ['start-at']: isoDateTime.optional().describe('Timed start.'), ['end-at']: isoDateTime.optional().describe('Timed end.'), timezone: z.string().optional().describe('Item timezone.') }), output: actionResult }))
+  .command('create', doc({ description: 'Create a calendar item.', options: z.object({ title: z.string().describe('Calendar title.'), kind: calendarItemKind.optional().describe('Item kind.'), ['project-id']: z.string().optional().describe('Linked project id.'), labels: z.array(z.string()).optional().describe('Label ids.'), ['description-md']: markdown.optional().describe('Calendar item description.'), ['task-id']: z.array(z.string()).optional().describe('Initial task ids for canonical task<->calendar-item links.'), ['all-day']: z.boolean().default(false).describe('Whether the item is all-day.'), ['start-date']: isoDate.optional().describe('All-day start date.'), ['end-date-exclusive']: isoDate.optional().describe('All-day exclusive end date.'), ['start-at']: isoDateTime.optional().describe('Timed start.'), ['end-at']: isoDateTime.optional().describe('Timed end.'), timezone: z.string().optional().describe('Item timezone. Required when the created item is timed.'), location: z.string().optional().describe('Location.') }), output: actionResult }))
+  .command('update', doc({ description: 'Update a calendar item.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), options: z.object({ title: z.string().optional().describe('New title.'), kind: calendarItemKind.optional().describe('New kind.'), status: calendarItemStatus.optional().describe('New status.'), ['description-md']: markdown.optional().describe('New description.'), location: z.string().optional().describe('New location.'), ['all-day']: z.boolean().optional().describe('Whether the item is all-day.'), ['start-date']: isoDate.optional().describe('All-day start date.'), ['end-date-exclusive']: isoDate.optional().describe('All-day exclusive end date.'), ['start-at']: isoDateTime.optional().describe('Timed start.'), ['end-at']: isoDateTime.optional().describe('Timed end.'), timezone: z.string().optional().describe('Item timezone. Required when the resulting item is timed.') }), output: actionResult }))
+  .command('move', doc({ description: 'Reschedule a calendar item.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), options: z.object({ ['all-day']: z.boolean().optional().describe('Whether the moved item is all-day.'), ['start-date']: isoDate.optional().describe('All-day start date.'), ['end-date-exclusive']: isoDate.optional().describe('All-day exclusive end date.'), ['start-at']: isoDateTime.optional().describe('Timed start.'), ['end-at']: isoDateTime.optional().describe('Timed end.'), timezone: z.string().optional().describe('Item timezone. Required when the resulting item is timed.') }), output: actionResult }))
   .command('confirm', doc({ description: 'Mark a calendar item confirmed.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), output: actionResult }))
-  .command('cancel', doc({ description: 'Cancel a calendar item.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), output: actionResult }))
-  .command('archive', doc({ description: 'Archive a calendar item.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), output: actionResult }))
+  .command('cancel', doc({ description: 'Cancel a calendar item. If the object is mirrored to Google, this changes local Origin state and detaches the link; it does not delete or cancel the remote Google object.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), output: actionResult }))
+  .command('archive', doc({ description: 'Archive a calendar item. If the object is mirrored to Google, this changes local Origin state and detaches the link; it does not delete or cancel the remote Google object.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), output: actionResult }))
   .command('unarchive', doc({ description: 'Unarchive a calendar item.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), output: actionResult }))
-  .command('delete', doc({ description: 'Delete a calendar item.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), output: actionResult }))
+  .command('delete', doc({ description: 'Delete a calendar item. If the object is mirrored to Google, this changes local Origin state and detaches the link; it does not delete or cancel the remote Google object.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), output: actionResult }))
   .command('history', doc({ description: 'Inspect calendar-item history.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), output: list(entityHistoryEntry, 'Calendar-item history entries.') }))
   .command('restore', doc({ description: 'Restore a calendar item to a prior revision.', args: z.object({ ['calendar-item-id']: id('Calendar item id.'), ['revision-id']: id('Revision id.') }), output: actionResult }))
   .command(
@@ -2687,15 +2962,15 @@ const calendarItemCli = Cli.create('calendar-item', {
   )
   .command(
     Cli.create('task', { description: 'Calendar-item task linkage.' })
-      .command('link', doc({ description: 'Link a calendar item to a task.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), options: z.object({ ['task-id']: z.string().describe('Task id.') }), output: actionResult }))
-      .command('unlink', doc({ description: 'Unlink a calendar item from a task.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), options: z.object({ ['task-id']: z.string().describe('Task id.') }), output: actionResult })),
+      .command('link', doc({ description: 'Link a calendar item to a task by creating the canonical task<->calendar-item relationship on both objects.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), options: z.object({ ['task-id']: z.string().describe('Task id.') }), output: actionResult }))
+      .command('unlink', doc({ description: 'Unlink a calendar item from a task by removing the canonical task<->calendar-item relationship from both objects without deleting either object.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), options: z.object({ ['task-id']: z.string().describe('Task id.') }), output: actionResult })),
   )
   .command(
     Cli.create('recurrence', { description: 'Recurring calendar-series controls.' })
-      .command('set', doc({ description: 'Set recurrence on a calendar series root. The series root is the occurrence whose `occurrence-index` is `0` and `materialization-kind` is `root`.', args: z.object({ ['calendar-item-id']: id('Calendar series root id. The series root is the occurrence whose `occurrence-index` is `0` and `materialization-kind` is `root`.') }), options: z.object({ rule: z.string().describe('Canonical RRULE-style cadence string. Bounds live in `start-date` and `end-date`.'), ['start-date']: isoDate.describe('Canonical local series start date.'), ['end-date']: isoDate.optional().describe('Optional finite local series end date.'), timezone: z.string().optional().describe('Recurrence timezone for datetime-based series.') }), output: actionResult }))
+      .command('set', doc({ description: 'Set recurrence on a calendar series root. The series root is the occurrence whose `occurrence-index` is `0` and `materialization-kind` is `root`.', args: z.object({ ['calendar-item-id']: id('Calendar series root id. The series root is the occurrence whose `occurrence-index` is `0` and `materialization-kind` is `root`.') }), options: z.object({ rule: z.string().describe('Canonical RRULE-style cadence string. Bounds live in `start-date` and `end-date`.'), ['start-date']: isoDate.describe('Canonical local series start date. It must equal the series root item’s local start date in the recurrence timezone.'), ['end-date']: isoDate.optional().describe('Optional finite local series end date.'), timezone: z.string().optional().describe('Recurrence timezone. Required when the series is timed.') }), output: actionResult }))
       .command('clear', doc({ description: 'Remove recurrence metadata from a calendar series root. The series root is the occurrence whose `occurrence-index` is `0`.', args: z.object({ ['calendar-item-id']: id('Calendar series root id. The series root is the occurrence whose `occurrence-index` is `0`.') }), output: actionResult }))
       .command('preview', doc({ description: 'Preview upcoming calendar occurrences projected from a calendar series root without mutating state. The series root is the occurrence whose `occurrence-index` is `0` and `materialization-kind` is `root`.', args: z.object({ ['calendar-item-id']: id('Calendar series root id. The series root is the occurrence whose `occurrence-index` is `0` and `materialization-kind` is `root`.') }), options: z.object({ count: z.number().default(10).describe('Occurrence count to preview.') }), output: list(calendarItem, 'Preview calendar occurrences.') }))
-      .command('occurrences', doc({ description: 'List materialized recurring calendar occurrences and explicit exceptions for a calendar series root. The series root is the occurrence whose `occurrence-index` is `0` and `materialization-kind` is `root`.', args: z.object({ ['calendar-item-id']: id('Calendar series root id. The series root is the occurrence whose `occurrence-index` is `0` and `materialization-kind` is `root`.') }), options: z.object({ from: isoDate.optional().describe('Inclusive lower bound.'), to: isoDate.optional().describe('Inclusive upper bound.'), limit: z.number().optional().describe('Maximum occurrence count.') }), output: list(calendarItem, 'Recurring calendar occurrences.') })),
+      .command('occurrences', doc({ description: 'List projected recurring calendar occurrences and explicit exceptions for a calendar series root. The series root is the occurrence whose `occurrence-index` is `0` and `materialization-kind` is `root`.', args: z.object({ ['calendar-item-id']: id('Calendar series root id. The series root is the occurrence whose `occurrence-index` is `0` and `materialization-kind` is `root`.') }), options: z.object({ from: isoDate.optional().describe('Inclusive lower bound.'), to: isoDate.optional().describe('Inclusive upper bound.'), limit: z.number().optional().describe('Maximum occurrence count.') }), output: list(calendarItem, 'Recurring calendar occurrences.') })),
   )
   .command(
     Cli.create('conflict', { description: 'Inspect and resolve calendar-item conflicts.' })
@@ -2715,10 +2990,10 @@ const googleCalendarCli = Cli.create('google-calendar', {
       .command('select', doc({ description: 'Select a Google calendar as a bridge surface. This creates or repairs the server-owned poller scope for that calendar but does not attach any specific Origin item.', args: z.object({ ['calendar-id']: z.string().describe('Google calendar id.') }), output: actionResult }))
       .command('deselect', doc({ description: 'Deselect a Google calendar bridge surface. If Origin items are still attached to that calendar, the command must refuse unless `force-detach` is true; with `force-detach`, those local links transition to `detached` and the remote Google events are left untouched.', args: z.object({ ['calendar-id']: z.string().describe('Google calendar id.') }), options: z.object({ ['force-detach']: z.boolean().default(false).describe('Detach local links that still target this calendar before deselecting it.') }), output: actionResult })),
   )
-  .command('pull', doc({ description: 'Import changes from Google Calendar into Origin calendar items.', options: z.object({ ['calendar-id']: z.string().optional().describe('Optional Google calendar id filter.') }), output: actionResult }))
-  .command('push', doc({ description: 'Push Origin calendar-item changes to Google Calendar.', options: z.object({ ['calendar-id']: z.string().optional().describe('Optional Google calendar id filter.') }), output: actionResult }))
-  .command('reconcile', doc({ description: 'Reconcile Origin calendar items with Google Calendar state. Remote deletions must surface as detached-preserved local objects for review rather than silently deleting local state.', options: z.object({ ['calendar-id']: z.string().optional().describe('Optional Google calendar id filter.') }), output: actionResult }))
-  .command('attach', doc({ description: 'Attach one calendar item to Google Calendar import or mirroring. `mode=import` binds to an existing Google event and never creates a new remote object; `mode=mirror` may create a remote event when no existing Google event id is supplied. For recurring series, attach the series root. The series root external link holds the Google master id and hash; explicit exception occurrences may carry per-occurrence provider refs and hashes in recurrence metadata when Google exposes distinct remote exception objects.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), options: z.object({ ['calendar-id']: z.string().describe('Google calendar id.'), ['google-event-id']: z.string().optional().describe('Optional existing Google event id to bind instead of creating a new remote event.'), mode: z.enum(['import', 'mirror']).describe('Attach mode.') }), output: actionResult }))
+  .command('pull', doc({ description: 'Import changes from Google Calendar into Origin calendar items. When no `calendar-id` filter is supplied, the runtime expands the request into one logical bridge action per selected calendar surface.', options: z.object({ ['calendar-id']: z.string().optional().describe('Optional Google calendar id filter.') }), output: actionResult }))
+  .command('push', doc({ description: 'Push Origin calendar-item changes to Google Calendar. When no `calendar-id` filter is supplied, the runtime expands the request into one logical bridge action per selected calendar surface.', options: z.object({ ['calendar-id']: z.string().optional().describe('Optional Google calendar id filter.') }), output: actionResult }))
+  .command('reconcile', doc({ description: 'Reconcile Origin calendar items with Google Calendar state. Remote deletions must surface as detached-preserved local objects for review rather than silently deleting local state. When no `calendar-id` filter is supplied, the runtime expands the request into one logical bridge action per selected calendar surface.', options: z.object({ ['calendar-id']: z.string().optional().describe('Optional Google calendar id filter.') }), output: actionResult }))
+  .command('attach', doc({ description: 'Attach one calendar item to Google Calendar import or mirroring. `mode=import` requires an existing Google event id and never creates a new remote object; `mode=mirror` may create a remote event when no existing Google event id is supplied. For recurring series, attach the series root. The series root external link holds the Google master id and hash; explicit exception occurrences may carry per-occurrence provider refs and hashes in recurrence metadata when Google exposes distinct remote exception objects.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), options: z.object({ ['calendar-id']: z.string().describe('Google calendar id.'), ['google-event-id']: z.string().optional().describe('Optional existing Google event id to bind instead of creating a new remote event.'), mode: z.enum(['import', 'mirror']).describe('Attach mode.') }), output: actionResult }))
   .command('detach', doc({ description: 'Detach one calendar item from Google Calendar mirroring. The local calendar item is preserved, the remote Google event is left untouched, and the local link transitions to `detached`.', args: z.object({ ['calendar-item-id']: id('Calendar item id.') }), output: actionResult }))
   .command('reset-cursor', doc({ description: 'Reset one Google Calendar bridge poller cursor as an explicit repair action. Local calendar items remain intact and remote Google events are not deleted.', options: z.object({ ['poller-id']: z.string().optional().describe('Specific Google Calendar poller id.'), ['calendar-id']: z.string().optional().describe('Optional selected Google calendar id.') }), output: actionResult }))
   .command('repair', doc({ description: 'Repair a degraded Google Calendar bridge poller or selected calendar surface after auth, cursor, or reconcile failures. Local calendar items remain intact and remote Google events are not deleted.', options: z.object({ ['poller-id']: z.string().optional().describe('Specific Google Calendar poller id.'), ['calendar-id']: z.string().optional().describe('Optional selected Google calendar id.') }), output: actionResult }))
@@ -2734,10 +3009,10 @@ const googleTasksCli = Cli.create('google-tasks', {
       .command('select', doc({ description: 'Select a Google task list as a bridge surface. This creates or repairs the server-owned poller scope for that task list but does not attach any specific Origin task.', args: z.object({ ['task-list-id']: z.string().describe('Google task list id.') }), output: actionResult }))
       .command('deselect', doc({ description: 'Deselect a Google task-list bridge surface. If Origin tasks are still attached to that task list, the command must refuse unless `force-detach` is true; with `force-detach`, those local links transition to `detached` and the remote Google tasks are left untouched.', args: z.object({ ['task-list-id']: z.string().describe('Google task list id.') }), options: z.object({ ['force-detach']: z.boolean().default(false).describe('Detach local links that still target this task list before deselecting it.') }), output: actionResult })),
   )
-  .command('pull', doc({ description: 'Import changes from Google Tasks into Origin tasks.', options: z.object({ ['task-list-id']: z.string().optional().describe('Optional Google task list id filter.') }), output: actionResult }))
-  .command('push', doc({ description: 'Push linked non-recurring Origin task changes to Google Tasks.', options: z.object({ ['task-list-id']: z.string().optional().describe('Optional Google task list id filter.') }), output: actionResult }))
-  .command('reconcile', doc({ description: 'Reconcile Origin tasks with Google Tasks state. Remote deletions must surface as detached-preserved local tasks for review rather than silently deleting local state.', options: z.object({ ['task-list-id']: z.string().optional().describe('Optional Google task list id filter.') }), output: actionResult }))
-  .command('attach', doc({ description: 'Attach one non-recurring task to Google Tasks import or mirroring. `mode=import` binds to an existing Google task and never creates a new remote object. `mode=mirror` may create a remote task when no existing Google task id is supplied. Recurring Origin task series are not mirrored to Google Tasks in v1, so the canonical runtime must reject attach for recurring tasks.', args: z.object({ ['task-id']: id('Task id.') }), options: z.object({ ['task-list-id']: z.string().describe('Google task list id.'), ['google-task-id']: z.string().optional().describe('Optional existing Google task id to bind instead of creating a new remote task.'), mode: z.enum(['import', 'mirror']).describe('Attach mode.') }), output: actionResult }))
+  .command('pull', doc({ description: 'Import changes from Google Tasks into Origin tasks. When no `task-list-id` filter is supplied, the runtime expands the request into one logical bridge action per selected task-list surface.', options: z.object({ ['task-list-id']: z.string().optional().describe('Optional Google task list id filter.') }), output: actionResult }))
+  .command('push', doc({ description: 'Push linked non-recurring Origin task changes to Google Tasks. When no `task-list-id` filter is supplied, the runtime expands the request into one logical bridge action per selected task-list surface.', options: z.object({ ['task-list-id']: z.string().optional().describe('Optional Google task list id filter.') }), output: actionResult }))
+  .command('reconcile', doc({ description: 'Reconcile Origin tasks with Google Tasks state. Remote deletions must surface as detached-preserved local tasks for review rather than silently deleting local state. When no `task-list-id` filter is supplied, the runtime expands the request into one logical bridge action per selected task-list surface.', options: z.object({ ['task-list-id']: z.string().optional().describe('Optional Google task list id filter.') }), output: actionResult }))
+  .command('attach', doc({ description: 'Attach one non-recurring task to Google Tasks import or mirroring. `mode=import` requires an existing Google task id and never creates a new remote object. `mode=mirror` may create a remote task when no existing Google task id is supplied. Recurring Origin task series are not mirrored to Google Tasks in v1, so the canonical runtime must reject attach for recurring tasks.', args: z.object({ ['task-id']: id('Task id.') }), options: z.object({ ['task-list-id']: z.string().describe('Google task list id.'), ['google-task-id']: z.string().optional().describe('Optional existing Google task id to bind instead of creating a new remote task.'), mode: z.enum(['import', 'mirror']).describe('Attach mode.') }), output: actionResult }))
   .command('detach', doc({ description: 'Detach one task from Google Tasks mirroring. The local task is preserved, the remote Google task is left untouched, and the local link transitions to `detached`.', args: z.object({ ['task-id']: id('Task id.') }), output: actionResult }))
   .command('reset-cursor', doc({ description: 'Reset one Google Tasks bridge poller cursor as an explicit repair action. Local tasks remain intact and remote Google tasks are not deleted.', options: z.object({ ['poller-id']: z.string().optional().describe('Specific Google Tasks poller id.'), ['task-list-id']: z.string().optional().describe('Optional selected Google task list id.') }), output: actionResult }))
   .command('repair', doc({ description: 'Repair a degraded Google Tasks bridge poller or selected task-list surface after auth, cursor, or reconcile failures. Local tasks remain intact and remote Google tasks are not deleted.', options: z.object({ ['poller-id']: z.string().optional().describe('Specific Google Tasks poller id.'), ['task-list-id']: z.string().optional().describe('Optional selected Google task list id.') }), output: actionResult }))
@@ -2757,14 +3032,14 @@ const email = Cli.create('email', {
     Cli.create('account', { description: 'Mailbox connection, labels, aliases, and sync state.' })
       .command('list', doc({ description: 'List connected email accounts.', output: list(emailAccount, 'Connected email accounts.') }))
       .command('get', doc({ description: 'Get one email account.', args: z.object({ ['account-id']: id('Email account id.') }), output: emailAccount }))
-      .command('status', doc({ description: 'Get agent mailbox connection, validation, and sync status.', output: emailAccount }))
+      .command('status', doc({ description: 'Get agent mailbox connection state plus a read-only summary of mailbox refresh state. Use `email refresh status` for pollers, cursors, and repair.', output: emailAccount }))
       .command('validate', doc({ description: 'Validate mailbox connectivity and permissions.', output: validationResult }))
       .command('labels', doc({ description: 'List provider labels for the connected mailbox.', output: z.object({ labels: z.array(z.string()).describe('Provider labels.') }) }))
       .command('aliases', doc({ description: 'List provider send-as aliases for the connected mailbox.', output: z.object({ aliases: z.array(z.string()).describe('Provider aliases.') }) })),
   )
   .command(
     Cli.create('thread', { description: 'Email-thread reads and actions.' })
-      .command('list', doc({ description: 'List email threads.', options: z.object({ query: z.string().optional().describe('Search query.'), label: z.array(z.string()).optional().describe('Provider label filter.'), ['triage-state']: z.array(z.string()).optional().describe('Origin triage-state filter.'), limit: z.number().optional().describe('Maximum thread count.') }), output: list(emailThread, 'Email threads.') }))
+      .command('list', doc({ description: 'List email threads.', options: z.object({ query: z.string().optional().describe('Search query.'), label: z.array(z.string()).optional().describe('Provider label filter.'), ['triage-state']: z.array(emailTriageState).optional().describe('Origin triage-state filter.'), limit: z.number().optional().describe('Maximum thread count.') }), output: list(emailThread, 'Email threads.') }))
       .command('get', doc({ description: 'Get one email thread.', args: z.object({ ['thread-id']: id('Thread id.') }), output: emailThread }))
       .command('context', doc({ description: 'Get one thread with linked entities, recent activity, and pending actions.', args: z.object({ ['thread-id']: id('Thread id.') }), output: emailThreadContext }))
       .command('search', doc({ description: 'Search the email domain.', options: z.object({ query: z.string().describe('Email search query.'), mode: z.enum(['exact', 'semantic', 'hybrid']).default('hybrid').describe('Search mode.'), limit: z.number().optional().describe('Maximum thread count.') }), output: list(emailThread, 'Matching threads.') }))
@@ -2817,9 +3092,9 @@ const email = Cli.create('email', {
   .command('reply-all', doc({ description: 'Reply to all recipients in an email thread.', args: z.object({ ['thread-id']: id('Thread id.') }), options: z.object({ body: markdown.describe('Reply body.') }), output: actionResult }))
   .command(
     Cli.create('triage', { description: 'Origin triage metadata for email threads.' })
-      .command('list', doc({ description: 'List triage records.', options: z.object({ state: z.array(z.string()).optional().describe('Triage-state filter.'), limit: z.number().optional().describe('Maximum record count.') }), output: list(emailTriageRecord, 'Email triage records.') }))
+      .command('list', doc({ description: 'List triage records.', options: z.object({ state: z.array(emailTriageState).optional().describe('Triage-state filter.'), limit: z.number().optional().describe('Maximum record count.') }), output: list(emailTriageRecord, 'Email triage records.') }))
       .command('get', doc({ description: 'Get triage metadata for a thread.', args: z.object({ ['thread-id']: id('Thread id.') }), output: emailTriageRecord }))
-      .command('set', doc({ description: 'Set Origin triage metadata for a thread. `state=archived` archives the triage overlay only and does not change provider mailbox archive state.', args: z.object({ ['thread-id']: id('Thread id.') }), options: z.object({ state: z.string().describe('Triage state.'), ['follow-up-at']: isoDateTime.optional().describe('Follow-up time.'), ['linked-task-id']: z.string().optional().describe('Linked task id.') }), output: actionResult }))
+      .command('set', doc({ description: 'Set Origin triage metadata for a thread. `state=archived` archives the triage overlay only and does not change provider mailbox archive state.', args: z.object({ ['thread-id']: id('Thread id.') }), options: z.object({ state: emailTriageState.describe('Triage state.'), ['follow-up-at']: isoDateTime.optional().describe('Follow-up time.'), ['linked-task-id']: z.string().optional().describe('Linked task id.') }), output: actionResult }))
       .command('clear', doc({ description: 'Clear the canonical triage record for a thread, including follow-up, task link, and internal triage note.', args: z.object({ ['thread-id']: id('Thread id.') }), output: actionResult })),
   )
   .command(
@@ -2849,7 +3124,8 @@ const email = Cli.create('email', {
     Cli.create('refresh', { description: 'Email refresh and cursor controls.' })
       .command('status', doc({ description: 'Inspect mailbox refresh status, selected mailbox surfaces, pollers, and cursors.', output: providerIngressStatus }))
       .command('run', doc({ description: 'Refresh recent email state and caches.', options: z.object({ since: isoDateTime.optional().describe('Lower time bound.') }), output: actionResult }))
-      .command('reset-cursor', doc({ description: 'Reset the provider refresh cursor for one mailbox.', options: z.object({ ['account-id']: z.string().optional().describe('Optional account id.') }), output: actionResult })),
+      .command('reset-cursor', doc({ description: 'Reset the provider refresh cursor for one mailbox.', options: z.object({ ['account-id']: z.string().optional().describe('Optional account id.') }), output: actionResult }))
+      .command('repair', doc({ description: 'Repair a degraded mailbox refresh poller or cursor after auth, cursor, or cache-hydration failures. This is the canonical mailbox repair surface.', options: z.object({ ['account-id']: z.string().optional().describe('Optional account id.') }), output: actionResult })),
   )
   .command(
     Cli.create('outbox', { description: 'Queued outbound email actions.' })
@@ -3014,12 +3290,12 @@ const telegram = Cli.create('telegram', {
       .command('set-token', doc({ description: 'Set or replace the Telegram bot token using a secure handoff ref from an operator-only channel. Do not type raw bot tokens into the agent CLI.', options: z.object({ ['token-ref']: secureRef.describe('Secure handoff ref for the Telegram bot token from BotFather.') }), output: actionResult }))
       .command('revoke', doc({ description: 'Revoke the stored Telegram bot token locally.', output: actionResult }))
       .command('validate', doc({ description: 'Validate the Telegram bot token and configuration.', output: validationResult }))
-      .command('configure', doc({ description: 'Configure tracked Telegram bot behavior such as privacy expectations for validation and default participation mode. In v1, tracked-group workflows require validated privacy mode `disabled`; `enabled` leaves groups visible for recovery only. Summary defaults only seed new or repaired group policy when that group has no explicit summary lookback; scheduling remains an Automation concern.', options: z.object({ ['privacy-mode']: z.enum(['enabled', 'disabled', 'unknown']).optional().describe('Observed or operator-expected privacy mode state used for validation. Tracked-group workflows require `disabled` in v1.'), ['default-mode']: z.enum(['observe', 'participate']).optional().describe('Default participation mode for enabled groups.'), ['default-summary-enabled']: z.boolean().optional().describe('Whether summaries are enabled by default for newly registered groups.'), ['default-summary-lookback']: duration.optional().describe('Default summary lookback for newly registered groups when summaries are enabled.') }), output: actionResult }))
+      .command('configure', doc({ description: 'Configure tracked Telegram bot behavior such as privacy expectations for validation and default participation mode. In v1, tracked-group workflows require validated privacy mode `disabled`; `enabled` or unknown leaves groups visible for recovery only. Summary defaults only seed new or repaired group policy when that group has no explicit summary lookback; scheduling remains an Automation concern.', options: z.object({ ['expected-privacy-mode']: z.enum(['enabled', 'disabled', 'unknown']).optional().describe('Operator-expected privacy mode used for validation. Tracked-group workflows require expected `disabled` in v1.'), ['default-mode']: z.enum(['observe', 'participate']).optional().describe('Default participation mode for enabled groups.'), ['default-summary-enabled']: z.boolean().optional().describe('Whether summaries are enabled by default for newly registered groups.'), ['default-summary-lookback']: duration.optional().describe('Default summary lookback for newly registered groups when summaries are enabled.') }), output: actionResult }))
       .command('refresh-metadata', doc({ description: 'Refresh bot metadata and membership state from Telegram.', output: actionResult })),
   )
   .command(
     Cli.create('chat', { description: 'Known Telegram chats and group state.' })
-      .command('list', doc({ description: 'List known Telegram chats and lightweight discovery state. A chat only becomes actively tracked after explicit group registration.', options: z.object({ query: z.string().optional().describe('Search query.'), kind: z.array(z.string()).optional().describe('Chat kind filter.'), limit: z.number().optional().describe('Maximum chat count.') }), output: list(telegramChat, 'Telegram chats.') }))
+      .command('list', doc({ description: 'List known Telegram chats and lightweight discovery state. A chat only becomes an actively tracked surface after explicit `group` or `supergroup` registration.', options: z.object({ query: z.string().optional().describe('Search query.'), kind: z.array(z.string()).optional().describe('Chat kind filter.'), limit: z.number().optional().describe('Maximum chat count.') }), output: list(telegramChat, 'Telegram chats.') }))
       .command('get', doc({ description: 'Get one Telegram chat or lightweight discovery record.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), output: telegramChat }))
       .command('context', doc({ description: 'Get one Telegram chat with policy, cached messages, and recent activity.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), output: telegramChatContext }))
       .command('recent', doc({ description: 'List recently active Telegram chats.', options: z.object({ limit: z.number().optional().describe('Maximum chat count.') }), output: list(telegramChat, 'Recent Telegram chats.') }))
@@ -3030,8 +3306,8 @@ const telegram = Cli.create('telegram', {
     Cli.create('group', { description: 'Telegram group participation controls.' })
       .command('list', doc({ description: 'List registered Telegram groups.', output: list(telegramGroupPolicy, 'Registered Telegram group policies.') }))
       .command('get', doc({ description: 'Get one group policy.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), output: telegramGroupPolicy }))
-      .command('register', doc({ description: 'Register a group after the bot has been invited. Registration is the step that turns lightweight chat discovery into active Origin tracking and policy management.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), output: actionResult }))
-      .command('enable', doc({ description: 'Enable a group for observation or active bot participation. Summary policy is configured separately. Full tracked-group operation requires validated privacy mode `disabled` in v1.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), options: z.object({ mode: z.enum(['observe', 'participate']).describe('Participation mode for the enabled group.') }), output: actionResult }))
+      .command('register', doc({ description: 'Register a group after the bot has been invited. Registration is the step that turns lightweight chat discovery into active Origin tracking and policy management. Only `group` and `supergroup` chats may be registered as tracked surfaces in v1.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), output: actionResult }))
+      .command('enable', doc({ description: 'Enable a registered group for observation or active bot participation. Summary policy is configured separately. Full tracked-group operation requires validated privacy mode `disabled` in v1.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), options: z.object({ mode: z.enum(['observe', 'participate']).describe('Participation mode for the enabled group.') }), output: actionResult }))
       .command('disable', doc({ description: 'Disable a Telegram group subscription.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), output: actionResult }))
       .command(
         Cli.create('mode', { description: 'Group participation mode.' }).command(
@@ -3047,9 +3323,15 @@ const telegram = Cli.create('telegram', {
       .command(
         Cli.create('policy', { description: 'Per-group policy controls.' })
           .command('summary-set', doc({ description: 'Set summary policy for a group. This is the canonical per-group summary lookback and overrides connection defaults for that group. Scheduling stays in Automation.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), options: z.object({ enabled: z.boolean().describe('Whether summaries are enabled.'), lookback: duration.optional().describe('Optional summary lookback.') }), output: actionResult }))
-          .command('mention-set', doc({ description: 'Set mention tracking policy for a group.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), options: z.object({ enabled: z.boolean().describe('Whether mention tracking is enabled.') }), output: actionResult }))
+          .command('mention-set', doc({ description: 'Set mention tracking policy for a group. This enables or disables derived mention signals and mention-triggered workflows; it does not change message visibility. Disabling mention tracking clears retained unread mention signals for that group.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), options: z.object({ enabled: z.boolean().describe('Whether mention tracking is enabled.') }), output: actionResult }))
           .command('cache-set', doc({ description: 'Set message-cache policy for a group. This controls best-effort cache warming and retention above the mandatory offline floor.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), options: z.object({ enabled: z.boolean().describe('Whether additional recent message caching above the mandatory offline floor is enabled.') }), output: actionResult })),
       ),
+  )
+  .command(
+    Cli.create('mention', { description: 'Retained Telegram mention signals for tracked groups.' })
+      .command('list', doc({ description: 'List retained Telegram mention signals. `status=unread` is the unread-mention surface for active tracked groups.', options: z.object({ ['chat-id']: z.string().optional().describe('Optional Telegram chat id filter.'), status: z.array(z.enum(['unread', 'acknowledged'])).optional().describe('Optional mention-status filter.'), limit: z.number().optional().describe('Maximum mention count.') }), output: list(telegramMention, 'Telegram mention signals.') }))
+      .command('get', doc({ description: 'Get one retained Telegram mention signal.', args: z.object({ ['mention-id']: id('Telegram mention signal id.') }), output: telegramMention }))
+      .command('ack', doc({ description: 'Acknowledge one retained Telegram mention signal. This removes it from unread-mention views without deleting the underlying activity event.', args: z.object({ ['mention-id']: id('Telegram mention signal id.') }), output: actionResult })),
   )
   .command(
     Cli.create('message', { description: 'Direct Telegram bot messages.' })
@@ -3065,7 +3347,7 @@ const telegram = Cli.create('telegram', {
       .command('get', doc({ description: 'Get one Telegram summary job.', args: z.object({ ['summary-id']: id('Summary job id.') }), output: telegramSummaryJob }))
       .command('run', doc({ description: 'Generate a summary for a Telegram group over a recent lookback window.', args: z.object({ ['chat-id']: id('Telegram chat id.') }), options: z.object({ lookback: duration.default('24h').describe('Lookback window to summarize.') }), output: actionResult }))
       .command('post', doc({ description: 'Post a generated summary into a Telegram group.', args: z.object({ ['summary-id']: id('Summary job id.') }), output: actionResult }))
-      .command('next', doc({ description: 'Return the next groups whose summary policy is enabled and that are targeted by active summary automations.', output: list(telegramSummaryJob, 'Next Telegram summary candidates.') })),
+      .command('next', doc({ description: 'Return the next groups whose summary policy is enabled and that are targeted by active summary automations. This is a candidate-selection surface, not an existing summary-job list.', output: list(telegramSummaryCandidate, 'Next Telegram summary candidates.') })),
   )
   .command(
     Cli.create('cache', { description: 'Telegram cache controls.' })
@@ -3092,7 +3374,7 @@ const telegram = Cli.create('telegram', {
 const automationCli = Cli.create('automation', {
   description: 'First-class automation objects, schedules, runs, failures, and queue state.',
 })
-  .command('list', doc({ description: 'List automations.', options: z.object({ status: z.array(z.string()).optional().describe('Automation status filter.'), trigger: z.array(z.string()).optional().describe('Trigger filter.'), ['linked-task']: z.array(z.string()).optional().describe('Linked task filter.'), limit: z.number().optional().describe('Maximum automation count.') }), output: list(automation, 'Automations.') }))
+  .command('list', doc({ description: 'List automations.', options: z.object({ status: z.array(automationStatus).optional().describe('Automation status filter.'), trigger: z.array(z.string()).optional().describe('Trigger filter.'), ['linked-task']: z.array(z.string()).optional().describe('Linked task filter.'), limit: z.number().optional().describe('Maximum automation count.') }), output: list(automation, 'Automations.') }))
   .command('get', doc({ description: 'Get one automation.', args: z.object({ ['automation-id']: id('Automation id.') }), output: automation }))
   .command('create', doc({ description: 'Create an automation. The persisted automation kind is derived from the trigger shape and is not supplied separately.', options: z.object({ name: z.string().describe('Canonical automation name.'), slug: z.string().optional().describe('Stable automation slug or machine key.'), ['description-md']: markdown.optional().describe('Canonical automation description markdown.'), trigger: automationTrigger.describe('Typed trigger definition.'), actions: z.array(automationAction).describe('Ordered action definitions.'), ['linked-task-ids']: z.array(z.string()).optional().describe('Linked task ids.'), ['linked-calendar-item-ids']: z.array(z.string()).optional().describe('Linked calendar item ids.'), ['linked-project-ids']: z.array(z.string()).optional().describe('Linked project ids.'), ['label-ids']: z.array(z.string()).optional().describe('Linked label ids.'), ['notification-policy']: z.record(z.string(), z.unknown()).optional().describe('Notification policy.'), ['run-policy']: automationRunPolicy.optional().describe('Run policy. Defaults to serial execution, skipped catch-up, and stop-on-error.'), ['retry-policy']: automationRetryPolicy.optional().describe('Retry policy. Defaults to three total attempts with exponential backoff.'), source: z.string().optional().describe('Definition source when known.') }), output: actionResult }))
   .command('update', doc({ description: 'Update an automation.', args: z.object({ ['automation-id']: id('Automation id.') }), options: z.object({ name: z.string().optional().describe('New canonical automation name.'), slug: z.string().optional().describe('Replacement stable slug or machine key.'), ['description-md']: markdown.optional().describe('Replacement canonical automation description markdown.'), trigger: automationTrigger.optional().describe('Replacement trigger.'), actions: z.array(automationAction).optional().describe('Replacement actions.'), ['linked-task-ids']: z.array(z.string()).optional().describe('Replacement linked task ids.'), ['linked-calendar-item-ids']: z.array(z.string()).optional().describe('Replacement linked calendar item ids.'), ['linked-project-ids']: z.array(z.string()).optional().describe('Replacement linked project ids.'), ['label-ids']: z.array(z.string()).optional().describe('Replacement linked label ids.'), ['notification-policy']: z.record(z.string(), z.unknown()).optional().describe('Notification policy patch.'), ['run-policy']: automationRunPolicy.partial().optional().describe('Run policy patch.'), ['retry-policy']: automationRetryPolicy.partial().optional().describe('Retry policy patch.'), source: z.string().optional().describe('Definition source patch.') }), output: actionResult }))
@@ -3113,9 +3395,9 @@ const automationCli = Cli.create('automation', {
   .command('queue', doc({ description: 'Inspect the automation execution queue.', output: list(queueStatus, 'Automation queue entries.') }))
   .command('failures', doc({ description: 'List recent failed automation runs.', output: list(automationRun, 'Failed automation runs.') }))
   .command('stats', doc({ description: 'Summarize automation health and execution counts.', output: activitySummary }))
-  .command('run', doc({ description: 'Run an automation immediately.', args: z.object({ ['automation-id']: id('Automation id.') }), options: z.object({ reason: z.string().optional().describe('Manual run reason.') }), output: actionResult }))
-  .command('skip-next', doc({ description: 'Skip the next scheduled run of an automation.', args: z.object({ ['automation-id']: id('Automation id.') }), output: actionResult }))
-  .command('backfill', doc({ description: 'Backfill missed scheduled runs where policy allows catch-up.', args: z.object({ ['automation-id']: id('Automation id.') }), options: z.object({ from: isoDateTime.optional().describe('Backfill lower bound.'), to: isoDateTime.optional().describe('Backfill upper bound.') }), output: actionResult }))
+  .command('run', doc({ description: 'Queue or start a manual run on the execution home immediately. Allowed for any non-`disabled`, non-`archived` automation regardless of trigger type; records actor/reason and sets no `scheduled-at` or `activity-event-id`.', args: z.object({ ['automation-id']: id('Automation id.') }), options: z.object({ reason: z.string().optional().describe('Manual run reason.') }), output: actionResult }))
+  .command('skip-next', doc({ description: 'Execution-home-only schedule control for an active scheduled or hybrid automation. Reserve exactly one next eligible scheduled boundary as `skipped`; event triggers are unaffected.', args: z.object({ ['automation-id']: id('Automation id.') }), output: actionResult }))
+  .command('backfill', doc({ description: 'Execution-home-only manual catch-up for a scheduled or hybrid automation. Materialize missed eligible scheduled boundaries inside the requested window using normal dedupe rules; requires `run-policy.catch-up` to be `one` or `all`.', args: z.object({ ['automation-id']: id('Automation id.') }), options: z.object({ from: isoDateTime.optional().describe('Backfill lower bound.'), to: isoDateTime.optional().describe('Backfill upper bound.') }), output: actionResult }))
   .command(
     Cli.create('runs', { description: 'Automation run history and controls.' })
       .command('list', doc({ description: 'List runs for one automation or all automations.', options: z.object({ ['automation-id']: z.string().optional().describe('Optional automation filter.'), since: isoDateTime.optional().describe('Lower time bound.'), until: isoDateTime.optional().describe('Upper time bound.'), limit: z.number().optional().describe('Maximum run count.') }), output: list(automationRun, 'Automation runs.') }))
@@ -3227,10 +3509,10 @@ const sync = Cli.create('sync', {
       .command('resolve', doc({ description: 'Mark one outbox item resolved after inspection.', args: z.object({ ['outbox-id']: id('Outbox item id.') }), output: actionResult })),
   )
   .command(
-    Cli.create('intent', { description: 'Replicated external-action intents that materialize into provider or job outbox work.' })
-      .command('list', doc({ description: 'List replicated external-action intents.', options: z.object({ provider: z.array(z.string()).optional().describe('Optional provider filter.'), status: z.array(z.string()).optional().describe('Optional intent-status filter.'), limit: z.number().optional().describe('Maximum intent count.') }), output: list(externalActionIntent, 'External-action intents.') }))
+    Cli.create('intent', { description: 'Replicated external-action intents that materialize into provider or planning-bridge outbox work.' })
+      .command('list', doc({ description: 'List replicated external-action intents.', options: z.object({ provider: z.array(externalActionIntentProviderFilter).optional().describe('Optional provider filter.'), kind: z.array(externalActionIntentKindFilter).optional().describe('Optional intent-kind filter.'), action: z.array(externalActionIntentActionFilter).optional().describe('Optional intent-action filter.'), status: z.array(externalActionIntentStatusFilter).optional().describe('Optional intent-status filter.'), limit: z.number().optional().describe('Maximum intent count.') }), output: list(externalActionIntent, 'External-action intents.') }))
       .command('get', doc({ description: 'Get one external-action intent.', args: z.object({ ['intent-id']: id('Intent id.') }), output: externalActionIntent }))
-      .command('retry', doc({ description: 'Retry materialization of one failed external-action intent.', args: z.object({ ['intent-id']: id('Intent id.') }), output: actionResult }))
+      .command('retry', doc({ description: 'Retry one failed external-action intent while preserving the same logical intent id. If the intent has not yet materialized, this retries validation/materialization. If it already has linked outbox work, this requests repair or re-dispatch through that existing logical intent instead of forcing the operator down to provider-specific outbox commands.', args: z.object({ ['intent-id']: id('Intent id.') }), output: actionResult }))
       .command('cancel', doc({ description: 'Cancel one pending or failed external-action intent before or after materialization when safe to do so.', args: z.object({ ['intent-id']: id('Intent id.') }), output: actionResult })),
   )
   .command('conflicts', doc({ description: 'List outstanding sync conflicts.', options: z.object({ limit: z.number().optional().describe('Maximum conflict count.') }), output: list(syncConflict, 'Sync conflicts.') }))

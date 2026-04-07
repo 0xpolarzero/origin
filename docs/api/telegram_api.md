@@ -55,7 +55,8 @@ Origin may keep the following Telegram-related local state:
 
 This state is metadata and cache, not a full mirrored copy of Telegram.
 New chats discovered by polling may create lightweight `TelegramChatRef` discovery state only; they do not become actively tracked, summarized, or fully cached until the user explicitly registers the group.
-`TelegramBotConnection` and `TelegramRecentMessageCache` are operational read models.
+In v1, a tracked Telegram surface is only a registered `group` or `supergroup` backed by `TelegramGroupSubscription`. Direct messages and channels may still exist as `TelegramChatRef` discovery/read/action surfaces, but they are not tracked-policy surfaces and they do not receive the tracked-group offline/cache/summary/mention contract.
+`TelegramBotConnection`, `TelegramChatRef`, and `TelegramSummaryJobRecord` are read-model/config records.
 `TelegramGroupSubscription` is the replicated overlay for tracked group policy and membership state.
 `TelegramOutgoingAction` is the server outbox for Telegram mutations.
 
@@ -66,10 +67,11 @@ Telegram remains provider-canonical, but Origin guarantees the following minimum
 - Replicated overlay durability: all `TelegramGroupSubscription` objects and related `ExternalActionIntent` records are fully available offline on every synced client.
 - Connection/status floor: the last successful `TelegramBotConnection` validation snapshot and tracked `TelegramChatRef` metadata remain client-visible offline.
 - Tracked-message floor: for each enabled group subscription, at least the most recent 200 cached messages or 72 hours of message history (whichever is smaller) remains offline-visible after a successful sync.
-- Mention/summarization floor: mention flags, summary policy, and the latest 30 `TelegramSummaryJobRecord` entries per tracked group remain offline-visible.
-- Outbound intent floor: offline send/reply/policy-change requests are durably captured as replicated intent/overlay updates and replay from the provider execution home when connectivity and provider access are valid.
+- Mention/summarization floor: mention flags, retained `TelegramMentionSignal` state, summary policy, and the latest 30 `TelegramSummaryJobRecord` entries per tracked group remain offline-visible.
+- Outbound intent floor: offline send/reply requests are durably captured as replicated intent and replay from the provider execution home when connectivity and provider access are valid. Group policy changes are replicated overlay/config updates.
+- Send/reply requests become `ExternalActionIntent` records. Group register/enable/disable and summary/cache/mention policy changes are overlay/config mutations.
 
-Outside these minimums, recent-message cache windows are evictable and may require best-effort provider rehydration.
+These offline floors apply to the Telegram read-model/config surface already synced to the client. `TelegramRecentMessageCache` remains execution-home-local cache backing that projected message visibility rather than a peer-owned raw cache mirror. Outside these minimums, recent-message cache windows are evictable and may require best-effort provider rehydration.
 
 ## Shared Types
 
@@ -94,6 +96,13 @@ Outside these minimums, recent-message cache windows are evictable and may requi
 
 - `enabled`
 - `disabled`
+
+### `TelegramGroupOperabilityStatus`
+
+- `active`
+- `degraded_privacy`
+- `degraded_membership`
+- `degraded_permissions`
 
 ### `TelegramChatKind`
 
@@ -153,7 +162,8 @@ Fields:
 - `botDisplayName`
 - `botTokenSecretRef`
 - `status: TelegramConnectionStatus`
-- `privacyMode: TelegramPrivacyMode`
+- `expectedPrivacyMode: TelegramPrivacyMode | "unknown"`
+- `observedPrivacyMode: TelegramPrivacyMode | "unknown"`
 - `allowedChatIds[]`
 - `defaultParticipationMode: TelegramParticipationMode`
 - `defaultSummaryLookbackMinutes`
@@ -166,6 +176,8 @@ Fields:
 `defaultSummaryLookbackMinutes` is a connection-level fallback for new or unset group summary policies; it seeds group policy but does not override an explicit group value.
 Summary policy and subscription enablement are separate group-level settings.
 `allowedChatIds[]` is an operational allowlist derived from group subscriptions and bot membership, not the source of truth.
+Origin persists `expectedPrivacyMode` as operator-set configuration and `observedPrivacyMode` as the last validation snapshot. `TelegramConnectionStatus` remains an auth/credential state, not a tracked-group readiness state.
+If the bot token is valid but `observedPrivacyMode` is `enabled` or unknown, tracked-group workflows are degraded: registered groups remain visible for recovery, but Origin must not treat them as operationally enabled for ambient observation, mention-triggered workflows, summaries, or participation that depends on ordinary group traffic.
 
 Operational ownership under the shared provider ingress model:
 
@@ -205,6 +217,7 @@ Fields:
 - `updatedAt`
 
 `TelegramChatRef` is discovery and read-model state. `tracked` is derived from the canonical group subscription state; it does not authorize tracking by itself.
+`TelegramChatRef` may exist for direct messages, groups, supergroups, or channels, but `tracked = true` is reserved for registered groups/supergroups and is derived from `TelegramGroupSubscription`.
 
 ### `TelegramGroupSubscription`
 
@@ -216,6 +229,7 @@ Fields:
 - `id`
 - `chatRefId`
 - `subscriptionState: TelegramGroupSubscriptionState`
+- `operabilityStatus: TelegramGroupOperabilityStatus`
 - `participationMode: TelegramParticipationMode`
 - `summaryEnabled`
 - `summaryLookbackMinutes`
@@ -228,6 +242,9 @@ Fields:
 Normative model:
 
 - `subscriptionState` controls whether the group is actively tracked by Origin.
+- `TelegramGroupSubscription` applies only to `group` and `supergroup` chat refs in v1. Registering or enabling a direct message or channel as a tracked surface must be rejected.
+- `subscriptionState` is the operator-authored desired tracking state.
+- `operabilityStatus` is a server-derived readiness state for tracked-group workflows. It does not replace `subscriptionState`.
 - `participationMode` applies only when `subscriptionState=enabled` and controls interactive bot behavior.
 - `summaryEnabled` is independent of `participationMode` and controls whether summary workflows may run or post for the group.
 - `summaryLookbackMinutes` is the canonical per-group summary lookback window in minutes. It is context for summary generation, not a posting cadence or scheduler.
@@ -236,8 +253,10 @@ Normative model:
 - `messageCacheEnabled` controls proactive warming or retention above the mandatory offline/client floor; it does not disable that minimum floor for enabled groups after a successful sync.
 - `disabledAt` records when the subscription was last disabled; it is not a separate mode.
 - A discovered chat only becomes actively tracked after an explicit group registration creates or updates this subscription.
-- If the connected bot validates with privacy mode `enabled`, the subscription remains visible for recovery but is treated as disabled/degraded for tracked-group workflows until privacy mode is corrected.
-- If the bot loses membership or the permissions needed for the requested mode, Origin must mark the subscription disabled, refresh the chat ref, and surface the loss as a validation / recovery problem until the operator restores access and re-registers or re-enables the group.
+- If the connected bot validates with privacy mode `enabled` or unknown, the subscription remains visible for recovery with degraded operability until privacy mode is corrected.
+- If the bot loses membership or the permissions needed for the requested mode, Origin must refresh the chat ref, degrade operability, and surface the loss as a validation / recovery problem until the operator restores access.
+- `mentionTrackingEnabled` controls only derived mention signals for messages the bot can already read. When enabled, Origin may set mention flags, emit `telegram.message.mentioned`, create `TelegramMentionSignal` records, surface unread-mention views, and run mention-triggered automations. When disabled, Origin may still cache messages and run manual or scheduled summaries, but it must not emit `telegram.message.mentioned` or retain unread mention state for that group.
+- In v1, a Telegram mention is an explicit mention of the connected bot username or another configured owner/agent Telegram handle that Origin can map unambiguously to the profile.
 
 ### `TelegramRecentMessageCache`
 
@@ -258,6 +277,30 @@ Fields:
 - `cachedAt`
 - `expiresAt`
 
+### `TelegramMentionSignal`
+
+Represents a retained mention signal derived from `telegram.message.mentioned` for unread-mention views and mention acknowledgment.
+
+Fields:
+
+- `id`
+- `activityEventId`
+- `chatRefId`
+- `messageId`
+- `status: "unread" | "acknowledged"`
+- `createdAt`
+- `acknowledgedAt`
+- `acknowledgedByActor`
+
+Normative model:
+
+- A `TelegramMentionSignal` is created only when Origin emits `telegram.message.mentioned` for an active tracked group with `mentionTrackingEnabled = true`.
+- New mention signals start at `status = "unread"`.
+- The unread-mention surface is the set of retained mention signals whose status is `unread`.
+- Acknowledging a mention transitions that one signal to `status = "acknowledged"` and records `acknowledgedAt` plus `acknowledgedByActor`.
+- Disabling mention tracking for a group must clear that group's unread-mention surface by acknowledging or deleting any retained unread mention signals for the group before new signals are suppressed.
+- Re-enabling mention tracking does not recreate old signals retroactively; only later ingress may create new mention signals.
+
 ### `TelegramOutgoingAction`
 
 Represents an outbound message or other bot action waiting to be applied.
@@ -270,12 +313,15 @@ Fields:
 - `replyToMessageId`
 - `payload`
 - `status: TelegramOutgoingActionStatus`
+- `originIntentId`
 - `dedupeKey`
 - `queuedAt`
 - `attemptedAt`
 - `succeededAt`
 - `failedAt`
 - `lastError`
+
+`originIntentId` links the outbox record back to the canonical replicated `ExternalActionIntent` that caused it.
 
 ### `TelegramSummaryJobRecord`
 
@@ -320,6 +366,8 @@ Origin should expose a Telegram query surface that is useful to the agent and th
 - fetch recent updates relevant to a tracked chat
 - list unread mentions or groups whose summary policy and automations indicate a summary may be useful
 
+Origin does not rely on Telegram read receipts in v1. "Unread mentions" means retained `TelegramMentionSignal` records in `status = "unread"` for active tracked groups.
+
 ### Search and retrieval
 
 - search within cached recent messages
@@ -354,6 +402,10 @@ Search should be limited to what Origin has cached or can reasonably fetch on de
 - set group summary policy
 - set group mention tracking policy
 - set group cache policy
+- list retained mention signals
+- acknowledge one retained mention signal
+
+Only `group` and `supergroup` chats may become tracked surfaces in v1. Direct messages and channels may still be queried or messaged where the bot can act, but they do not have `TelegramGroupSubscription`.
 
 Enable / disable is a subscription-state change.
 Participation mode and summary policy are separate settings on an enabled group.
@@ -383,6 +435,7 @@ Participation mode and summary policy are separate settings on an enabled group.
 - Telegram remains the source of truth.
 - Origin stores bot identity, chat refs, recent message windows, and outbound actions as server-side operational state and read models derived from Telegram ingress.
 - `TelegramGroupSubscription` is the replicated Origin overlay for tracked-group policy and lifecycle state.
+- `TelegramBotConnection`, `TelegramChatRef`, `TelegramMentionSignal`, and `TelegramSummaryJobRecord` are the client-visible Telegram read-model/config layer.
 - Origin stores recent message windows as a selective, recent, bounded cache for agent workflow speed and short-lived robustness.
 - Chat refs and group policy are expected to survive cache eviction or repair.
 - Recent message caches are evictable and are not a durable history store.
@@ -398,6 +451,7 @@ Telegram group participation is first-class.
 Origin models each tracked group on separate axes:
 
 - subscription state: `enabled` or `disabled`
+- operability state: active or degraded because privacy, membership, or permissions are not currently sufficient
 - participation mode: `observe` or `participate`
 - summary policy: enabled or disabled
 - summary lookback: per-group override or bot-level default seed; scheduling remains Automation-owned
@@ -406,9 +460,9 @@ These axes must not be collapsed into one overloaded mode field.
 
 Membership and permission loss follow a strict lifecycle:
 
-- if the bot is removed from a group or loses the permissions required for the tracked mode, the subscription is disabled
-- disabled subscriptions remain visible for recovery, but they do not generate summaries or outbound participation actions until access is restored
-- a re-scan or explicit re-registration can re-enable the subscription once the bot is invited back and permissions are valid again
+- if the bot is removed from a group or loses the permissions required for the tracked mode, operability is degraded and the subscription remains visible for recovery
+- degraded subscriptions do not generate summaries, mention-triggered workflows, or outbound participation actions until access is restored
+- a re-scan or explicit re-registration can restore active operability once the bot is invited back, permissions are valid, and privacy validation is satisfied
 
 Origin should support:
 
@@ -435,6 +489,8 @@ That canonical ingress family is:
 - tracked-chat message changes: `telegram.message.received`, `telegram.message.mentioned`
 
 Canonical Telegram summary lifecycle activity kinds in v1 are `telegram.summary.generated` and `telegram.summary.posted`. They are Telegram-domain first-party activity emitted from `TelegramSummaryJobRecord` lifecycle, not provider-ingress message events, and they carry `sourceScope.chatId` plus `attributes.summaryTriggerKind`.
+`telegram.summary.generated` and `telegram.summary.posted` are first-party triggerable activity events and therefore use the same normalized activity-event envelope as provider ingress. When a summary event is emitted as a downstream projection of one ingress event, it must carry `causedByActivityEventId`.
+`telegram.message.mentioned` is emitted only for active tracked groups whose `mentionTrackingEnabled = true`. Each emitted mention event may create one retained `TelegramMentionSignal` for unread-mention views until that signal is acknowledged. Disabling mention tracking does not suppress `telegram.message.received`.
 
 Bot validation, group subscription changes, participation-policy changes, summary-job records, and outbound action outcomes may still appear in Telegram-domain activity, but they are not alternate provider-backed trigger kinds for the same Telegram message.
 

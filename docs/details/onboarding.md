@@ -152,7 +152,7 @@ In `vps` mode, the inputs for this phase may be gathered earlier, but the actual
 - `token-ref` is required; raw bot token strings are rejected on the normal agent CLI surface.
 - The mutation stores `TelegramBotConnection.botTokenSecretRef` as the durable credential reference used by runtime validation and polling.
 - Configure the bot for group participation.
-- Configure the bot for the maximum access model Telegram allows for v1, including privacy mode settings required to receive group messages. Origin validates the observed privacy mode state; it does not mutate BotFather privacy settings itself.
+- Configure the bot for the maximum access model Telegram allows for v1, including privacy mode settings required to receive group messages. Origin records the expected privacy mode for later validation and validates the observed privacy mode state; it does not mutate BotFather privacy settings itself.
 - In `vps` mode, store the bot token reference and create server-owned pollers only after the VPS/server exists.
 
 ### Required user input
@@ -165,12 +165,20 @@ In `vps` mode, the inputs for this phase may be gathered earlier, but the actual
 
 ### Persistence
 
-- provider connection records
-- encrypted token material or secure token references
-- provider-specific scope grants
+- portable/durable setup state:
+  - provider connection records
+  - encrypted token material or secure token references
+  - provider-specific scope grants
+  - GitHub App installation grant metadata and selected repo/org scope
+  - Telegram bot configuration state, including expected privacy mode
+  - stored Telegram `botTokenSecretRef` created from the secure `token-ref` handoff
+- execution-home-local state re-established on the active provider execution home:
+  - pollers
+  - cursors
+  - backoff/rate-limit state
+  - primary provider caches
+  - provider outboxes
 - GitHub App installation grant metadata and selected repo/org scope
-- Telegram bot configuration state
-- stored Telegram `botTokenSecretRef` created from the secure `token-ref` handoff
 
 ### Success criteria
 
@@ -215,11 +223,16 @@ Origin configures the agent mailbox and planning surfaces.
 
 ### Persistence
 
-- mailbox connection state
-- calendar/task bridge attachment configuration
-- shared calendar and task-list identifiers
-- server-owned poller and cursor state for attached bridge surfaces
-- forwarding configuration references if used
+- portable/durable setup state:
+  - mailbox connection state
+  - calendar/task bridge attachment configuration
+  - shared calendar and task-list identifiers
+  - forwarding configuration references if used
+- execution-home-local state:
+  - server-owned poller and cursor state for attached bridge surfaces
+  - backoff/rate-limit state
+  - primary provider caches
+  - provider outboxes
 
 ### Success criteria
 
@@ -252,20 +265,22 @@ Origin configures the Telegram bot for group use.
 - In v1, the bot validates with privacy mode `disabled` for tracked-group workflows.
 - The bot can receive the group traffic needed for summaries and participation.
 - Each selected group has an active Origin registration/subscription record, not just a raw bot membership reference.
+- In v1, only Telegram `group` and `supergroup` chats are registered as tracked surfaces.
 
 ### Failure / recovery
 
-- If group permissions are insufficient or privacy mode remains enabled, Origin explains the missing settings and asks the user to adjust the group or bot configuration.
+- If group permissions are insufficient or privacy mode remains enabled or unknown, Origin explains the missing settings and asks the user to adjust the group or bot configuration. Registered groups may remain visible for recovery, but tracked-group workflows are not considered complete until validation succeeds.
 
 ## Phase 7: Workspace, Vault, And Memory
 
-Origin attaches the managed workspace root, initializes or adopts the vault at that same root, and ensures the agent memory file exists.
+On filesystem-bearing peers, Origin attaches the managed workspace root, initializes or adopts the vault at that same root, and ensures the agent memory file exists.
+On non-filesystem-bearing peers, including iPhone, Origin does not ask for a workspace path and does not run vault attach/reconcile. It ensures replicated notes are available locally and that the canonical `Origin/Memory.md` note exists and is editable in-app.
 
 In `vps` mode, this phase configures the current peer only. After Phase 9 deploys the VPS/server, that server instance may run the same attach/init flow against its own host path before server-side external filesystem editing is enabled there.
 
 ### Required user input
 
-- confirmation of the managed workspace root / attach path for the current peer
+- confirmation of the managed workspace root / attach path for the current peer when that peer hosts a filesystem-backed vault
 - any preferred initial folder names
 - any initial memory facts or preferences the user wants stored immediately
 
@@ -296,11 +311,12 @@ In `vps` mode, this phase configures the current peer only. After Phase 9 deploy
 
 ### Success criteria
 
-- The current peer's managed workspace root is attached and writable.
-- The vault exists at that peer-local workspace root and is writable.
+- On filesystem-bearing peers, the current peer's managed workspace root is attached and writable.
+- On filesystem-bearing peers, the vault exists at that peer-local workspace root and is writable.
 - `Origin/Memory.md` exists and is visible in the app.
 - The agent can read and update memory through the memory protocol.
 - Any existing markdown files under the managed workspace root are adopted as managed notes or moved out of the managed root during reconcile; they are never treated as opaque local artifacts once the workspace is attached.
+- On non-filesystem-bearing peers, replicated notes and memory are available locally without a peer-local vault path.
 
 ## Phase 8: Notifications
 
@@ -391,7 +407,7 @@ During onboarding, Origin should persist:
 - GitHub App installation grant metadata and selected repo/org scope
 - Telegram `botTokenSecretRef` credential reference
 - selected calendars, tasks, and mailbox configuration
-- peer-local vault and memory file locations
+- peer-local vault locations for peers that host a vault, plus the logical managed note path for `Origin/Memory.md`
 - notification preferences and tokens
 - VPS deployment metadata if applicable
 - If the user later moves from local to VPS mode, replicated app state syncs to the VPS, while secrets and provider operational state are re-established there instead of opaque-migrated. Local-only workspace artifacts stay on the original host unless they are explicitly imported or re-materialized.

@@ -117,6 +117,13 @@ Recommended shapes:
 - `disabled`
 - `archived`
 
+Normative status semantics in v1:
+
+- `active`: eligible for schedule evaluation, reactive event matching, and explicit manual run requests.
+- `paused`: suppresses automatic schedule and event starts only. Matching reactive events are ignored while paused and are not replayed later. Scheduled boundaries that pass while paused are not counted as missed for `catchUp`. Explicit `automation run` remains allowed. In-flight runs continue unless canceled separately.
+- `disabled`: suppresses all new starts, including schedule, event, manual `automation run`, and `automation backfill`. In-flight runs continue unless canceled separately.
+- `archived`: retained for history/query only. Archived automations are not eligible for schedule evaluation, event matching, manual run, `skip-next`, or backfill.
+
 #### `RunStatus`
 
 - `queued`
@@ -232,6 +239,15 @@ Required v1 fields:
 - `catchUp: "skip" | "one" | "all" = "skip"`
 - `continueOnError: boolean = false`
 
+Normative run-policy semantics in v1:
+
+- `allowOverlap = false` means the runtime must not have more than one run of the same automation in status `running` at the same time. Distinct triggers may still produce later queued runs with their own logical identities, but they must execute serially.
+- `allowOverlap = true` permits concurrent `running` runs for distinct logical triggers. Dedupe still uses `(automationId, scheduledAt)` for scheduled runs and `(automationId, activityEventId)` for reactive runs.
+- `catchUp` applies only to the scheduled side of `schedule` and `hybrid` triggers, and only for schedule boundaries that became due while the automation was `active`.
+- `catchUp = "skip"` creates no retroactive scheduled run.
+- `catchUp = "one"` creates at most one retroactive scheduled run, anchored to the latest eligible missed `scheduledAt`.
+- `catchUp = "all"` creates one retroactive scheduled run per eligible missed `scheduledAt`, in chronological order.
+
 ### `retryPolicy`
 
 Controls retry behavior on failure.
@@ -322,7 +338,9 @@ For provider-backed reactive workflows, `eventKinds[]` should point at fine-grai
 
 `sourceScope` limits which objects or providers can emit matching events; it does not redefine the event kind itself.
 
-Filter evaluation is against the normalized ingress event contract from [provider_ingress_api.md](./provider_ingress_api.md), not provider-native webhook or polling payloads.
+Filter evaluation is against the normalized activity-event contract from [provider_ingress_api.md](./provider_ingress_api.md), not provider-native webhook or polling payloads.
+
+First-party domain lifecycle events that are intended to trigger automations must use that same normalized activity-event envelope for the shared triggerable fields: `kind`, `status`, `actor`, `at`, `sourceScope`, `changeKinds[]`, `attributes`, `sourceRefs[]`, `entityRefs[]`, `causedByActivityEventId`, and `traceId`. Provider-only fields such as `provider`, `pollerId`, and `upstreamChangeBoundary` remain optional and are normally absent on pure first-party events.
 
 `sourceScope` is a structured object, not an open-ended map. In v1, `provider` is a single exact-match string and the remaining keys are arrays of exact ids or refs. A trigger matches when every supplied scope key matches and each array-valued key has at least one overlapping value with the event's `sourceScope`.
 
@@ -347,6 +365,8 @@ Canonical `filters` keys in v1:
 - `summaryTriggerKinds[]`
 - `isMention`
 - `authorRoles[]`
+- `changedFields[]`
+- `syncDirection[]`
 
 Canonical filter-field mapping in v1:
 
@@ -357,15 +377,17 @@ Canonical filter-field mapping in v1:
 - `summaryTriggerKinds[]` matches event `attributes.summaryTriggerKind`
 - `authorRoles[]` matches event `attributes.authorRole`
 - `isMention` matches event `attributes.isMention`
+- `changedFields[]` matches event `attributes.changedFields[]`
+- `syncDirection[]` matches event `attributes.syncDirection`
 
 Matching semantics in v1:
 
 - `eventKinds[]` match exact durable event-kind strings.
 - `sourceScope` keys are conjunctive. Scalar keys such as `provider` must match exactly. List-valued keys such as `repo`, `chatId`, or `calendarId` match when the event carries at least one overlapping value.
-- `changeKinds[]`, `labels[]`, `reviewDecisions[]`, `summaryTriggerKinds[]`, and `authorRoles[]` also match by non-empty intersection with the event payload.
+- `changeKinds[]`, `labels[]`, `reviewDecisions[]`, `summaryTriggerKinds[]`, `authorRoles[]`, and `changedFields[]` also match by non-empty intersection with the event payload.
 - If a filter refers to an attribute the event does not carry, the filter fails rather than silently passing.
 
-Array-valued filters are exact-match intersection checks against the event payload. Scalar normalized fields such as `attributes.status`, `reviewDecision`, `summaryTriggerKind`, and `authorRole` match when one requested value exactly equals the event value.
+Array-valued filters are exact-match intersection checks against the event payload. Scalar normalized fields such as `attributes.status`, `reviewDecision`, `summaryTriggerKind`, `authorRole`, and `syncDirection` match when one requested value exactly equals the event value.
 
 For coarse Google bridge ingress events such as `planning.google-calendar.changed` and `planning.google-tasks.changed`, v1 consumers should narrow matches with `filters.changeKinds[]` and `sourceScope.calendarId` / `taskListId` / `entityId`. Fields such as `sourceRefs[]` and `entityRefs[]` may still appear on activity events for inspection, but they are not extra trigger keys in v1.
 
@@ -469,6 +491,11 @@ Mutation behavior:
 - the server applies execution when online and available
 - enabling/disabling/pause state is part of canonical automation state
 
+Imperative automation control in v1 splits in two:
+
+- canonical automation object mutations such as create, update, pause, resume, enable, disable, archive, and delete are replicated local-first state and remain durable/offline
+- imperative execution-control commands such as `automation run`, `automation skip-next`, and `automation backfill` are execution-home operations in v1 and are not modeled as replicated `ExternalActionIntent`
+
 ## Execution Model
 
 - The server peer is the execution authority for always-on automations.
@@ -482,6 +509,12 @@ Mutation behavior:
 - Reactive runs dedupe on `(automationId, activityEventId)` where `activityEventId` is exactly one canonical triggering event id.
 - `scheduledAt` and `activityEventId` are the logical run identity anchors when present; no multi-event trigger-id list is part of the run identity model in v1.
 - Retrying a failed run reuses the same logical run record and increments attempt state.
+
+`automation run` is an explicit manual start request. It may target any non-`disabled`, non-`archived` automation regardless of trigger type. The resulting run records `actor` and `triggerReason`, sets neither `scheduledAt` nor `activityEventId`, and follows normal queueing / `allowOverlap` rules.
+
+`automation skip-next` applies only to automations with a schedule component and only while the automation is `active`. It reserves exactly one next eligible `scheduledAt` boundary as skipped. That skipped boundary should still appear in history as one logical run with `status = skipped` and the reserved `scheduledAt`. For `hybrid` automations, only the scheduled side is affected; event triggers remain active.
+
+`automation backfill` applies only to automations with a schedule component, only for automations that are not `disabled` or `archived`, and only when `runPolicy.catchUp` is `one` or `all`. It materializes missed eligible `scheduledAt` boundaries inside the requested time window using the same dedupe keys and queueing rules as ordinary scheduled runs.
 
 ### Concurrency
 

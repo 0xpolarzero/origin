@@ -10,8 +10,8 @@
 
 Origin should systematize memory behavior, not prematurely systematize memory schemas.
 
-Origin has a managed workspace root. That root is scoped to the active Origin peer/instance rather than being a profile-global path. In v1, that workspace root is also the markdown vault that participates in the replicated note model.
-Replicated note state is the canonical source of truth for notes and memory. Each peer's managed workspace root is a local materialized markdown vault that can accept direct filesystem edits, and the local note bridge imports those edits back into replicated note state before sync.
+Origin has a managed workspace root on filesystem-bearing peers. That root is scoped to the active Origin peer/instance rather than being a profile-global path. In v1, that workspace root is also the markdown vault that participates in the replicated note model on peers that host one.
+Replicated note state is the canonical source of truth for notes and memory. On filesystem-bearing peers, the managed workspace root is the local materialized markdown vault and the local note bridge imports direct filesystem edits back into replicated note state before sync. Non-filesystem peers participate through replicated note state and app-native editors instead.
 
 The agent should know how to:
 
@@ -108,6 +108,7 @@ The agent should choose the simplest structure that serves the task.
 ## Replication Boundary
 
 - `Origin/Memory.md`, markdown notes in the managed workspace root, and note attachments inside that root are part of Origin's replicated note model.
+- `Origin/Memory.md` is the canonical managed note path in replicated state. On peers that host a vault, it materializes at that filesystem path. On non-filesystem peers, it remains the same logical note and is not required to exist as a user-visible file.
 - Once a workspace is attached, markdown files that live in the managed workspace root are managed notes, not generic local artifacts.
 - Managed markdown note paths are unique within the workspace root. `Origin/Memory.md` is the reserved canonical path for the memory note.
 - After attach, a newly created `.md` file at a new relative path becomes a managed note on bridge import. A `.md` file that appears at a path already owned by another managed note is a conflict, not an implicit overwrite or duplicate note.
@@ -174,6 +175,7 @@ The system prompt for Origin agents should explicitly teach:
 
 - where `Origin/Memory.md` lives
 - that in v1 the managed workspace root itself is the local materialized markdown vault on peers that host one
+- that non-filesystem peers still edit the same replicated notes and memory without hosting that vault locally
 - that it is the curated durable memory index
 - that supporting files and datasets may be created and maintained
 - that schemas are not fixed upfront
@@ -187,6 +189,7 @@ The system prompt for Origin agents should explicitly teach:
 - User edits to `Origin/Memory.md` and other markdown notes in the managed workspace root are authoritative inputs like any other vault edit.
 - Rename or delete of `Origin/Memory.md` through the filesystem is not an implicit move or delete of the canonical memory note; it must surface as a conflict on that reserved path.
 - Edits to linked local workspace artifacts remain local unless Origin explicitly imports or re-materializes them into replicated managed state.
+- Linked local workspace artifacts may be unavailable on peers that do not host that workspace root; absence on a peer does not change their replication status.
 - If a peer moves from local to VPS, replicated markdown notes and explicit note attachments are re-materialized on the VPS peer; linked local workspace artifacts stay on the original host unless they are explicitly imported or re-materialized for the VPS peer.
 
 ## Relationship To Retrieval

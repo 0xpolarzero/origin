@@ -57,19 +57,24 @@ Practical consequence:
 
 GitHub state inside Origin should be selective and derived.
 
-### Stored locally
+### Client-visible read-model/config layer
 
 - connected account metadata
 - selected GitHub App installation-grant records and the derived accessible repo/org scope
 - repo follow targets and derived tracked repositories
 - local follow targets across repositories, issues, and pull requests
-- server-side cursors / last-seen markers for polling
 - cached issue snapshots exposed as read models
 - cached pull request snapshots exposed as read models
 - cached comment and review snapshots for followed items as read models
 - lightweight search results as read models
-- queued outbound GitHub actions as server outbox records
 - activity-event records for meaningful GitHub operations
+
+### Server-local operational/cache layer
+
+- server-side cursors / last-seen markers for polling
+- ETags, refresh bookkeeping, and provider backoff/rate-limit state
+- hydrated diff/body detail that may be fetched on demand
+- queued outbound GitHub actions as server outbox records
 
 ### Not stored locally
 
@@ -89,7 +94,7 @@ GitHub remains provider-canonical, but Origin guarantees the following minimum c
 - Discussion snapshot floor: for each cached issue/PR snapshot, at least the most recent 20 comments/reviews remain offline-visible as cached summaries/snippets.
 - Outbound intent floor: offline GitHub mutations are durably captured as replicated intent plus server outbox linkage and replay once the provider execution home regains connectivity and valid grant scope.
 
-Outside these minimums, colder provider-derived snapshots may be evicted and re-fetched from GitHub.
+These offline floors apply to the GitHub read-model/config surface already synced to the client, not to raw server-local cache rows. Outside these minimums, colder provider-derived snapshots may be evicted and re-fetched from GitHub.
 
 ## Core Objects
 
@@ -120,6 +125,8 @@ Normative model:
 
 - OAuth completion discovers candidate installation grants, but does not select them automatically.
 - The operator explicitly selects which discovered grants Origin should rely on for the current repo/org working set.
+- `selected`, `selectedRepositories[]`, and `selectionUpdatedAt` are the replicated overlay/config subset of the grant record.
+- `accessibleRepositories[]`, `permissions`, `status`, `lastRefreshedAt`, and `lastValidatedAt` are provider-derived read-model projections maintained by the provider execution home from the selected grants plus GitHub refresh/validation results.
 - `selectedRepositories[]` is optional narrowing metadata inside a selected installation when GitHub exposes broader installation scope than Origin needs.
 - `accessibleRepositories[]` is the current derived repository coverage Origin believes is actionable through that grant, using stable `owner/name` refs.
 - A repository is actionable only when at least one selected, non-revoked grant currently covers it.
@@ -278,6 +285,7 @@ Suggested fields:
 - `targetId`
 - `payload`
 - `status`
+- `originIntentId`
 - `attemptCount`
 - `dedupeKey`
 - `queuedAt`
@@ -289,6 +297,7 @@ Suggested fields:
 - `updatedAt`
 
 GitHub actions are server-side outbox records derived from user or agent intent, not replicated provider state.
+`originIntentId` links the outbox record back to the canonical replicated `ExternalActionIntent` that caused it.
 `dedupeKey` is the stable origin-side identity for a logical mutation. Retries must reuse it so one intent cannot materialize twice.
 
 ### `GitHubCursor`
@@ -379,6 +388,7 @@ The integration should support direct actions that matter for follow-up.
 - queue a GitHub action for retry if it fails transiently
 
 `dismiss` suppresses the current attention state for the follow target until newer matching activity arrives past the stored cursor. It stores the current repository refresh cursor as `dismissedThroughCursor`, does not remove the follow target, and does not create a separate persistent follow-up-item object.
+Follow-target mutations and installation-grant selection are local overlay/config changes, not `ExternalActionIntent` records.
 
 ## Cache Strategy
 
@@ -392,6 +402,7 @@ Recommended cache policy:
 - cache only selected bodies, diffs, and snippets as needed
 - cache cursors and ETags for incremental refresh
 - evict cold data aggressively
+- the offline floors above apply to these read-model snapshots, not to the underlying hydrated cache detail
 - The shared polling / cursor / cache / activity-event model is defined in [provider_ingress_api.md](./provider_ingress_api.md)
 
 Polling / refresh strategy:
