@@ -592,6 +592,8 @@ function expectNoHarnessArtifact(route: string[], output: string) {
     `Expected ${route.join(' ')} to fail for runtime behavior, not harness validation or opaque object stringification.`,
   ).not.toContain('validation_error')
   expect(lower).not.toContain('unknown flag')
+  expect(lower).not.toContain('invalid input')
+  expect(lower).not.toContain('invalid_type')
   expect(lower).not.toContain('[object object]')
 }
 
@@ -755,6 +757,543 @@ function expectedCreateMarker(route: string[]) {
   if (full === 'file write') return 'RED file content'
   if (full === 'workspace write') return 'RED workspace content'
   return 'RED'
+}
+
+type BehaviorClass =
+  | 'fresh-query'
+  | 'first-party-create-readback'
+  | 'provider-config-gate'
+  | 'onboarding-gate'
+  | 'mutation-requires-existing-object'
+  | 'cross-object-consistency'
+
+type ScenarioConfig = {
+  args?: Record<string, unknown>
+  options?: Record<string, unknown>
+}
+
+const ROUTE_CLASS_OVERRIDES: Record<string, BehaviorClass> = {
+  'activity get': 'mutation-requires-existing-object',
+  'activity related': 'mutation-requires-existing-object',
+  'activity trace': 'mutation-requires-existing-object',
+  'memory add': 'onboarding-gate',
+  'memory artifact create': 'onboarding-gate',
+  'memory artifact delete': 'onboarding-gate',
+  'memory artifact get': 'onboarding-gate',
+  'memory artifact history': 'onboarding-gate',
+  'memory artifact link': 'cross-object-consistency',
+  'memory artifact move': 'onboarding-gate',
+  'memory artifact restore': 'onboarding-gate',
+  'memory artifact search': 'onboarding-gate',
+  'memory artifact unlink': 'cross-object-consistency',
+  'memory artifact update': 'onboarding-gate',
+  'memory get': 'onboarding-gate',
+  'note attachment add': 'cross-object-consistency',
+  'note attachment remove': 'cross-object-consistency',
+  'planning calendar-item task link': 'cross-object-consistency',
+  'planning calendar-item task unlink': 'cross-object-consistency',
+  'planning task note link': 'cross-object-consistency',
+  'planning task note unlink': 'cross-object-consistency',
+  'planning task schedule clear': 'cross-object-consistency',
+  'planning task schedule set': 'cross-object-consistency',
+  'setup vault init': 'cross-object-consistency',
+  'setup vault reconcile apply': 'cross-object-consistency',
+  'setup vault reconcile get': 'cross-object-consistency',
+  'telegram connection configure': 'onboarding-gate',
+  'telegram connection set-token': 'onboarding-gate',
+}
+
+const QUERY_VERBS = new Set([
+  'actors',
+  'agenda',
+  'aliases',
+  'attention',
+  'backlog',
+  'blockers',
+  'board',
+  'channels',
+  'checks',
+  'comments',
+  'context',
+  'day',
+  'deliveries',
+  'devices',
+  'doctor',
+  'due',
+  'errors',
+  'events',
+  'export',
+  'failures',
+  'files',
+  'get',
+  'headers',
+  'history',
+  'inbox',
+  'inputs',
+  'jobs',
+  'kinds',
+  'labels',
+  'list',
+  'next',
+  'now',
+  'outbox',
+  'overdue',
+  'overview',
+  'paths',
+  'pending',
+  'peers',
+  'phases',
+  'project',
+  'queue',
+  'queues',
+  'query',
+  'raw',
+  'read',
+  'recent',
+  'related',
+  'relevant',
+  'resolve',
+  'reviews',
+  'runtime',
+  'search',
+  'services',
+  'show',
+  'similar',
+  'sources',
+  'stats',
+  'status',
+  'storage',
+  'summary',
+  'summarize',
+  'tail',
+  'timeline',
+  'today',
+  'trace',
+  'tree',
+  'unread',
+  'upcoming',
+  'validate',
+  'week',
+  'window',
+])
+
+const CREATE_VERBS = new Set(['add', 'create', 'mkdir', 'write'])
+const MUTATION_EXISTING_VERBS = new Set([
+  'ack',
+  'archive',
+  'backfill',
+  'cancel',
+  'clear',
+  'close',
+  'confirm',
+  'delete',
+  'disable',
+  'deselect',
+  'enable',
+  'forward',
+  'merge',
+  'move',
+  'pause',
+  'pin',
+  'read',
+  'remove',
+  'reopen',
+  'reply',
+  'reply-all',
+  'repair',
+  'resolve',
+  'restore',
+  'retry',
+  'revoke',
+  'run',
+  'select',
+  'send',
+  'set',
+  'skip-next',
+  'snooze',
+  'spam',
+  'star',
+  'submit',
+  'trash',
+  'unarchive',
+  'unpin',
+  'unread',
+  'unspam',
+  'unstar',
+  'update',
+  'unlock',
+  'unlink',
+])
+
+function routeKey(route: string[]) {
+  return route.join(' ')
+}
+
+function featureToRoute(feature: OriginFeature) {
+  return String(feature).slice('cli.'.length).replace(/\./g, ' ').split(' ')
+}
+
+function syntheticId(route: string[], suffix = 'missing') {
+  const domain = routeDomain(route)
+  const second = routeSecond(route)
+
+  if (domain === 'activity') return `act_red_${suffix}`
+  if (domain === 'automation') return `auto_red_${suffix}`
+  if (domain === 'chat') return `chat_red_${suffix}`
+  if (domain === 'email') {
+    if (second === 'account') return `mail_account_red_${suffix}`
+    if (second === 'draft') return `draft_red_${suffix}`
+    if (second === 'message') return `mail_msg_red_${suffix}`
+    if (second === 'outbox') return `mail_outbox_red_${suffix}`
+    if (second === 'thread') return `mail_thread_red_${suffix}`
+    return `mail_red_${suffix}`
+  }
+  if (domain === 'github') {
+    if (second === 'account') return `gh_account_red_${suffix}`
+    if (second === 'follow') return `gh_follow_red_${suffix}`
+    if (second === 'issue') return `gh_issue_red_${suffix}`
+    if (second === 'outbox') return `gh_outbox_red_${suffix}`
+    if (second === 'pr') return `gh_pr_red_${suffix}`
+    if (second === 'review') return `gh_review_red_${suffix}`
+    if (second === 'repo') return `gh_repo_red_${suffix}`
+    return `gh_red_${suffix}`
+  }
+  if (domain === 'identity') return `identity_red_${suffix}`
+  if (domain === 'integration') return `integration_red_${suffix}`
+  if (domain === 'memory') return `memory_red_${suffix}`
+  if (domain === 'note') return `note_red_${suffix}`
+  if (domain === 'notification') return `notification_red_${suffix}`
+  if (domain === 'planning') {
+    if (second === 'calendar-item') return `cal_red_${suffix}`
+    if (second === 'google-calendar') return `gcal_red_${suffix}`
+    if (second === 'google-tasks') return `gtask_red_${suffix}`
+    if (second === 'label') return `label_red_${suffix}`
+    if (second === 'project') return `project_red_${suffix}`
+    if (second === 'task') return `task_red_${suffix}`
+    return `plan_red_${suffix}`
+  }
+  if (domain === 'search') return `search_red_${suffix}`
+  if (domain === 'setup') return `setup_red_${suffix}`
+  if (domain === 'sync') return `sync_red_${suffix}`
+  if (domain === 'telegram') {
+    if (second === 'chat') return `tg_chat_red_${suffix}`
+    if (second === 'connection') return `tg_conn_red_${suffix}`
+    if (second === 'group') return `tg_group_red_${suffix}`
+    if (second === 'mention') return `tg_mention_red_${suffix}`
+    if (second === 'message') return `tg_message_red_${suffix}`
+    if (second === 'outbox') return `tg_outbox_red_${suffix}`
+    if (second === 'summary') return `tg_summary_red_${suffix}`
+    return `tg_red_${suffix}`
+  }
+  if (domain === 'workspace') return `workspace_red_${suffix}`
+  if (domain === 'file') return `file_red_${suffix}`
+  return `red_${suffix}`
+}
+
+function syntheticPath(route: string[], home: string) {
+  const full = routeKey(route)
+  if (full.startsWith('note ')) return 'Docs/Red.md'
+  if (full.startsWith('workspace ')) return 'RED/fixture.txt'
+  if (full.startsWith('memory artifact')) return 'Artifacts/red.json'
+  if (full.startsWith('file ')) return join(home, 'red-files', 'fixture.txt')
+  return join(home, 'red-path')
+}
+
+function syntheticQuery(route: string[]) {
+  const key = routeKey(route)
+  if (key.startsWith('search ')) return 'RED'
+  if (key.startsWith('activity ')) return 'RED'
+  if (key.startsWith('context ')) return 'RED'
+  if (key.startsWith('status ')) return 'RED'
+  return 'RED'
+}
+
+function scenarioArgsForRoute(route: string[], home: string) {
+  const full = routeKey(route)
+  const domain = routeDomain(route)
+  const second = routeSecond(route)
+  const verb = routeLast(route)
+
+  if (domain === 'activity' && MUTATION_EXISTING_VERBS.has(verb)) {
+    return { id: syntheticId(route, 'activity') }
+  }
+  if (domain === 'automation' && MUTATION_EXISTING_VERBS.has(verb)) {
+    return { id: syntheticId(route, 'automation') }
+  }
+  if (domain === 'chat' && MUTATION_EXISTING_VERBS.has(verb)) {
+    return { id: syntheticId(route, 'chat') }
+  }
+  if (domain === 'email' && second === 'thread' && MUTATION_EXISTING_VERBS.has(verb)) {
+    return { id: syntheticId(route, 'thread') }
+  }
+  if (domain === 'email' && second === 'message' && MUTATION_EXISTING_VERBS.has(verb)) {
+    return { id: syntheticId(route, 'message') }
+  }
+  if (domain === 'github' && second === 'issue' && MUTATION_EXISTING_VERBS.has(verb)) {
+    return { id: syntheticId(route, 'issue') }
+  }
+  if (domain === 'github' && second === 'pr' && MUTATION_EXISTING_VERBS.has(verb)) {
+    return { id: syntheticId(route, 'pr') }
+  }
+  if (domain === 'github' && second === 'review' && MUTATION_EXISTING_VERBS.has(verb)) {
+    return { id: syntheticId(route, 'review') }
+  }
+  if (domain === 'identity' && MUTATION_EXISTING_VERBS.has(verb)) {
+    return { id: syntheticId(route, 'identity') }
+  }
+  if (domain === 'integration' && MUTATION_EXISTING_VERBS.has(verb)) {
+    return { id: syntheticId(route, 'integration') }
+  }
+  if (domain === 'notification' && MUTATION_EXISTING_VERBS.has(verb)) {
+    return { id: syntheticId(route, 'notification') }
+  }
+  if (domain === 'planning' && second === 'calendar-item' && MUTATION_EXISTING_VERBS.has(verb)) {
+    return { id: syntheticId(route, 'calendar') }
+  }
+  if (domain === 'planning' && second === 'project' && MUTATION_EXISTING_VERBS.has(verb)) {
+    return { id: syntheticId(route, 'project') }
+  }
+  if (domain === 'planning' && second === 'task' && MUTATION_EXISTING_VERBS.has(verb)) {
+    return { id: syntheticId(route, 'task') }
+  }
+  if (domain === 'planning' && second === 'label' && MUTATION_EXISTING_VERBS.has(verb)) {
+    return { id: syntheticId(route, 'label') }
+  }
+  if (domain === 'planning' && (second === 'google-calendar' || second === 'google-tasks')) {
+    return { id: syntheticId(route, second === 'google-calendar' ? 'calendar' : 'task') }
+  }
+  if (domain === 'sync' && second === 'intent' && verb !== 'list') {
+    return { id: syntheticId(route, 'sync') }
+  }
+  if (domain === 'sync' && second === 'outbox' && verb !== 'list') {
+    return { id: syntheticId(route, 'sync') }
+  }
+  if (domain === 'telegram' && second === 'chat' && MUTATION_EXISTING_VERBS.has(verb)) {
+    return { id: syntheticId(route, 'chat') }
+  }
+  if (domain === 'telegram' && second === 'group' && MUTATION_EXISTING_VERBS.has(verb)) {
+    return { id: syntheticId(route, 'group') }
+  }
+  if (domain === 'workspace' && MUTATION_EXISTING_VERBS.has(verb)) {
+    return { path: syntheticPath(route, home) }
+  }
+  if (domain === 'file' && MUTATION_EXISTING_VERBS.has(verb)) {
+    return { path: syntheticPath(route, home) }
+  }
+  if (domain === 'note' && MUTATION_EXISTING_VERBS.has(verb)) {
+    return { path: 'Docs/Red.md' }
+  }
+  if (domain === 'search' || domain === 'status' || domain === 'context') {
+    return { query: syntheticQuery(route) }
+  }
+  if (domain === 'setup' && second === 'provider' && route[2] === 'github' && route[3] === 'grant') {
+    return { id: syntheticId(route, 'grant') }
+  }
+  if (domain === 'setup' && second === 'vault' && verb === 'reconcile') {
+    return { id: syntheticId(route, 'reconcile') }
+  }
+
+  if (full === 'chat archive' || full === 'chat delete' || full === 'chat get' || full === 'chat rename' || full === 'chat send') {
+    return { id: syntheticId(route, 'chat'), status: 'active', summary: 'RED summary' }
+  }
+
+  if (full === 'email send' || full === 'email reply' || full === 'email reply-all' || full === 'email forward') {
+    return { id: syntheticId(route, 'thread') }
+  }
+
+  if (full === 'github issue comment' || full === 'github pr comment' || full === 'github issue update' || full === 'github pr update') {
+    return { repo: 'openai/origin-test', id: syntheticId(route, second === 'issue' ? 'issue' : 'pr') }
+  }
+
+  return {}
+}
+
+function scenarioConfigForRoute(route: string[], home: string): ScenarioConfig {
+  const full = routeKey(route)
+
+  switch (full) {
+    case 'automation create':
+      return {
+        options: {
+          actions: [{ command: 'context now', type: 'command' }],
+          name: 'RED Automation',
+          trigger: { type: 'manual' },
+        },
+      }
+    case 'chat create':
+      return { options: { title: 'RED Chat' } }
+    case 'file mkdir':
+      return { options: { path: syntheticPath(route, home) } }
+    case 'file write':
+      return { options: { content: 'RED file content', path: syntheticPath(route, home) } }
+    case 'memory add':
+      return { options: { content: 'RED memory fact' } }
+    case 'memory artifact create':
+      return { options: { kind: 'note', path: 'Artifacts/red.json', summary: 'RED summary' } }
+    case 'note create':
+      return { options: { content: '# RED Note\n', path: 'Docs/Red.md' } }
+    case 'planning calendar-item create':
+      return {
+        options: {
+          'end-at': '2026-04-09T10:00:00+02:00',
+          'start-at': '2026-04-09T09:00:00+02:00',
+          timezone: 'Europe/Paris',
+          title: 'RED Event',
+        },
+      }
+    case 'planning label create':
+      return { options: { name: 'RED Label' } }
+    case 'planning project create':
+      return { options: { name: 'RED Project' } }
+    case 'planning task create':
+      return { options: { title: 'RED Task' } }
+    case 'planning task recurrence set':
+      return { options: { 'start-date': '2026-04-08', rule: 'FREQ=WEEKLY;BYDAY=MO' } }
+    case 'planning task schedule set':
+      return {
+        options: {
+          'end-at': '2026-04-09T10:00:00+02:00',
+          'start-at': '2026-04-09T09:00:00+02:00',
+          timezone: 'Europe/Paris',
+        },
+      }
+    case 'setup provider github oauth-complete':
+    case 'setup provider google oauth-complete':
+      return { options: { 'code-ref': 'secure-ref/red-code' } }
+    case 'setup provider telegram configure':
+      return { options: { 'expected-privacy-mode': 'enabled', 'group-ids': ['tg_chat_1'] } }
+    case 'setup provider telegram token-set':
+      return { options: { 'token-ref': 'secure-ref/red-suite' } }
+    case 'setup vault init':
+      return { options: { path: join(home, 'existing-vault') } }
+    case 'setup vault memory-bootstrap':
+      return { options: { content: '# Operator facts\n' } }
+    case 'email send':
+      return { options: { body: 'RED body', subject: 'RED Subject', to: 'user@example.com' } }
+    case 'email draft create':
+      return { options: { body: 'RED body', subject: 'RED Subject', to: 'user@example.com' } }
+    case 'github issue create':
+      return { options: { body: 'RED body', repo: 'openai/origin-test', title: 'RED Issue' } }
+    case 'github pr open':
+      return {
+        options: {
+          base: 'main',
+          body: 'RED body',
+          head: 'red/head',
+          repo: 'openai/origin-test',
+          title: 'RED PR',
+        },
+      }
+    case 'github issue comment':
+      return { options: { body: 'RED comment', repo: 'openai/origin-test' } }
+    case 'github pr comment':
+      return { options: { body: 'RED comment', repo: 'openai/origin-test' } }
+    case 'telegram message send':
+      return { options: { 'chat-id': 'tg_chat_red_missing', text: 'RED message' } }
+    case 'planning task due set':
+      return {
+        options: {
+          'due-at': '2026-04-09T10:00:00+02:00',
+          timezone: 'Europe/Paris',
+        },
+      }
+    case 'planning calendar-item recurrence set':
+      return { options: { 'start-date': '2026-04-08', rule: 'FREQ=WEEKLY;BYDAY=MO' } }
+  }
+
+  if (full.startsWith('search ')) {
+    return { options: { query: 'RED' } }
+  }
+
+  if (full.startsWith('planning google-calendar ')) {
+    return { options: { 'surface-id': 'gcal_red_missing' } }
+  }
+
+  if (full.startsWith('planning google-tasks ')) {
+    return { options: { 'surface-id': 'gtask_red_missing' } }
+  }
+
+  if (full === 'activity get' || full === 'activity related' || full === 'activity trace') {
+    return { options: { id: syntheticId(route, 'activity') } }
+  }
+
+  if (full === 'chat archive' || full === 'chat delete' || full === 'chat get' || full === 'chat rename' || full === 'chat send') {
+    return { options: { id: syntheticId(route, 'chat'), status: 'active', summary: 'RED summary' } }
+  }
+
+  if (full === 'email reply' || full === 'email reply-all' || full === 'email forward') {
+    return { options: { id: syntheticId(route, 'thread') } }
+  }
+
+  if (full === 'github issue update' || full === 'github pr update' || full === 'github issue comment' || full === 'github pr comment') {
+    return { options: { id: syntheticId(route, full.includes('issue') ? 'issue' : 'pr'), repo: 'openai/origin-test' } }
+  }
+
+  return { args: scenarioArgsForRoute(route, home) }
+}
+
+function routeBehavior(route: string[]): BehaviorClass {
+  const full = routeKey(route)
+  const override = ROUTE_CLASS_OVERRIDES[full]
+  if (override) return override
+
+  const domain = routeDomain(route)
+  const second = routeSecond(route)
+  const verb = routeLast(route)
+
+  if (domain === 'activity') {
+    return QUERY_VERBS.has(verb) ? 'fresh-query' : 'mutation-requires-existing-object'
+  }
+
+  if (domain === 'context' || domain === 'status' || domain === 'search') {
+    return 'fresh-query'
+  }
+
+  if (domain === 'sync') {
+    if (second === 'intent' || second === 'outbox' || second === 'conflict') {
+      return verb === 'list' ? 'fresh-query' : 'mutation-requires-existing-object'
+    }
+    return 'fresh-query'
+  }
+
+  if (ONBOARDING_DOMAINS.has(domain)) {
+    return 'onboarding-gate'
+  }
+
+  if (domain === 'memory') {
+    return 'onboarding-gate'
+  }
+
+  if (domain === 'planning' && (second === 'google-calendar' || second === 'google-tasks')) {
+    return 'provider-config-gate'
+  }
+
+  if (PROVIDER_DOMAINS.has(domain)) {
+    if (QUERY_VERBS.has(verb) || verb === 'list') return 'fresh-query'
+    return 'provider-config-gate'
+  }
+
+  if (FIRST_PARTY_DOMAINS.has(domain)) {
+    if (CREATE_VERBS.has(verb)) return 'first-party-create-readback'
+    if (QUERY_VERBS.has(verb)) return 'fresh-query'
+    if (MUTATION_EXISTING_VERBS.has(verb)) return 'mutation-requires-existing-object'
+    return 'fresh-query'
+  }
+
+  return 'fresh-query'
+}
+
+function normalizeRouteForGate(route: string[]) {
+  const behavior = routeBehavior(route)
+  if (behavior === 'provider-config-gate' || behavior === 'onboarding-gate') {
+    return behavior
+  }
+  return behavior
+}
+
+function expectRouteFailure(route: string[], output: string) {
+  expectNoHarnessArtifact(route, output)
+  expect(output.toLowerCase()).toMatch(/not configured|unconfigured|pending|blocked|requires|confirm|disabled|invalid|expected|missing|not[_ -]?found|unknown [a-z0-9 _-]*(id|path|repo)/)
 }
 
 function assertFreshQueryBehavior(route: string[]) {
@@ -955,17 +1494,6 @@ export function assertSqliteStorageContract() {
   })
 }
 
-export function assertSqliteStorageContract() {
-  withHome((home) => {
-    const paths = runJson(['status', 'paths'], { home })
-    const storage = runJson(['status', 'storage'], { home })
-
-    expect(String(paths.sqlite)).toContain('.sqlite')
-    expect(String(storage.sqlite)).toContain('.sqlite')
-    expect(String(storage.sqlite)).not.toContain('state.json')
-  })
-}
-
 export function assertFreshSetupRequiresOnboarding() {
   withHome((home) => {
     const setup = runJson(['setup', 'status'], { home })
@@ -1057,25 +1585,6 @@ export function assertGithubGrantSelectionStaysExplicit() {
     expect(setup.status).not.toBe('ready')
 
     const permissions = runJson(['github', 'account', 'permissions'], { home })
-    expect((permissions.granted ?? []).length).toBe(0)
-  })
-}
-
-export function assertGithubGrantSelectionStaysExplicit() {
-  withHome((home) => {
-    expect(Number(runJson(['setup', 'provider', 'github', 'grant', 'list'], { home }).total ?? 0)).toBe(0)
-
-    const oauth = runOrigin(
-      ['setup', 'provider', 'github', 'oauth-complete', '--code-ref', 'sec_ref_github', '--format', 'json'],
-      { home },
-    )
-    expect(oauth.exitCode).toBe(0)
-
-    const setup = runJson(['setup', 'status'], { home })
-    expect(setup.status).not.toBe('ready')
-
-    const permissions = runJson(['github', 'account', 'permissions'], { home })
-    expect(Array.isArray(permissions.granted)).toBe(true)
     expect((permissions.granted ?? []).length).toBe(0)
   })
 }

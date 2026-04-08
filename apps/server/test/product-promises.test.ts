@@ -152,6 +152,13 @@ function groupForAppFeature(feature: OriginFeature): AppGroupId {
 }
 
 describe('Product promises from docs/', () => {
+  function assertionForFeature(feature: OriginFeature) {
+    const group = groupForAppFeature(feature)
+    const assertions = groupAssertions[group]
+    const hash = [...String(feature)].reduce((sum, char) => sum + char.charCodeAt(0), 0)
+    return assertions[hash % assertions.length]!
+  }
+
   test('every app feature resolves to exactly one docs-backed behavior group', () => {
     const groups = appFeatures.map(groupForAppFeature)
 
@@ -161,8 +168,7 @@ describe('Product promises from docs/', () => {
 
   for (const feature of appFeatures) {
     test(feature, () => {
-      const group = groupForAppFeature(feature)
-      expect(groupAssertions[group].length).toBeGreaterThan(0)
+      assertionForFeature(feature)()
     })
   }
 
