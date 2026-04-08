@@ -5,6 +5,8 @@
   "scripts": {
     "review": "bun run run-review.ts",
     "review:smoke": "bun run run-review.ts --smoke",
+    "implement": "bun run run-implement.ts",
+    "implement:smoke": "bun run run-implement.ts --smoke",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "bun test review-workflow.test.ts"
   },

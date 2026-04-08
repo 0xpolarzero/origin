@@ -16,7 +16,9 @@
     "test": "bun run --filter @origin/server test && bun run --filter @origin/review-workflow test",
     "check": "bun run format:check && bun run lint && bun run typecheck && bun run test",
     "workflow:review": "bun run --filter @origin/review-workflow review",
-    "workflow:review:smoke": "bun run --filter @origin/review-workflow review:smoke"
+    "workflow:review:smoke": "bun run --filter @origin/review-workflow review:smoke",
+    "workflow:implement": "bun run --filter @origin/review-workflow implement",
+    "workflow:implement:smoke": "bun run --filter @origin/review-workflow implement:smoke"
   },
   "devDependencies": {
     "@types/bun": "1.3.11",
