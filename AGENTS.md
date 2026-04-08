@@ -18,6 +18,11 @@
 - Use those submodules as the primary reference for how those libraries and tools work.
 - Every important library or tool used by the app should be represented in `docs/references/`.
 
+## Features
+- `docs/features.ts` contains the exhaustive enum of app features.
+- Keep it in sync with the app so it remains the canonical list of all features.
+- Use it to loop through every feature and verify each one is thoroughly tested.
+
 ## Build Order
 This app is being built in stages:
 1. Build the internal docs in `docs/`.
