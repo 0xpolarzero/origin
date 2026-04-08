@@ -30,11 +30,14 @@ bun run start
 bun run format
 bun run lint
 bun run typecheck
+bun run test
 bun run check
+bun run workflow:review
+bun run workflow:review:smoke
 ```
 
 ## Notes
 
-- Only the TypeScript server workspace is set up for now.
+- The repository includes a Smithers-backed review workflow under `./workflow`.
 - `apps/apple` is intentionally not scaffolded yet.
 - `ops/` contains deployment and operator-facing boilerplate.

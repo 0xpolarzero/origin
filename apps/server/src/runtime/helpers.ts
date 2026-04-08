@@ -45,6 +45,7 @@ export function createActionResult(
   extra: Partial<{
     affectedIds: string[]
     providerRefs: string[]
+    reconcileId: string
     traceId: string
     activityIds: string[]
     jobId: string
@@ -56,6 +57,7 @@ export function createActionResult(
     summary,
     ...(extra.affectedIds?.length ? { ['affected-ids']: extra.affectedIds } : {}),
     ...(extra.providerRefs?.length ? { ['provider-refs']: extra.providerRefs } : {}),
+    ...(extra.reconcileId ? { ['reconcile-id']: extra.reconcileId } : {}),
     ...(extra.traceId ? { ['trace-id']: extra.traceId } : {}),
     ...(extra.activityIds?.length ? { ['activity-ids']: extra.activityIds } : {}),
     ...(extra.jobId ? { ['job-id']: extra.jobId } : {}),

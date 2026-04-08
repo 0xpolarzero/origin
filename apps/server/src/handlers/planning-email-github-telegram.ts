@@ -56,6 +56,11 @@ type ConflictRecord = State['sync']['replicaConflicts'][number]
 type ProviderPollerRecord = State['integrations'][string]['provider']['pollers'][number]
 type ProviderSurfaceRecord = State['integrations'][string]['provider']['surfaces'][number]
 
+const GITHUB_SELECTED_GRANT_IDS_KEY = 'selectedGrantIds'
+const GITHUB_SELECTED_GRANT_REPOS_KEY = 'selectedGrantRepositories'
+const GITHUB_GRANT_SELECTION_UPDATED_AT_KEY = 'grantSelectionUpdatedAt'
+const TELEGRAM_ACKNOWLEDGED_MENTIONS_KEY = 'acknowledgedMentions'
+
 const handlers: Partial<Record<string, (context: Ctx) => unknown>> = {}
 
 function on(route: string, handler: (context: Ctx) => unknown) {
@@ -431,6 +436,31 @@ function telegramSummaryOutput(summary: TelegramSummaryJobRecord) {
   })
 }
 
+function stringArrayValue(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === 'string')
+    : []
+}
+
+function recordOfStringArray(value: unknown) {
+  return Object.fromEntries(
+    Object.entries(safeObject(value)).map(([key, entry]) => [key, stringArrayValue(entry)]),
+  ) as Record<string, string[]>
+}
+
+function recordOfObjects(value: unknown) {
+  return Object.fromEntries(
+    Object.entries(safeObject(value)).map(([key, entry]) => [
+      key,
+      Object.fromEntries(
+        Object.entries(safeObject(entry)).flatMap(([innerKey, innerValue]) =>
+          typeof innerValue === 'string' ? [[innerKey, innerValue]] : [],
+        ),
+      ),
+    ]),
+  ) as Record<string, Record<string, string>>
+}
+
 function integrationStatusOutput(key: string, integration: IntegrationRecord) {
   return compact({
     key,
@@ -499,19 +529,7 @@ function googleCalendarBridgeOutput(state: State) {
     provider: 'google-calendar',
     status: integration.provider.status,
     summary: integration.provider.summary,
-    'selected-calendars': integration.provider.surfaces.map((surface) =>
-      providerSurfaceOutput('google-calendar', surface, {
-        'calendar-id': surface.providerRef ?? surface.scope,
-        'calendar-title': surface.displayName,
-        'attached-item-count': state.planning.calendarItems.filter((item) =>
-          item.externalLinks.some(
-            (link) =>
-              link.provider === 'google-calendar' &&
-              (link.calendarId === (surface.providerRef ?? surface.scope) || link.ref === surface.providerRef || link.ref === surface.scope),
-          ),
-        ).length,
-      }),
-    ),
+    'selected-calendars': googleCalendarSurfaceOutputs(state, true),
     pollers: integration.provider.pollers.map(providerPollerOutput),
     'last-refreshed-at': integration.provider.lastRefreshedAt,
   })
@@ -523,19 +541,7 @@ function googleTasksBridgeOutput(state: State) {
     provider: 'google-tasks',
     status: integration.provider.status,
     summary: integration.provider.summary,
-    'selected-task-lists': integration.provider.surfaces.map((surface) =>
-      providerSurfaceOutput('google-tasks', surface, {
-        'task-list-id': surface.providerRef ?? surface.scope,
-        'task-list-title': surface.displayName,
-        'attached-task-count': state.planning.tasks.filter((task) =>
-          task.externalLinks.some(
-            (link) =>
-              link.provider === 'google-tasks' &&
-              (link.taskListId === (surface.providerRef ?? surface.scope) || link.ref === surface.providerRef || link.ref === surface.scope),
-          ),
-        ).length,
-      }),
-    ),
+    'selected-task-lists': googleTasksSurfaceOutputs(state, true),
     pollers: integration.provider.pollers.map(providerPollerOutput),
     'last-refreshed-at': integration.provider.lastRefreshedAt,
   })
@@ -1466,6 +1472,44 @@ function providerSurfaceByRef(surfaces: ProviderSurfaceRecord[], ref: string) {
   return surfaces.find((surface) => surface.providerRef === ref || surface.scope === ref || surface.id === ref || surface.displayName === ref)
 }
 
+function googleCalendarSurfaceOutputs(state: State, selectedOnly = false) {
+  const integration = ensureIntegration(state, 'google-calendar')
+  return integration.provider.surfaces
+    .filter((surface) => !selectedOnly || surface.selected !== false)
+    .map((surface) =>
+      providerSurfaceOutput('google-calendar', surface, {
+        'calendar-id': surface.providerRef ?? surface.scope,
+        'calendar-title': surface.displayName,
+        'attached-item-count': state.planning.calendarItems.filter((item) =>
+          item.externalLinks.some(
+            (link) =>
+              link.provider === 'google-calendar' &&
+              (link.calendarId === (surface.providerRef ?? surface.scope) || link.ref === surface.providerRef || link.ref === surface.scope),
+          ),
+        ).length,
+      }),
+    )
+}
+
+function googleTasksSurfaceOutputs(state: State, selectedOnly = false) {
+  const integration = ensureIntegration(state, 'google-tasks')
+  return integration.provider.surfaces
+    .filter((surface) => !selectedOnly || surface.selected !== false)
+    .map((surface) =>
+      providerSurfaceOutput('google-tasks', surface, {
+        'task-list-id': surface.providerRef ?? surface.scope,
+        'task-list-title': surface.displayName,
+        'attached-task-count': state.planning.tasks.filter((task) =>
+          task.externalLinks.some(
+            (link) =>
+              link.provider === 'google-tasks' &&
+              (link.taskListId === (surface.providerRef ?? surface.scope) || link.ref === surface.providerRef || link.ref === surface.scope),
+          ),
+        ).length,
+      }),
+    )
+}
+
 function attachProviderSurface(state: State, providerKey: 'google-calendar' | 'google-tasks', ref: string, displayName?: string) {
   const integration = ensureIntegration(state, providerKey)
   let surface = providerSurfaceByRef(integration.provider.surfaces, ref)
@@ -1497,10 +1541,119 @@ function attachProviderSurface(state: State, providerKey: 'google-calendar' | 'g
   } else {
     surface.providerRef = ref
     surface.displayName = displayName ?? surface.displayName
+    surface.status = 'active'
+    surface.summary = `${ref} selected for sync.`
     surface.selected = true
   }
   integration.provider.lastRefreshedAt = now()
   return surface
+}
+
+function githubGrantOutputs(state: State) {
+  const integration = ensureIntegration(state, 'github')
+  const selectedIds = stringArrayValue(integration.config[GITHUB_SELECTED_GRANT_IDS_KEY])
+  const repoFilters = recordOfStringArray(integration.config[GITHUB_SELECTED_GRANT_REPOS_KEY])
+  const selectionUpdatedAt =
+    typeof integration.config[GITHUB_GRANT_SELECTION_UPDATED_AT_KEY] === 'string'
+      ? String(integration.config[GITHUB_GRANT_SELECTION_UPDATED_AT_KEY])
+      : undefined
+  const permissions = Object.fromEntries(
+    (integration.grantedScopes.length ? integration.grantedScopes : integration.configuredScopes).map((scope) => [
+      scope,
+      'granted',
+    ]),
+  )
+  const groupedRepos = new Map<string, string[]>()
+  for (const repo of state.github.repositories) {
+    const owner = repo.name.split('/')[0] ?? repo.name
+    const existing = groupedRepos.get(owner) ?? []
+    existing.push(repo.name)
+    groupedRepos.set(owner, existing)
+  }
+  if (groupedRepos.size === 0) {
+    const fallbackOwner = state.identity.agent.github ?? 'origin'
+    groupedRepos.set(fallbackOwner, [])
+  }
+
+  return [...groupedRepos.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([owner, repositories]) => {
+      const id = `gh_grant_${stableHash(owner)}`
+      const selectedRepositories = repoFilters[id]?.length ? repoFilters[id] : undefined
+      const accessibleRepositories = selectedRepositories?.length
+        ? repositories.filter((repo) => selectedRepositories.some((filter) => matchesQuery(repo, filter)))
+        : repositories
+      return compact({
+        id,
+        'installation-id': `inst_${stableHash(owner)}`,
+        'account-login': owner,
+        'account-type': owner === state.identity.agent.github ? 'user' : 'organization',
+        'repository-selection': selectedRepositories?.length ? 'selected' : 'all',
+        'selected-repositories': selectedRepositories,
+        'accessible-repositories': accessibleRepositories,
+        permissions,
+        selected: integration.config[GITHUB_SELECTED_GRANT_IDS_KEY] === undefined ? true : selectedIds.includes(id),
+        status: integration.status.status === 'connected' ? 'active' : 'auth_failed',
+        'last-refreshed-at': integration.status.lastRefreshedAt,
+        'last-validated-at': integration.status.lastValidatedAt,
+        'selection-updated-at': selectionUpdatedAt,
+      })
+    })
+}
+
+function githubGrantById(state: State, grantId: string) {
+  return githubGrantOutputs(state).find((grant) => grant.id === grantId)
+}
+
+function updateGithubGrantSelection(
+  integration: IntegrationRecord,
+  grantId: string,
+  repoFilters: string[] | undefined,
+  selected: boolean,
+) {
+  const selectedGrantIds = new Set(stringArrayValue(integration.config[GITHUB_SELECTED_GRANT_IDS_KEY]))
+  if (selected) selectedGrantIds.add(grantId)
+  else selectedGrantIds.delete(grantId)
+
+  const grantRepositories = recordOfStringArray(integration.config[GITHUB_SELECTED_GRANT_REPOS_KEY])
+  if (selected && repoFilters?.length) grantRepositories[grantId] = repoFilters
+  else delete grantRepositories[grantId]
+
+  integration.config[GITHUB_SELECTED_GRANT_IDS_KEY] = [...selectedGrantIds]
+  integration.config[GITHUB_SELECTED_GRANT_REPOS_KEY] = grantRepositories
+  integration.config[GITHUB_GRANT_SELECTION_UPDATED_AT_KEY] = now()
+}
+
+function telegramMentionOutputs(state: State) {
+  const acknowledgedMentions = recordOfObjects(
+    ensureIntegration(state, 'telegram').config[TELEGRAM_ACKNOWLEDGED_MENTIONS_KEY],
+  )
+  return state.telegram.messages
+    .filter((message) => getTelegramGroup(state, message.chatId)?.mentionTrackingEnabled)
+    .map((message) => {
+      const mentionId = `tg_mention_${stableHash(message.id)}`
+      const chat = getTelegramChat(state, message.chatId)
+      const acknowledgement = acknowledgedMentions[mentionId] ?? {}
+      const acknowledgedAt =
+        typeof acknowledgement.at === 'string' ? acknowledgement.at : undefined
+      const acknowledgedByActor =
+        typeof acknowledgement.actor === 'string' ? acknowledgement.actor : undefined
+      return compact({
+        id: mentionId,
+        'activity-event-id': `act_${stableHash(`telegram_mention:${message.id}`)}`,
+        'chat-id': message.chatId,
+        'message-id': message.id,
+        status: acknowledgedAt ? 'acknowledged' : 'unread',
+        at: message.at,
+        'acknowledged-at': acknowledgedAt,
+        'acknowledged-by-actor': acknowledgedByActor,
+        summary: `Mention in ${chat?.title ?? message.chatId}: ${firstLine(message.body, message.id)}`,
+      })
+    })
+}
+
+function telegramMentionById(state: State, mentionId: string) {
+  return telegramMentionOutputs(state).find((mention) => mention.id === mentionId)
 }
 
 function bridgePullPushSummary(provider: string, operation: string, count: number) {
@@ -3221,6 +3374,73 @@ on('planning google-calendar status', async (context) => {
   return googleCalendarBridgeOutput(state)
 })
 
+on('planning google-calendar surface list', async (context) => {
+  const state = await loadState(context.runtime)
+  const surfaces = googleCalendarSurfaceOutputs(state)
+  return listResult(surfaces, {
+    total: surfaces.length,
+    summary: entityListSummary('Google Calendar surface', surfaces.length),
+  })
+})
+
+on('planning google-calendar surface get', async (context) => {
+  const state = await loadState(context.runtime)
+  const surface = ensureFound(
+    context,
+    googleCalendarSurfaceOutputs(state).find(
+      (entry) =>
+        String((entry as Record<string, unknown>)['calendar-id'] ?? '') ===
+          String(context.args['calendar-id']) || entry.id === String(context.args['calendar-id']),
+    ),
+    'Google Calendar surface',
+    String(context.args['calendar-id']),
+  )
+  return surface
+})
+
+on('planning google-calendar surface select', async (context) => {
+  return mutateState(context.runtime, async (state) => {
+    const calendarId = String(context.args['calendar-id'])
+    attachProviderSurface(state, 'google-calendar', calendarId)
+    return actionResult(`Selected Google Calendar surface ${calendarId}.`, {
+      affectedIds: [calendarId],
+    })
+  })
+})
+
+on('planning google-calendar surface deselect', async (context) => {
+  return mutateState(context.runtime, async (state) => {
+    const calendarId = String(context.args['calendar-id'])
+    const forceDetach = Boolean(context.options['force-detach'])
+    const linkedItems = state.planning.calendarItems.filter((item) =>
+      item.externalLinks.some(
+        (link) => link.provider === 'google-calendar' && link.calendarId === calendarId,
+      ),
+    )
+    if (linkedItems.length > 0 && !forceDetach) {
+      throw context.error({
+        code: 'INVALID_INPUT',
+        message: `Google Calendar surface ${calendarId} still has attached Origin items.`,
+      })
+    }
+    for (const item of linkedItems) {
+      const link = googleLinkForCalendarItem(item)
+      if (link) addCalendarExternalLink(item, detachLinkStatus(link))
+    }
+    const integration = ensureIntegration(state, 'google-calendar')
+    const surface = providerSurfaceByRef(integration.provider.surfaces, calendarId)
+    if (surface) {
+      surface.selected = false
+      surface.status = 'inactive'
+      surface.summary = `${calendarId} not selected for sync.`
+    }
+    rebuildProviderLastRefreshed(integration)
+    return actionResult(`Deselected Google Calendar surface ${calendarId}.`, {
+      affectedIds: [calendarId, ...linkedItems.map((item) => item.id)],
+    })
+  })
+})
+
 for (const suffix of ['pull', 'push', 'reconcile'] as const) {
   on(`planning google-calendar ${suffix}`, async (context) => {
     return mutateState(context.runtime, async (state) => {
@@ -3275,6 +3495,73 @@ on('planning google-calendar repair', async (context) => {
 on('planning google-tasks status', async (context) => {
   const state = await loadState(context.runtime)
   return googleTasksBridgeOutput(state)
+})
+
+on('planning google-tasks surface list', async (context) => {
+  const state = await loadState(context.runtime)
+  const surfaces = googleTasksSurfaceOutputs(state)
+  return listResult(surfaces, {
+    total: surfaces.length,
+    summary: entityListSummary('Google Tasks surface', surfaces.length),
+  })
+})
+
+on('planning google-tasks surface get', async (context) => {
+  const state = await loadState(context.runtime)
+  const surface = ensureFound(
+    context,
+    googleTasksSurfaceOutputs(state).find(
+      (entry) =>
+        String((entry as Record<string, unknown>)['task-list-id'] ?? '') ===
+          String(context.args['task-list-id']) || entry.id === String(context.args['task-list-id']),
+    ),
+    'Google Tasks surface',
+    String(context.args['task-list-id']),
+  )
+  return surface
+})
+
+on('planning google-tasks surface select', async (context) => {
+  return mutateState(context.runtime, async (state) => {
+    const taskListId = String(context.args['task-list-id'])
+    attachProviderSurface(state, 'google-tasks', taskListId)
+    return actionResult(`Selected Google Tasks surface ${taskListId}.`, {
+      affectedIds: [taskListId],
+    })
+  })
+})
+
+on('planning google-tasks surface deselect', async (context) => {
+  return mutateState(context.runtime, async (state) => {
+    const taskListId = String(context.args['task-list-id'])
+    const forceDetach = Boolean(context.options['force-detach'])
+    const linkedTasks = state.planning.tasks.filter((task) =>
+      task.externalLinks.some(
+        (link) => link.provider === 'google-tasks' && link.taskListId === taskListId,
+      ),
+    )
+    if (linkedTasks.length > 0 && !forceDetach) {
+      throw context.error({
+        code: 'INVALID_INPUT',
+        message: `Google Tasks surface ${taskListId} still has attached Origin tasks.`,
+      })
+    }
+    for (const task of linkedTasks) {
+      const link = googleLinkForTask(task)
+      if (link) addTaskExternalLink(task, detachLinkStatus(link))
+    }
+    const integration = ensureIntegration(state, 'google-tasks')
+    const surface = providerSurfaceByRef(integration.provider.surfaces, taskListId)
+    if (surface) {
+      surface.selected = false
+      surface.status = 'inactive'
+      surface.summary = `${taskListId} not selected for sync.`
+    }
+    rebuildProviderLastRefreshed(integration)
+    return actionResult(`Deselected Google Tasks surface ${taskListId}.`, {
+      affectedIds: [taskListId, ...linkedTasks.map((task) => task.id)],
+    })
+  })
 })
 
 for (const suffix of ['pull', 'push', 'reconcile'] as const) {
@@ -3728,6 +4015,31 @@ on('email refresh reset-cursor', async (context) => {
   })
 })
 
+on('email refresh repair', async (context) => {
+  return mutateState(context.runtime, async (state) => {
+    const integration = ensureIntegration(state, 'email')
+    emailRefreshReset(
+      state,
+      context.options['account-id'] ? String(context.options['account-id']) : undefined,
+    )
+    modifyProviderPollers(integration, (poller) => {
+      if (
+        context.options['account-id'] &&
+        !poller.scope.includes(String(context.options['account-id']))
+      ) {
+        return
+      }
+      poller.status = 'active'
+      poller.lastError = undefined
+      poller.lastFailedAt = undefined
+      poller.backoffUntil = undefined
+      poller.lastSucceededAt = now()
+    })
+    rebuildProviderLastRefreshed(integration)
+    return actionResult('Repaired email refresh state.', { affectedIds: ['email'] })
+  })
+})
+
 on('email outbox list', async (context) => {
   const state = await loadState(context.runtime)
   const items = state.email.outbox.map((item) => compact(item))
@@ -3763,6 +4075,65 @@ on('github account validate', async (context) => {
 on('github account permissions', async (context) => {
   const state = await loadState(context.runtime)
   return githubIntegrationScopes(state)
+})
+
+on('github account grant list', async (context) => {
+  const state = await loadState(context.runtime)
+  const grants = githubGrantOutputs(state)
+  return listResult(grants, {
+    total: grants.length,
+    summary: entityListSummary('GitHub installation grant', grants.length),
+  })
+})
+
+on('github account grant get', async (context) => {
+  const state = await loadState(context.runtime)
+  return ensureFound(
+    context,
+    githubGrantById(state, String(context.args['grant-id'])),
+    'GitHub installation grant',
+    String(context.args['grant-id']),
+  )
+})
+
+on('github account grant refresh', async (context) => {
+  return mutateState(context.runtime, async (state) => {
+    const integration = ensureIntegration(state, 'github')
+    integration.status.lastValidatedAt = now()
+    rebuildProviderLastRefreshed(integration)
+    return actionResult('Refreshed GitHub installation grants.', { affectedIds: ['github'] })
+  })
+})
+
+on('github account grant select', async (context) => {
+  return mutateState(context.runtime, async (state) => {
+    const grantId = String(context.args['grant-id'])
+    ensureFound(context, githubGrantById(state, grantId), 'GitHub installation grant', grantId)
+    const integration = ensureIntegration(state, 'github')
+    updateGithubGrantSelection(
+      integration,
+      grantId,
+      coerceArray(context.options.repo as string[] | string | undefined),
+      true,
+    )
+    rebuildProviderLastRefreshed(integration)
+    return actionResult(`Selected GitHub installation grant ${grantId}.`, {
+      affectedIds: [grantId],
+    })
+  })
+})
+
+on('github account grant deselect', async (context) => {
+  return mutateState(context.runtime, async (state) => {
+    const grantId = String(context.args['grant-id'])
+    ensureFound(context, githubGrantById(state, grantId), 'GitHub installation grant', grantId)
+    const integration = ensureIntegration(state, 'github')
+    updateGithubGrantSelection(integration, grantId, undefined, false)
+    rebuildProviderLastRefreshed(integration)
+    return actionResult(`Deselected GitHub installation grant ${grantId}.`, {
+      affectedIds: [grantId],
+    })
+  })
 })
 
 on('github repo list', async (context) => {
@@ -4388,6 +4759,54 @@ on('telegram group policy mention-set', async (context) => {
     const group = ensureTelegramGroup(state, String(context.args['chat-id']))
     group.mentionTrackingEnabled = Boolean(context.options.enabled)
     return actionResult(`Updated Telegram mention policy for ${group.chatId}.`, { affectedIds: [group.chatId] })
+  })
+})
+
+on('telegram mention list', async (context) => {
+  const state = await loadState(context.runtime)
+  let mentions = telegramMentionOutputs(state)
+  if (context.options['chat-id']) {
+    mentions = mentions.filter((mention) => mention['chat-id'] === String(context.options['chat-id']))
+  }
+  const statuses = coerceArray(context.options.status as string[] | string | undefined)
+  if (statuses.length > 0) {
+    mentions = mentions.filter((mention) => statuses.includes(String(mention.status)))
+  }
+  const limit = context.options.limit ? Number(context.options.limit) : undefined
+  const items = limit ? takeLimit(mentions, limit) : mentions
+  return listResult(items, {
+    total: mentions.length,
+    summary: entityListSummary('Telegram mention', mentions.length),
+  })
+})
+
+on('telegram mention get', async (context) => {
+  const state = await loadState(context.runtime)
+  return ensureFound(
+    context,
+    telegramMentionById(state, String(context.args['mention-id'])),
+    'Telegram mention',
+    String(context.args['mention-id']),
+  )
+})
+
+on('telegram mention ack', async (context) => {
+  return mutateState(context.runtime, async (state) => {
+    const mentionId = String(context.args['mention-id'])
+    ensureFound(context, telegramMentionById(state, mentionId), 'Telegram mention', mentionId)
+    const integration = ensureIntegration(state, 'telegram')
+    const acknowledgements = recordOfObjects(
+      integration.config[TELEGRAM_ACKNOWLEDGED_MENTIONS_KEY],
+    )
+    acknowledgements[mentionId] = {
+      at: now(),
+      actor: 'origin/agent',
+    }
+    integration.config[TELEGRAM_ACKNOWLEDGED_MENTIONS_KEY] = acknowledgements
+    rebuildProviderLastRefreshed(integration)
+    return actionResult(`Acknowledged Telegram mention ${mentionId}.`, {
+      affectedIds: [mentionId],
+    })
   })
 })
 

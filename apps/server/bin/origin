@@ -1,2 +1,3 @@
 #!/usr/bin/env sh
-exec bun /Users/polarzero/code/projects/origin/apps/server/src/index.ts "$@"
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec bun "$SCRIPT_DIR/../src/index.ts" "$@"

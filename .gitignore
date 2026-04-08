@@ -21,3 +21,8 @@ DerivedData/
 # Editors
 .idea/
 .vscode/
+
+# Review workflow
+origin-review.db*
+.origin-review-cli-fixture-*/
+.smithers/

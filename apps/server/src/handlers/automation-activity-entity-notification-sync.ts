@@ -375,6 +375,164 @@ function toOutboxItemOutput(item: OutboxItemRecord) {
   ])
 }
 
+type ExternalActionIntentSource = {
+  item: OutboxItemRecord
+  provider: 'email' | 'github' | 'telegram' | 'google-calendar' | 'google-tasks'
+  targetScope: string
+}
+
+function externalActionIntentStatus(status: string) {
+  if (status === 'canceled') return 'canceled'
+  if (status === 'resolved' || status === 'completed') return 'succeeded'
+  if (status === 'failed' || status === 'error') return 'failed'
+  if (status === 'pending') return 'pending'
+  return 'materialized'
+}
+
+function externalActionIntentAction(provider: ExternalActionIntentSource['provider'], kind: string) {
+  if (provider === 'email') {
+    if (kind.includes('reply-all')) return 'reply_all'
+    if (kind.includes('reply')) return 'reply'
+    if (kind.includes('forward')) return 'forward'
+    if (kind.includes('archive')) return 'archive'
+    if (kind.includes('unarchive')) return 'unarchive'
+    if (kind.includes('mark-read')) return 'mark_read'
+    if (kind.includes('mark-unread')) return 'mark_unread'
+    if (kind.includes('unstar')) return 'unstar'
+    if (kind.includes('star')) return 'star'
+    if (kind.includes('unspam')) return 'unspam'
+    if (kind.includes('spam')) return 'spam'
+    if (kind.includes('restore')) return 'restore'
+    if (kind.includes('trash')) return 'trash'
+    return 'send'
+  }
+
+  if (provider === 'github') {
+    if (kind.includes('review-thread')) return 'review_thread_reply'
+    if (kind.includes('review')) return 'review_submit'
+    if (kind.includes('merge')) return 'pr_merge'
+    if (kind.includes('draft')) return 'pr_draft'
+    if (kind.includes('ready')) return 'pr_ready'
+    if (kind.includes('comment')) return 'pr_comment'
+    if (kind.includes('issue')) return 'issue_update'
+    return 'pr_update'
+  }
+
+  if (provider === 'telegram') {
+    return kind.includes('reply') ? 'reply' : 'send'
+  }
+
+  if (kind.includes('attach')) return 'attach'
+  if (kind.includes('detach')) return 'detach'
+  if (kind.includes('reconcile')) return 'reconcile'
+  return kind.includes('pull') ? 'pull' : 'push'
+}
+
+function externalActionIntentSources(state: OriginState): ExternalActionIntentSource[] {
+  const emailAccountId = state.email.accounts[0]?.id ?? 'mail_acc_0001'
+  const githubRepo = state.github.repositories[0]?.name ?? 'origin/origin'
+  const telegramChatId = state.telegram.chats[0]?.id ?? 'tg_chat_0001'
+  const googleCalendarId =
+    state.integrations['google-calendar']?.provider.surfaces[0]?.providerRef ??
+    state.integrations['google-calendar']?.provider.surfaces[0]?.scope ??
+    'google-calendar-default'
+  const googleTaskListId =
+    state.integrations['google-tasks']?.provider.surfaces[0]?.providerRef ??
+    state.integrations['google-tasks']?.provider.surfaces[0]?.scope ??
+    'google-tasks-default'
+
+  return [
+    ...state.email.outbox.map((item) => ({
+      item,
+      provider: 'email' as const,
+      targetScope: emailAccountId,
+    })),
+    ...state.github.outbox.map((item) => ({
+      item,
+      provider: 'github' as const,
+      targetScope: githubRepo,
+    })),
+    ...state.telegram.outbox.map((item) => ({
+      item,
+      provider: 'telegram' as const,
+      targetScope: telegramChatId,
+    })),
+    ...state.sync.providerOutbox
+      .filter(
+        (item): item is OutboxItemRecord & { provider: 'google-calendar' | 'google-tasks' } =>
+          item.provider === 'google-calendar' || item.provider === 'google-tasks',
+      )
+      .map((item) => ({
+        item,
+        provider: item.provider,
+        targetScope: item.provider === 'google-calendar' ? googleCalendarId : googleTaskListId,
+      })),
+  ]
+}
+
+function externalActionIntentTimestamp(
+  state: OriginState,
+  provider: ExternalActionIntentSource['provider'],
+) {
+  if (provider === 'email') return state.email.accounts[0]?.lastSyncAt ?? now()
+  if (provider === 'github') return state.sync.providerJobs[0]?.endedAt ?? now()
+  if (provider === 'telegram') return state.telegram.summaries[0]?.at ?? now()
+  return state.integrations[provider]?.provider.lastRefreshedAt ?? now()
+}
+
+function toExternalActionIntentOutput(state: OriginState, source: ExternalActionIntentSource) {
+  const intentStatus = externalActionIntentStatus(source.item.status)
+  const timestamp = externalActionIntentTimestamp(state, source.provider)
+  const action = externalActionIntentAction(source.provider, source.item.kind)
+  const base = compactObject([
+    ['id', source.item.id],
+    [
+      'kind',
+      source.provider === 'google-calendar' || source.provider === 'google-tasks'
+        ? 'planning_bridge_action'
+        : 'provider_write',
+    ],
+    ['provider', source.provider],
+    ['target-ref', source.targetScope],
+    ['action', action],
+    ['status', intentStatus],
+    ['payload', safeObject(source.item.payload)],
+    ['created-by-actor', 'origin/agent'],
+    ['updated-by-actor', intentStatus === 'materialized' ? undefined : 'origin/agent'],
+    ['created-at', timestamp],
+    ['updated-at', intentStatus === 'materialized' ? undefined : timestamp],
+    ['materialized-at', intentStatus === 'pending' ? undefined : timestamp],
+    ['succeeded-at', intentStatus === 'succeeded' ? timestamp : undefined],
+    ['failed-at', intentStatus === 'failed' ? timestamp : undefined],
+    ['canceled-at', intentStatus === 'canceled' ? timestamp : undefined],
+    ['outbox-refs', [source.item.id]],
+    ['last-error', intentStatus === 'failed' ? source.item.summary : undefined],
+    ['summary', source.item.summary],
+  ])
+
+  if (source.provider === 'email') {
+    return compactObject([...Object.entries(base), ['scope', { 'account-id': source.targetScope }]])
+  }
+
+  if (source.provider === 'github') {
+    return compactObject([...Object.entries(base), ['scope', { repo: source.targetScope }]])
+  }
+
+  if (source.provider === 'telegram') {
+    return compactObject([...Object.entries(base), ['scope', { 'chat-id': source.targetScope }]])
+  }
+
+  return compactObject([
+    ...Object.entries(base),
+    [
+      'scope',
+      source.provider === 'google-calendar'
+        ? { 'calendar-id': source.targetScope }
+        : { 'task-list-id': source.targetScope },
+    ],
+  ])
+}
+
 function toBridgeJobOutput(job: BridgeJobRecord) {
   return compactObject([
     ['id', job.id],
@@ -1529,6 +1687,10 @@ function maybeResolveOutboxItem(state: OriginState, itemId: string) {
   return state.sync.providerOutbox.find((item) => item.id === itemId)
 }
 
+function maybeResolveExternalActionIntent(state: OriginState, intentId: string) {
+  return externalActionIntentSources(state).find((source) => source.item.id === intentId)
+}
+
 function maybeResolveConflict(state: OriginState, conflictId: string) {
   return state.sync.replicaConflicts.find((conflict) => conflict.id === conflictId)
 }
@@ -2044,6 +2206,10 @@ const syncRoutes = [
   'outbox retry',
   'outbox cancel',
   'outbox resolve',
+  'intent list',
+  'intent get',
+  'intent retry',
+  'intent cancel',
   'conflicts',
   'conflict get',
   'conflict resolve',
@@ -3160,6 +3326,90 @@ async function handleSyncRoute(context: HandlerContext, route: (typeof syncRoute
               : `Resolved outbox item ${item.id}.`,
           {
             affectedIds: [item.id],
+            activityIds: [activity.id],
+            traceId: activity.traceId,
+          },
+        )
+      })
+    }
+
+    case 'intent list': {
+      let intents = externalActionIntentSources(state)
+      const providerFilters = coerceArray(context.options.provider as string[] | string | undefined)
+      const kindFilters = coerceArray(context.options.kind as string[] | string | undefined)
+      const actionFilters = coerceArray(context.options.action as string[] | string | undefined)
+      const statusFilters = coerceArray(context.options.status as string[] | string | undefined)
+
+      if (providerFilters.length > 0) {
+        intents = intents.filter((intent) => providerFilters.includes(intent.provider))
+      }
+      if (kindFilters.length > 0) {
+        intents = intents.filter((intent) =>
+          kindFilters.includes(
+            intent.provider === 'google-calendar' || intent.provider === 'google-tasks'
+              ? 'planning_bridge_action'
+              : 'provider_write',
+          ),
+        )
+      }
+      if (actionFilters.length > 0) {
+        intents = intents.filter((intent) =>
+          actionFilters.includes(externalActionIntentAction(intent.provider, intent.item.kind)),
+        )
+      }
+      if (statusFilters.length > 0) {
+        intents = intents.filter((intent) =>
+          statusFilters.includes(externalActionIntentStatus(intent.item.status)),
+        )
+      }
+
+      const limited = takeLimit(intents, context.options.limit as number | undefined)
+      return createListResult(limited.map((intent) => toExternalActionIntentOutput(state, intent)), {
+        total: intents.length,
+        summary: 'External-action intents.',
+      })
+    }
+
+    case 'intent get': {
+      const intentId = String(context.args['intent-id'])
+      const intent = ensureFound(
+        context,
+        maybeResolveExternalActionIntent(state, intentId),
+        'external-action intent',
+        intentId,
+      )
+      return toExternalActionIntentOutput(state, intent)
+    }
+
+    case 'intent retry':
+    case 'intent cancel': {
+      return mutateState(context, async (draft) => {
+        const intentId = String(context.args['intent-id'])
+        const intent = ensureFound(
+          context,
+          maybeResolveExternalActionIntent(draft, intentId),
+          'external-action intent',
+          intentId,
+        )
+        intent.item.status = route === 'intent retry' ? 'pending' : 'canceled'
+        const activity = addActivity(draft, {
+          kind: `sync.${route.replace(/\s+/g, '.')}`,
+          status: 'completed',
+          actor: 'origin/operator',
+          target: intent.item.id,
+          summary:
+            route === 'intent retry'
+              ? `Retried external-action intent ${intent.item.id}.`
+              : `Canceled external-action intent ${intent.item.id}.`,
+          severity: 'info',
+          entityRefs: [intent.item.id],
+        })
+        return createActionResult(
+          route === 'intent retry'
+            ? `Retried external-action intent ${intent.item.id}.`
+            : `Canceled external-action intent ${intent.item.id}.`,
+          {
+            affectedIds: [intent.item.id],
             activityIds: [activity.id],
             traceId: activity.traceId,
           },

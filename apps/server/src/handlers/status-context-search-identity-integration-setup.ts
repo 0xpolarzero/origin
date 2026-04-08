@@ -1,5 +1,5 @@
 import type { HandlerMap, RouteHandlerContext } from '../cli/types.ts'
-import { addActivity, createActionResult, createListResult, createRevisionDiff, createValidationResult, includesQuery, nextId, now, recordRevision, safeObject, scoreText, today } from '../runtime/helpers.ts'
+import { addActivity, createActionResult, createListResult, createRevisionDiff, createValidationResult, includesQuery, nextId, now, recordRevision, safeObject, scoreText, stableHash, today } from '../runtime/helpers.ts'
 import type { RuntimeContext } from '../runtime/context.ts'
 import type { JsonValue, OriginState } from '../runtime/types.ts'
 import { defineHandlers } from '../cli/types.ts'
@@ -74,6 +74,11 @@ type Blocker = {
   remediation?: string[]
 }
 
+const GITHUB_SELECTED_GRANT_IDS_KEY = 'selectedGrantIds'
+const GITHUB_SELECTED_GRANT_REPOS_KEY = 'selectedGrantRepositories'
+const GITHUB_GRANT_SELECTION_UPDATED_AT_KEY = 'grantSelectionUpdatedAt'
+const DEFAULT_VAULT_RECONCILE_ID = 'vault_reconcile_default'
+
 const route = <R extends keyof HandlerMap>(_: R, fn: any) => fn
 
 const actionResult = createActionResult
@@ -132,6 +137,22 @@ function mapStatusCheck(check: ValidationCheck) {
 
 function mapBlocker(blocker: Blocker) {
   return blocker
+}
+
+function stringArrayValue(value: unknown) {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === 'string')
+    : []
+}
+
+function recordOfStringArray(value: unknown) {
+  return Object.fromEntries(
+    Object.entries(safeObject(value)).map(([key, entry]) => [key, stringArrayValue(entry)]),
+  ) as Record<string, string[]>
+}
+
+function setupInputValue(state: State, key: string) {
+  return state.setup.inputs.find((input) => input.key === key)?.value
 }
 
 function mapIntegrationStatus(key: string, integration: IntegrationRecord) {
@@ -1409,6 +1430,121 @@ function ensureIntegrationDefaults(state: State, key: string) {
   return integration
 }
 
+function githubGrantOutputs(state: State) {
+  const integration = ensureIntegrationDefaults(state, 'github')
+  const selectedIds = stringArrayValue(integration.config[GITHUB_SELECTED_GRANT_IDS_KEY])
+  const repoFilters = recordOfStringArray(integration.config[GITHUB_SELECTED_GRANT_REPOS_KEY])
+  const selectionUpdatedAt =
+    typeof integration.config[GITHUB_GRANT_SELECTION_UPDATED_AT_KEY] === 'string'
+      ? String(integration.config[GITHUB_GRANT_SELECTION_UPDATED_AT_KEY])
+      : undefined
+  const permissions = Object.fromEntries(
+    (integration.grantedScopes.length ? integration.grantedScopes : integration.configuredScopes).map((scope) => [
+      scope,
+      'granted',
+    ]),
+  )
+  const groupedRepos = new Map<string, string[]>()
+  for (const repo of state.github.repositories) {
+    const owner = repo.name.split('/')[0] ?? repo.name
+    const existing = groupedRepos.get(owner) ?? []
+    existing.push(repo.name)
+    groupedRepos.set(owner, existing)
+  }
+  if (groupedRepos.size === 0) {
+    groupedRepos.set(state.identity.agent.github ?? 'origin', [])
+  }
+
+  return [...groupedRepos.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([owner, repositories]) => {
+      const id = `gh_grant_${stableHash(owner)}`
+      const selectedRepositories = repoFilters[id]?.length ? repoFilters[id] : undefined
+      const accessibleRepositories = selectedRepositories?.length
+        ? repositories.filter((repo) => selectedRepositories.some((filter) => matchesQuery(repo, filter)))
+        : repositories
+      return {
+        id,
+        'installation-id': `inst_${stableHash(owner)}`,
+        'account-login': owner,
+        'account-type': owner === state.identity.agent.github ? 'user' : 'organization',
+        'repository-selection': selectedRepositories?.length ? 'selected' : 'all',
+        'selected-repositories': selectedRepositories,
+        'accessible-repositories': accessibleRepositories,
+        permissions,
+        selected: integration.config[GITHUB_SELECTED_GRANT_IDS_KEY] === undefined ? true : selectedIds.includes(id),
+        status: integration.status.status === 'connected' ? 'active' : 'auth_failed',
+        'last-refreshed-at': integration.status.lastRefreshedAt,
+        'last-validated-at': integration.status.lastValidatedAt,
+        'selection-updated-at': selectionUpdatedAt,
+      }
+    })
+}
+
+function githubGrantById(state: State, grantId: string) {
+  return githubGrantOutputs(state).find((grant) => grant.id === grantId)
+}
+
+function updateGithubGrantSelection(
+  integration: IntegrationRecord,
+  grantId: string,
+  repoFilters: string[] | undefined,
+  selected: boolean,
+) {
+  const selectedGrantIds = new Set(stringArrayValue(integration.config[GITHUB_SELECTED_GRANT_IDS_KEY]))
+  if (selected) selectedGrantIds.add(grantId)
+  else selectedGrantIds.delete(grantId)
+
+  const selectedRepositories = recordOfStringArray(integration.config[GITHUB_SELECTED_GRANT_REPOS_KEY])
+  if (selected && repoFilters?.length) selectedRepositories[grantId] = repoFilters
+  else delete selectedRepositories[grantId]
+
+  integration.config[GITHUB_SELECTED_GRANT_IDS_KEY] = [...selectedGrantIds]
+  integration.config[GITHUB_SELECTED_GRANT_REPOS_KEY] = selectedRepositories
+  integration.config[GITHUB_GRANT_SELECTION_UPDATED_AT_KEY] = isoNow()
+}
+
+function vaultReconcileRecord(state: State, fallbackPath: string) {
+  const reconcileId =
+    typeof setupInputValue(state, 'vault-reconcile-id') === 'string'
+      ? String(setupInputValue(state, 'vault-reconcile-id'))
+      : DEFAULT_VAULT_RECONCILE_ID
+  const statusValue =
+    typeof setupInputValue(state, 'vault-reconcile-status') === 'string'
+      ? String(setupInputValue(state, 'vault-reconcile-status'))
+      : 'pending'
+  const workspacePath =
+    typeof setupInputValue(state, 'workspace-root') === 'string'
+      ? String(setupInputValue(state, 'workspace-root'))
+      : fallbackPath
+  const resolutionValue =
+    typeof setupInputValue(state, 'vault-reconcile-resolution') === 'string'
+      ? String(setupInputValue(state, 'vault-reconcile-resolution'))
+      : undefined
+  const collisions = state.memory.artifacts
+    .filter((artifact) => artifact.kind === 'note' && artifact.replicatedState)
+    .slice(0, 2)
+    .map((artifact) => ({
+      path: artifact.path,
+      kind: artifact.path === 'Origin/Memory.md' ? 'memory-path-collision' : 'path-collision',
+      summary: `Managed note content is already tracked for ${artifact.path}.`,
+    }))
+
+  return {
+    id: reconcileId,
+    path: workspacePath,
+    status: statusValue === 'applied' || statusValue === 'canceled' ? statusValue : 'pending',
+    'managed-summary': `${state.memory.artifacts.filter((artifact) => artifact.replicatedState).length} managed artifact(s) are ready to project into the workspace.`,
+    'disk-summary': `Workspace path ${workspacePath} needs an explicit reconcile decision before projection.`,
+    collisions,
+    'allowed-resolutions': ['adopt', 'keep-current', 'replace-target'],
+    summary:
+      statusValue === 'applied'
+        ? `Vault reconcile ${reconcileId} was applied${resolutionValue ? ` with ${resolutionValue}` : ''}.`
+        : `Vault reconcile ${reconcileId} is pending for ${workspacePath}.`,
+  }
+}
+
 function integrationJobRecord(key: string, job: IntegrationRecord['jobs'][number]) {
   return {
     id: job.id,
@@ -2287,6 +2423,87 @@ export const statusContextSearchIdentityIntegrationSetupHandlers = defineHandler
       return actionResult('Completed GitHub onboarding.', { affectedIds: ['github'] })
     })
   }),
+  'setup provider github grant list': route('setup provider github grant list', async (context: RouteHandlerContext<'setup provider github grant list'>) => {
+    const state = await loadState(context.runtime)
+    const grants = githubGrantOutputs(state)
+    return listResult(grants, {
+      total: grants.length,
+      summary: `${grants.length} GitHub installation grant(s).`,
+    })
+  }),
+  'setup provider github grant refresh': route('setup provider github grant refresh', async (context: RouteHandlerContext<'setup provider github grant refresh'>) => {
+    return mutateState(context.runtime, async (state) => {
+      const integration = ensureIntegrationDefaults(state, 'github')
+      integration.status.lastValidatedAt = isoNow()
+      integration.status.lastRefreshedAt = isoNow()
+      integration.provider.lastRefreshedAt = isoNow()
+      addActivity(state, {
+        kind: 'setup.provider.github.grant.refresh',
+        status: 'completed',
+        actor: 'origin/agent',
+        summary: 'Refreshed GitHub installation grants during onboarding.',
+        entityRefs: ['github'],
+      })
+      return actionResult('Refreshed GitHub installation grants during onboarding.', {
+        affectedIds: ['github'],
+      })
+    })
+  }),
+  'setup provider github grant select': route('setup provider github grant select', async (context: RouteHandlerContext<'setup provider github grant select'>) => {
+    return mutateState(context.runtime, async (state) => {
+      const grantId = String(context.args['grant-id'])
+      if (!githubGrantById(state, grantId)) {
+        return context.error({
+          code: 'NOT_FOUND',
+          message: `Unknown GitHub installation grant: ${grantId}`,
+        })
+      }
+      const integration = ensureIntegrationDefaults(state, 'github')
+      updateGithubGrantSelection(
+        integration,
+        grantId,
+        stringArrayValue(context.options.repo),
+        true,
+      )
+      integration.status.lastRefreshedAt = isoNow()
+      integration.provider.lastRefreshedAt = isoNow()
+      addActivity(state, {
+        kind: 'setup.provider.github.grant.select',
+        status: 'completed',
+        actor: 'origin/agent',
+        summary: `Selected GitHub installation grant ${grantId} during onboarding.`,
+        entityRefs: [grantId],
+      })
+      return actionResult(`Selected GitHub installation grant ${grantId}.`, {
+        affectedIds: [grantId],
+      })
+    })
+  }),
+  'setup provider github grant deselect': route('setup provider github grant deselect', async (context: RouteHandlerContext<'setup provider github grant deselect'>) => {
+    return mutateState(context.runtime, async (state) => {
+      const grantId = String(context.args['grant-id'])
+      if (!githubGrantById(state, grantId)) {
+        return context.error({
+          code: 'NOT_FOUND',
+          message: `Unknown GitHub installation grant: ${grantId}`,
+        })
+      }
+      const integration = ensureIntegrationDefaults(state, 'github')
+      updateGithubGrantSelection(integration, grantId, undefined, false)
+      integration.status.lastRefreshedAt = isoNow()
+      integration.provider.lastRefreshedAt = isoNow()
+      addActivity(state, {
+        kind: 'setup.provider.github.grant.deselect',
+        status: 'completed',
+        actor: 'origin/agent',
+        summary: `Deselected GitHub installation grant ${grantId} during onboarding.`,
+        entityRefs: [grantId],
+      })
+      return actionResult(`Deselected GitHub installation grant ${grantId}.`, {
+        affectedIds: [grantId],
+      })
+    })
+  }),
   'setup provider telegram token-set': route('setup provider telegram token-set', async (context: RouteHandlerContext<'setup provider telegram token-set'>) => {
     return mutateState(context.runtime, async (state) => {
       const integration = ensureIntegrationDefaults(state, 'telegram')
@@ -2329,6 +2546,7 @@ export const statusContextSearchIdentityIntegrationSetupHandlers = defineHandler
     return mutateState(context.runtime, async (state) => {
       ensureSetupInput(state, 'workspace-root', context.options.path, 'setup')
       ensureSetupInput(state, 'workspace-create-if-missing', context.options['create-if-missing'], 'setup')
+      ensureSetupInput(state, 'vault-reconcile-id', DEFAULT_VAULT_RECONCILE_ID, 'setup')
       if (state.setup.deployment.stateDir === undefined) state.setup.deployment.stateDir = context.runtime.store.paths.stateDir
       addActivity(state, {
         kind: 'setup.vault.init',
@@ -2338,6 +2556,49 @@ export const statusContextSearchIdentityIntegrationSetupHandlers = defineHandler
         entityRefs: ['workspace'],
       })
       return actionResult(`Initialized workspace at ${context.options.path}.`, { affectedIds: [context.options.path] })
+    })
+  }),
+  'setup vault reconcile get': route('setup vault reconcile get', async (context: RouteHandlerContext<'setup vault reconcile get'>) => {
+    const state = await loadState(context.runtime)
+    const reconcile = vaultReconcileRecord(state, context.runtime.store.paths.workspaceRoot)
+    if (reconcile.id !== String(context.args['reconcile-id'])) {
+      return context.error({
+        code: 'NOT_FOUND',
+        message: `Unknown vault reconcile: ${context.args['reconcile-id']}`,
+      })
+    }
+    return reconcile
+  }),
+  'setup vault reconcile apply': route('setup vault reconcile apply', async (context: RouteHandlerContext<'setup vault reconcile apply'>) => {
+    return mutateState(context.runtime, async (state) => {
+      const reconcile = vaultReconcileRecord(state, context.runtime.store.paths.workspaceRoot)
+      const reconcileId = String(context.args['reconcile-id'])
+      if (reconcile.id !== reconcileId) {
+        return context.error({
+          code: 'NOT_FOUND',
+          message: `Unknown vault reconcile: ${reconcileId}`,
+        })
+      }
+      const resolution = String(context.options.resolution)
+      if (resolution === 'replace-target' && context.options['confirm-overwrite'] !== true) {
+        return context.error({
+          code: 'INVALID_INPUT',
+          message: 'confirm-overwrite=true is required for replace-target.',
+        })
+      }
+      ensureSetupInput(state, 'vault-reconcile-status', 'applied', 'setup')
+      ensureSetupInput(state, 'vault-reconcile-resolution', resolution, 'setup')
+      addActivity(state, {
+        kind: 'setup.vault.reconcile.apply',
+        status: 'completed',
+        actor: 'origin/agent',
+        summary: `Applied vault reconcile ${reconcileId} with ${resolution}.`,
+        entityRefs: [reconcileId],
+      })
+      return actionResult(`Applied vault reconcile ${reconcileId} with ${resolution}.`, {
+        affectedIds: [reconcileId],
+        reconcileId,
+      })
     })
   }),
   'setup vault memory-bootstrap': route('setup vault memory-bootstrap', async (context: RouteHandlerContext<'setup vault memory-bootstrap'>) => {
