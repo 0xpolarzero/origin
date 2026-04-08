@@ -84,6 +84,24 @@ function compact<T extends Record<string, unknown>>(value: T) {
   return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined && entry !== null && !(Array.isArray(entry) && entry.length === 0))) as Partial<T>
 }
 
+function normalizeCalendarItemKind(kind: string | undefined) {
+  return kind === 'focus' ? 'time_block' : kind
+}
+
+function normalizeEmailTriageState(state: string | undefined) {
+  return state === 'needs-action' ? 'needs_reply' : state
+}
+
+function normalizeTelegramConnectionStatus(status: string | undefined) {
+  return status === 'connected' ? 'valid' : status
+}
+
+function normalizeTelegramSummaryStatus(status: string | undefined) {
+  if (status === 'posted') return 'completed'
+  if (status === 'pending') return 'queued'
+  return status
+}
+
 function firstLine(value: string | undefined, fallback: string) {
   const line = (value ?? '')
     .split(/\r?\n/)
@@ -237,7 +255,7 @@ function calendarItemOutput(state: State, item: CalendarItemRecord) {
     id: item.id,
     title: item.title,
     status: item.status,
-    kind: item.kind,
+    kind: normalizeCalendarItemKind(item.kind),
     project: project ? projectOutput(project) : undefined,
     labels: labels.length ? labels.map(labelOutput) : undefined,
     'description-md': item.descriptionMd,
@@ -292,9 +310,10 @@ function emailTriageOutput(thread: EmailThreadRecord) {
   if (!thread.triage) return undefined
   return compact({
     'thread-id': thread.triage.threadId,
-    state: thread.triage.state,
+    state: normalizeEmailTriageState(thread.triage.state),
     'follow-up-at': thread.triage.followUpAt,
     'linked-task-id': thread.triage.linkedTaskId,
+    'notes-md': thread.triage.note,
   })
 }
 
@@ -305,7 +324,8 @@ function emailThreadOutput(state: State, thread: EmailThreadRecord, expandMessag
     subject: thread.subject,
     status: thread.status,
     messages: expandMessages && messages.length ? messages.map(emailMessageOutput) : undefined,
-    triage: emailTriageOutput(thread),
+    'triage-state': normalizeEmailTriageState(thread.triage?.state),
+    'follow-up-at': thread.triage?.followUpAt,
     'last-message-at': thread.lastMessageAt,
     labels: thread.labelIds,
     freshness: thread.freshness,
@@ -387,9 +407,13 @@ function githubReviewOutput(review: GithubReviewRecord) {
 
 function telegramConnectionOutput(connection: TelegramConnectionRecord) {
   return compact({
-    status: connection.status,
+    status: normalizeTelegramConnectionStatus(connection.status),
     'bot-username': connection.botUsername,
-    'privacy-mode': connection.privacyMode,
+    'expected-privacy-mode': connection.privacyMode,
+    'observed-privacy-mode': connection.privacyMode,
+    'default-mode': connection.defaultMode,
+    'default-summary-enabled': connection.defaultSummaryEnabled,
+    'default-summary-lookback': connection.defaultSummaryWindow,
     summary: connection.summary,
   })
 }
@@ -430,8 +454,16 @@ function telegramSummaryOutput(summary: TelegramSummaryJobRecord) {
   return compact({
     id: summary.id,
     'chat-id': summary.chatId,
-    status: summary.status,
+    'trigger-kind': summary.triggerKind ?? 'manual',
+    status: normalizeTelegramSummaryStatus(summary.status),
     summary: summary.summary,
+    'output-message-id': summary.outputMessageId,
+    'window-start': summary.windowStart,
+    'window-end': summary.windowEnd,
+    'queued-at': summary.queuedAt,
+    'completed-at': summary.completedAt,
+    'failed-at': summary.failedAt,
+    'last-error': summary.lastError,
     at: summary.at,
   })
 }
@@ -472,12 +504,12 @@ function integrationStatusOutput(key: string, integration: IntegrationRecord) {
 }
 
 function integrationScopeOutput(key: string, integration: IntegrationRecord) {
-  return compact({
+  return {
     key,
     configured: integration.configuredScopes,
     granted: integration.grantedScopes,
     missing: integration.missingScopes,
-  })
+  }
 }
 
 function providerPollerOutput(poller: ProviderPollerRecord) {
@@ -1346,15 +1378,16 @@ function telegramIntegrationStatus(state: State) {
 
 function telegramValidationResult(state: State) {
   const connection = state.telegram.connection
+  const normalizedStatus = normalizeTelegramConnectionStatus(connection.status)
   return validationResult(
     [
       {
         id: 'telegram-connection',
         kind: 'telegram',
         target: connection.botUsername ?? 'telegram',
-        status: connection.status === 'connected' ? 'pass' : 'warn',
+        status: normalizedStatus === 'valid' ? 'pass' : 'warn',
         message: connection.summary,
-        remediation: connection.status === 'connected' ? undefined : ['Set or refresh the bot token and re-run configuration.'],
+        remediation: normalizedStatus === 'valid' ? undefined : ['Set or refresh the bot token and re-run configuration.'],
       },
       {
         id: 'telegram-groups',
@@ -1364,7 +1397,7 @@ function telegramValidationResult(state: State) {
         message: `${state.telegram.groups.length} registered group(s).`,
       },
     ],
-    `${connection.status} Telegram connection.`,
+    `${normalizedStatus} Telegram connection.`,
   )
 }
 
@@ -2356,7 +2389,13 @@ function telegramSummaryNext(state: State) {
     .filter((group) => group.enabled)
     .map((group) => {
       const existing = state.telegram.summaries.find((summary) => summary.chatId === group.chatId)
-      return existing ?? { id: nextId(state, 'tg_sum'), chatId: group.chatId, status: 'pending', summary: group.summary ?? 'Telegram summary due.' }
+      return existing ?? {
+        id: nextId(state, 'tg_sum'),
+        chatId: group.chatId,
+        triggerKind: 'scheduled',
+        status: 'pending',
+        summary: group.summary ?? 'Telegram summary due.',
+      }
     })
 }
 
@@ -2369,11 +2408,20 @@ function emailAccountAliases(state: State) {
 }
 
 function emailNextThreads(state: State) {
-  return state.email.threads.filter((thread) => thread.unread || thread.triage?.state === 'needs-action').sort((left, right) => cmpDateDescending(left.lastMessageAt, right.lastMessageAt))
+  return state.email.threads
+    .filter((thread) => thread.unread || normalizeEmailTriageState(thread.triage?.state) === 'needs_reply')
+    .sort((left, right) => cmpDateDescending(left.lastMessageAt, right.lastMessageAt))
 }
 
 function emailThreadTriages(state: State) {
-  return emailTriageList(state).map((thread) => emailTriageOutput(thread)).filter(Boolean)
+  return emailTriageList(state)
+    .map((thread) => emailTriageOutput(thread))
+    .filter(
+      (
+        triage,
+      ): triage is NonNullable<ReturnType<typeof emailTriageOutput>> =>
+        triage !== undefined,
+    )
 }
 
 function emailThreadTriageById(state: State, threadId: string) {
@@ -2903,11 +2951,24 @@ on('planning task revision get', async (context) => {
 
 on('planning task revision diff', async (context) => {
   const state = await loadState(context.runtime)
-  const task = taskByIdOrError(context, state, String(context.args['task-id']))
-  const revision = ensureFound(context, findRevision(task, String(context.args['revision-id'])), 'revision', String(context.args['revision-id']))
-  const comparison = context.options.against ? findRevision(task, String(context.options.against)) : undefined
+  const revisionId = String(context.args['revision-id'])
+  const task =
+    (context.args['task-id']
+      ? resolveTask(state, String(context.args['task-id']))
+      : undefined) ??
+    state.planning.tasks.find((entry) =>
+      entry.revisions.some((revision) => revision.id === revisionId),
+    )
+  const record = ensureFound(
+    context,
+    task,
+    'task',
+    String(context.args['task-id'] ?? revisionId),
+  )
+  const revision = ensureFound(context, findRevision(record, revisionId), 'revision', revisionId)
+  const comparison = context.options.against ? findRevision(record, String(context.options.against)) : undefined
   const left = JSON.stringify(revision.snapshot ?? {})
-  const right = JSON.stringify((comparison?.snapshot ?? taskSnapshot(task)) as Record<string, unknown>)
+  const right = JSON.stringify((comparison?.snapshot ?? taskSnapshot(record)) as Record<string, unknown>)
   return createRevisionDiff(left, right, Object.keys(revision.snapshot ?? {}))
 })
 
@@ -3235,18 +3296,44 @@ on('planning calendar-item revision list', async (context) => {
 
 on('planning calendar-item revision get', async (context) => {
   const state = await loadState(context.runtime)
-  const item = calendarByIdOrError(context, state, String(context.args['calendar-item-id']))
-  const revision = ensureFound(context, findRevision(item, String(context.args['revision-id'])), 'revision', String(context.args['revision-id']))
+  const revisionId = String(context.args['revision-id'])
+  const item =
+    (context.args['calendar-item-id']
+      ? resolveCalendarItem(state, String(context.args['calendar-item-id']))
+      : undefined) ??
+    state.planning.calendarItems.find((entry) =>
+      entry.revisions.some((revision) => revision.id === revisionId),
+    )
+  const record = ensureFound(
+    context,
+    item,
+    'calendar-item',
+    String(context.args['calendar-item-id'] ?? revisionId),
+  )
+  const revision = ensureFound(context, findRevision(record, revisionId), 'revision', revisionId)
   return revisionEntry(revision)
 })
 
 on('planning calendar-item revision diff', async (context) => {
   const state = await loadState(context.runtime)
-  const item = calendarByIdOrError(context, state, String(context.args['calendar-item-id']))
-  const revision = ensureFound(context, findRevision(item, String(context.args['revision-id'])), 'revision', String(context.args['revision-id']))
-  const comparison = context.options.against ? findRevision(item, String(context.options.against)) : undefined
+  const revisionId = String(context.args['revision-id'])
+  const item =
+    (context.args['calendar-item-id']
+      ? resolveCalendarItem(state, String(context.args['calendar-item-id']))
+      : undefined) ??
+    state.planning.calendarItems.find((entry) =>
+      entry.revisions.some((revision) => revision.id === revisionId),
+    )
+  const record = ensureFound(
+    context,
+    item,
+    'calendar-item',
+    String(context.args['calendar-item-id'] ?? revisionId),
+  )
+  const revision = ensureFound(context, findRevision(record, revisionId), 'revision', revisionId)
+  const comparison = context.options.against ? findRevision(record, String(context.options.against)) : undefined
   const left = JSON.stringify(revision.snapshot ?? {})
-  const right = JSON.stringify((comparison?.snapshot ?? calendarSnapshot(item)) as Record<string, unknown>)
+  const right = JSON.stringify((comparison?.snapshot ?? calendarSnapshot(record)) as Record<string, unknown>)
   return createRevisionDiff(left, right, Object.keys(revision.snapshot ?? {}))
 })
 
@@ -3652,7 +3739,15 @@ on('email thread list', async (context) => {
   let threads = state.email.threads
   if (context.options.query) threads = threads.filter((thread) => emailThreadMatch(thread, String(context.options.query), state))
   if (context.options.label?.length) threads = threads.filter((thread) => coerceArray(context.options.label as string[]).some((label) => thread.labelIds.includes(label)))
-  if (context.options['triage-state']?.length) threads = threads.filter((thread) => thread.triage && coerceArray(context.options['triage-state'] as string[]).includes(thread.triage.state))
+  if (context.options['triage-state']?.length) {
+    threads = threads.filter(
+      (thread) =>
+        thread.triage &&
+        coerceArray(context.options['triage-state'] as string[]).includes(
+          normalizeEmailTriageState(thread.triage.state) ?? '',
+        ),
+    )
+  }
   threads = listWithLimit(genericSortByLatest(threads), context.options.limit ? Number(context.options.limit) : undefined)
   return listResult(mapEmailThreads(state, threads), { total: threads.length, summary: entityListSummary('email thread', threads.length) })
 })
@@ -3690,7 +3785,12 @@ on('email thread unread', async (context) => {
 
 on('email thread triage-needed', async (context) => {
   const state = await loadState(context.runtime)
-  const threads = listWithLimit(state.email.threads.filter((thread) => thread.triage?.state === 'needs-action' || thread.unread), context.options.limit ? Number(context.options.limit) : undefined)
+  const threads = listWithLimit(
+    state.email.threads.filter(
+      (thread) => normalizeEmailTriageState(thread.triage?.state) === 'needs_reply' || thread.unread,
+    ),
+    context.options.limit ? Number(context.options.limit) : undefined,
+  )
   return listResult(mapEmailThreads(state, threads), { total: threads.length, summary: entityListSummary('triage-needed thread', threads.length) })
 })
 
@@ -3877,7 +3977,12 @@ on('email reply-all', async (context) => {
 
 on('email triage list', async (context) => {
   const state = await loadState(context.runtime)
-  const triages = emailThreadTriages(state)
+  const states = coerceArray(context.options.state as string[] | string | undefined)
+  let triages = emailThreadTriages(state)
+  if (states.length > 0) {
+    triages = triages.filter((triage) => states.includes(String(triage.state)))
+  }
+  triages = listWithLimit(triages, context.options.limit ? Number(context.options.limit) : undefined)
   return listResult(triages, { total: triages.length, summary: entityListSummary('email triage record', triages.length) })
 })
 
@@ -3906,7 +4011,7 @@ on('email triage clear', async (context) => {
 on('email triage-note set', async (context) => {
   return mutateState(context.runtime, async (state) => {
     const thread = emailThreadByIdOrError(context, state, String(context.args['thread-id']))
-    thread.triage ??= { threadId: thread.id, state: 'needs-action' }
+    thread.triage ??= { threadId: thread.id, state: 'needs_reply' }
     thread.triage.note = String(context.options.body)
     return actionResult(`Updated triage note for ${thread.subject}.`, { affectedIds: [thread.id] })
   })
@@ -3915,7 +4020,7 @@ on('email triage-note set', async (context) => {
 on('email follow-up set', async (context) => {
   return mutateState(context.runtime, async (state) => {
     const thread = emailThreadByIdOrError(context, state, String(context.args['thread-id']))
-    thread.triage ??= { threadId: thread.id, state: 'needs-action' }
+    thread.triage ??= { threadId: thread.id, state: 'needs_reply' }
     thread.triage.followUpAt = String(context.options.at)
     return actionResult(`Set follow-up for ${thread.subject}.`, { affectedIds: [thread.id] })
   })
@@ -3926,7 +4031,7 @@ on('email task link', async (context) => {
     const thread = emailThreadByIdOrError(context, state, String(context.args['thread-id']))
     const taskId = String(context.options['task-id'])
     if (!thread.linkedTaskIds.includes(taskId)) thread.linkedTaskIds.push(taskId)
-    thread.triage ??= { threadId: thread.id, state: 'needs-action' }
+    thread.triage ??= { threadId: thread.id, state: 'needs_reply' }
     thread.triage.linkedTaskId = taskId
     return actionResult(`Linked ${thread.subject} to task ${taskId}.`, { affectedIds: [thread.id, taskId] })
   })
@@ -4625,7 +4730,7 @@ on('telegram connection status', async (context) => {
 
 on('telegram connection set-token', async (context) => {
   return mutateState(context.runtime, async (state) => {
-    state.telegram.connection.status = 'connected'
+    state.telegram.connection.status = 'valid'
     state.telegram.connection.summary = 'Telegram bot token stored and validated.'
     state.telegram.connection.botUsername = state.telegram.connection.botUsername ?? '@origin_bot'
     ensureIntegration(state, 'telegram').status.lastValidatedAt = now()
@@ -4648,10 +4753,14 @@ on('telegram connection validate', async (context) => {
 
 on('telegram connection configure', async (context) => {
   return mutateState(context.runtime, async (state) => {
-    if (context.options['privacy-mode'] !== undefined) state.telegram.connection.privacyMode = String(context.options['privacy-mode'])
+    if (context.options['expected-privacy-mode'] !== undefined) {
+      state.telegram.connection.privacyMode = String(context.options['expected-privacy-mode'])
+    }
     if (context.options['default-mode'] !== undefined) state.telegram.connection.defaultMode = String(context.options['default-mode']) as TelegramConnectionRecord['defaultMode']
     if (context.options['default-summary-enabled'] !== undefined) state.telegram.connection.defaultSummaryEnabled = Boolean(context.options['default-summary-enabled'])
-    if (context.options['default-summary-window'] !== undefined) state.telegram.connection.defaultSummaryWindow = String(context.options['default-summary-window'])
+    if (context.options['default-summary-lookback'] !== undefined) {
+      state.telegram.connection.defaultSummaryWindow = String(context.options['default-summary-lookback'])
+    }
     return actionResult('Configured Telegram connection defaults.', { affectedIds: ['telegram'] })
   })
 })
@@ -4876,7 +4985,17 @@ on('telegram summary get', async (context) => {
 on('telegram summary run', async (context) => {
   return mutateState(context.runtime, async (state) => {
     const chat = telegramChatByIdOrError(context, state, String(context.args['chat-id']))
-    const summary: TelegramSummaryJobRecord = { id: nextId(state, 'tg_sum'), chatId: chat.id, status: 'completed', summary: `Summary for ${chat.title}.`, at: now() }
+    const completedAt = now()
+    const summary: TelegramSummaryJobRecord = {
+      id: nextId(state, 'tg_sum'),
+      chatId: chat.id,
+      triggerKind: 'manual',
+      status: 'completed',
+      summary: `Summary for ${chat.title}.`,
+      queuedAt: completedAt,
+      completedAt,
+      at: completedAt,
+    }
     state.telegram.summaries.push(summary)
     return actionResult(`Generated Telegram summary for ${chat.id}.`, { affectedIds: [summary.id] })
   })
@@ -4885,7 +5004,9 @@ on('telegram summary run', async (context) => {
 on('telegram summary post', async (context) => {
   return mutateState(context.runtime, async (state) => {
     const summary = ensureFound(context, state.telegram.summaries.find((item) => item.id === String(context.args['summary-id'])), 'summary job', String(context.args['summary-id']))
-    summary.status = 'posted'
+    summary.status = 'completed'
+    summary.outputMessageId = nextId(state, 'tg_msg')
+    summary.completedAt = summary.completedAt ?? now()
     return actionResult(`Posted Telegram summary ${summary.id}.`, { affectedIds: [summary.id] })
   })
 })

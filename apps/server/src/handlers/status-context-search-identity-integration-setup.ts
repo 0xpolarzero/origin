@@ -2512,7 +2512,7 @@ export const statusContextSearchIdentityIntegrationSetupHandlers = defineHandler
       integration.provider.status = 'connected'
       integration.status.lastValidatedAt = isoNow()
       integration.status.lastRefreshedAt = isoNow()
-      state.telegram.connection.status = 'connected'
+      state.telegram.connection.status = 'valid'
       state.telegram.connection.botUsername = state.identity.agent.telegram ?? state.telegram.connection.botUsername
       addActivity(state, {
         kind: 'setup.provider.telegram.token-set',
@@ -2526,7 +2526,7 @@ export const statusContextSearchIdentityIntegrationSetupHandlers = defineHandler
   }),
   'setup provider telegram configure': route('setup provider telegram configure', async (context: RouteHandlerContext<'setup provider telegram configure'>) => {
     return mutateState(context.runtime, async (state) => {
-      const privacyMode = context.options['privacy-mode']
+      const privacyMode = context.options['expected-privacy-mode'] ?? context.options['privacy-mode']
       if (privacyMode !== undefined) {
         state.telegram.connection.privacyMode = privacyMode
       }

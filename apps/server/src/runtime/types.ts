@@ -566,8 +566,16 @@ export type TelegramMessageRecord = {
 export type TelegramSummaryJobRecord = {
   id: string
   chatId: string
+  triggerKind?: string
   status: string
   summary: string
+  outputMessageId?: string
+  windowStart?: IsoDateTime
+  windowEnd?: IsoDateTime
+  queuedAt?: IsoDateTime
+  completedAt?: IsoDateTime
+  failedAt?: IsoDateTime
+  lastError?: string
   at?: IsoDateTime
 }
 

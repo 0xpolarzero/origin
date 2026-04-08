@@ -252,17 +252,52 @@ function toAutomationRetryPolicyOutput(policy: AutomationRetryPolicyRecord | und
   ])
 }
 
-function toAutomationOutput(automation: AutomationRecord) {
+function toPublicAutomationStatus(status: string) {
+  if (status === 'enabled' || status === 'active') return 'active'
+  if (status === 'paused' || status === 'disabled' || status === 'archived') return status
+  return 'active'
+}
+
+function toPublicAutomationRunStatus(status: string) {
+  if (status === 'completed' || status === 'succeeded') return 'succeeded'
+  if (status === 'queued' || status === 'running' || status === 'failed' || status === 'canceled' || status === 'skipped') {
+    return status
+  }
+  return 'succeeded'
+}
+
+function automationMetadata(state: OriginState, automationId: string) {
+  const events = automationEventsForAutomation(state, automationId)
+    .slice()
+    .sort((left, right) => left.at.localeCompare(right.at))
+  const createdEvent = events[0]
+  const updatedEvent = events.at(-1)
+  const latestRun = automationRunsForAutomation(state, automationId)[0]
+
+  return compactObject([
+    ['created-at', createdEvent?.at ?? state.createdAt],
+    ['updated-at', updatedEvent?.at ?? state.updatedAt],
+    ['created-by-actor', createdEvent?.actor ?? 'origin/system'],
+    ['updated-by-actor', updatedEvent?.actor ?? 'origin/system'],
+    ['last-run-at', latestRun ? latestTime(latestRun) : undefined],
+    ['next-run-at', undefined],
+    ['last-run-status', latestRun ? toPublicAutomationRunStatus(latestRun.status) : undefined],
+  ])
+}
+
+function toAutomationOutput(state: OriginState, automation: AutomationRecord) {
   return compactObject([
     ['id', automation.id],
+    ['name', automation.title],
     ['title', automation.title],
-    ['status', automation.status],
+    ['status', toPublicAutomationStatus(automation.status)],
     ['kind', automation.kind],
     ['summary', automation.summary],
     ['trigger', toAutomationTriggerOutput(automation.trigger)],
     ['actions', automation.actions?.map(toAutomationActionOutput)],
     ['run-policy', toAutomationRunPolicyOutput(automation.runPolicy)],
     ['retry-policy', toAutomationRetryPolicyOutput(automation.retryPolicy)],
+    ...Object.entries(automationMetadata(state, automation.id)),
   ])
 }
 
@@ -270,14 +305,23 @@ function toAutomationRunOutput(run: AutomationRunRecord) {
   return compactObject([
     ['id', run.id],
     ['automation-id', run.automationId],
-    ['status', run.status],
+    ['status', toPublicAutomationRunStatus(run.status)],
     ['summary', run.summary],
     ['triggered-at', run.triggeredAt],
     ['scheduled-at', run.scheduledAt],
     ['activity-event-id', run.activityEventId],
     ['trigger-reason', run.triggerReason],
+    ['actor', run.triggerReason === 'manual' ? 'origin/operator' : 'origin/automation'],
+    ['input-summary-md', undefined],
+    ['output-summary-md', undefined],
+    ['error-md', undefined],
+    ['retry-count', undefined],
+    ['attempt-number', undefined],
     ['started-at', run.startedAt],
+    ['finished-at', run.endedAt],
     ['ended-at', run.endedAt],
+    ['created-at', run.triggeredAt],
+    ['updated-at', run.endedAt ?? run.startedAt ?? run.triggeredAt],
     ['trace-id', run.traceId],
   ])
 }
@@ -293,17 +337,7 @@ function toAutomationRunStepOutput(step: AutomationRunStepRecord) {
 
 function toAutomationRunDetailOutput(run: AutomationRunRecord, events: ActivityRecord[] = []) {
   return compactObject([
-    ['id', run.id],
-    ['automation-id', run.automationId],
-    ['status', run.status],
-    ['summary', run.summary],
-    ['triggered-at', run.triggeredAt],
-    ['scheduled-at', run.scheduledAt],
-    ['activity-event-id', run.activityEventId],
-    ['trigger-reason', run.triggerReason],
-    ['started-at', run.startedAt],
-    ['ended-at', run.endedAt],
-    ['trace-id', run.traceId],
+    ...Object.entries(toAutomationRunOutput(run)),
     ['steps', run.steps.map(toAutomationRunStepOutput)],
     ['events', events.map(toActivityEvent)],
   ])
@@ -1707,7 +1741,13 @@ function automationListView(state: OriginState, options: { status?: string[]; tr
   let items = state.automations.automations
 
   if (options.status?.length) {
-    items = items.filter((automation) => matchesFilters([automation.status], options.status))
+    items = items.filter((automation) => {
+      const status = toPublicAutomationStatus(automation.status)
+      return options.status!.some((filter) => {
+        const normalizedFilter = filter === 'enabled' ? 'active' : filter
+        return status === normalizedFilter
+      })
+    })
   }
 
   if (options.trigger?.length) {
@@ -2008,7 +2048,7 @@ function automationQueuedRuns(state: OriginState) {
 
 function automationDueList(state: OriginState) {
   return state.automations.automations
-    .filter((automation) => automation.status === 'enabled' || automation.status === 'active')
+    .filter((automation) => toPublicAutomationStatus(automation.status) === 'active')
     .sort((left, right) => left.title.localeCompare(right.title))
 }
 
@@ -2232,7 +2272,7 @@ async function handleAutomationRoute(context: HandlerContext, route: (typeof aut
         linkedTask: coerceArray(context.options['linked-task'] as string[] | string | undefined),
         limit: context.options.limit as number | undefined,
       })
-      return createListResult(items.map(toAutomationOutput), {
+      return createListResult(items.map((automation) => toAutomationOutput(state, automation)), {
         total: items.length,
         summary: 'Automations.',
       })
@@ -2240,7 +2280,7 @@ async function handleAutomationRoute(context: HandlerContext, route: (typeof aut
 
     case 'get': {
       const automation = ensureFound(context, maybeResolveAutomation(state, String(context.args['automation-id'])), 'automation', String(context.args['automation-id']))
-      return toAutomationOutput(automation)
+      return toAutomationOutput(state, automation)
     }
 
     case 'create': {
@@ -2399,7 +2439,7 @@ async function handleAutomationRoute(context: HandlerContext, route: (typeof aut
 
     case 'due': {
       const items = automationDueList(state)
-      return createListResult(items.map(toAutomationOutput), {
+      return createListResult(items.map((automation) => toAutomationOutput(state, automation)), {
         total: items.length,
         summary: 'Due automations.',
       })

@@ -271,7 +271,7 @@ export function createInitialState(paths: RuntimePaths): OriginState {
     },
     telegram: {
       connection: {
-        status: 'connected',
+        status: 'valid',
         botUsername: '@origin_bot',
         privacyMode: 'disabled',
         summary: 'Bot is configured for group observation.',
@@ -515,7 +515,7 @@ function seedPlanning(state: OriginState) {
     id: calendarId,
     title: 'Origin CLI implementation block',
     status: 'confirmed',
-    kind: 'focus',
+    kind: 'time_block',
     projectId,
     labelIds: [labelId],
     descriptionMd: 'Deep implementation work for the full CLI surface.',
@@ -704,7 +704,7 @@ function seedEmail(state: OriginState) {
     labelIds: ['INBOX', 'ACTION'],
     triage: {
       threadId,
-      state: 'needs-action',
+      state: 'needs_reply',
       linkedTaskId: 'tsk_0002',
       note: 'Convert the rollout confirmation into a concise update once tests pass.',
     },
@@ -847,8 +847,10 @@ function seedTelegram(state: OriginState) {
   state.telegram.summaries.push({
     id: summaryId,
     chatId,
+    triggerKind: 'scheduled',
     status: 'queued',
     summary: 'Evening summary for Origin Ops.',
+    queuedAt: now(),
     at: now(),
   })
 
