@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "target": "ES2023",
+    "types": ["bun"]
+  },
+  "include": ["backend/**/*.ts", "scripts/**/*.ts"]
+}
