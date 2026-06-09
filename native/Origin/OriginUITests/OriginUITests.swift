@@ -1,6 +1,7 @@
 import XCTest
 
 final class OriginUITests: XCTestCase {
+    @MainActor
     func testDiagnosticsScreenIsLaunchScreen() {
         let app = XCUIApplication()
         app.launch()

@@ -2,6 +2,7 @@ import XCTest
 @testable import Origin
 
 final class DiagnosticsModelTests: XCTestCase {
+    @MainActor
     func testInitialDiagnosticsStateUsesDevelopmentIdentity() {
         let model = DiagnosticsModel()
 

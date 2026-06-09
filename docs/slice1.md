@@ -12,7 +12,7 @@
 - `make build-ios`: build the iOS simulator app at `native/Origin/build/Debug-iphonesimulator/Origin.app`.
 - `make run-ios`: build, install, and launch the iOS app on the iPhone 13 Pro iOS 18 simulator.
 - `make test`: start services, run migrations/seeds, and execute backend tests.
-- `make e2e`: start services, build the iOS app target for simulator, boot the iPhone 13 Pro iOS 18 simulator, install and launch the app, and verify the native app requested PowerSync credentials.
+- `make e2e`: start services, build the iOS UI test target for simulator, run XCTest UI automation on the iPhone 13 Pro iOS 18 simulator, verify the diagnostics screen, and verify the native app requested PowerSync credentials.
 - `make reset`: delete Docker volumes, backend logs, and local derived data.
 
 ## Logs
@@ -32,4 +32,4 @@ Slice 1 seeds exactly one user and one device:
 
 The native diagnostics screen uses these IDs when requesting PowerSync credentials. Slice 1 has no domain writes; `/v1/powersync/upload` exists only as the connector endpoint that later slices will replace with command-intent upload handling.
 
-The native diagnostics screen verifies backend-issued PowerSync credentials and PowerSync service reachability. Local SQLite SDK sync is left as the first native dependency upgrade task after the project can use a PowerSync Swift SDK version compatible with the active Swift toolchain.
+The native diagnostics screen verifies backend-issued PowerSync credentials and PowerSync service reachability. PowerSync-managed local SQLite sync is deferred to Slice 2 so it is implemented once against real notes data.

@@ -49,13 +49,13 @@ Slice 1 stack decisions:
 - [x] Add diagnostics screen with backend URL, user ID, device ID, sync status, last sync time, and last error.
 - [x] Add documented log locations and commands for tailing logs.
 - [x] Add documented reset path for database, PowerSync state, and simulator/app state.
-- [ ] Add full e2e test flow that the agent can run after launch. Command builds the simulator app target directly, boots the resolved simulator, installs the app, launches it, and verifies the native app requested PowerSync credentials.
-- [ ] E2E flow boots services, launches the native app, drives the UI, verifies backend health, verifies PowerSync connectivity, reads diagnostics, and checks logs. Command path exists; UI-driving XCTest remains blocked by the handmade scheme's destination eligibility behavior.
+- [x] Add full e2e test flow that the agent can run after launch. Command builds the simulator UI test target directly, runs `xcodebuild test-without-building` on the resolved simulator, launches the app through XCTest, and verifies the native app requested PowerSync credentials.
+- [x] E2E flow boots services, launches the native app through XCTest UI automation, verifies backend health, verifies PowerSync connectivity, reads diagnostics, and checks logs.
 
 Review bar:
 
 - [x] A reviewer can clone, set up, reset, run tests, launch the app, and see healthy backend/sync status.
-- [ ] The coding agent can run the full app e2e flow, inspect logs, reset state, and debug failures with full local context. UI-driving XCTest remains blocked by the handmade scheme's destination eligibility behavior.
+- [x] The coding agent can run the full app e2e flow, inspect logs, reset state, and debug failures with full local context.
 - [x] E2E failures produce actionable logs rather than silent app/backend/sync states.
 - [x] No notes, AI, providers, files, Automerge, or extra feature logic is included.
 
