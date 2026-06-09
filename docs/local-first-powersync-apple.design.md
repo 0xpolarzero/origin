@@ -2,7 +2,7 @@
 
 ## Summary
 
-We are building a personal everything app for iOS 18+ and macOS. It should feel instant, work offline, sync across Apple devices, and let a remote AI assistant use fixed tools to read allowed personal data and create drafts or proposals without receiving private provider tokens or performing external side effects directly.
+We are building a personal everything app for iOS 18+ and macOS. It should feel instant, work offline, sync across Apple devices, and let a remote AI assistant use fixed tools to read allowed personal data, edit app data, and create safe drafts without receiving private provider tokens or performing external side effects directly.
 
 The architecture uses:
 
@@ -12,7 +12,7 @@ The architecture uses:
 - **SwiftUI + Observation** for the native UI.
 - **Hono + Effect** for typed command handling, validation, user-ownership checks, and effect boundaries.
 - **Automerge** selectively for rich document bodies.
-- **A proposal and draft layer** for AI-originated changes.
+- **An AI action history and draft layer** for AI-originated changes.
 
 PowerSync is the only client sync layer in this plan. The app should not build a custom sync protocol, a custom SQLite materializer, or a separate native retry queue unless a concrete PowerSync limitation requires it.
 
@@ -24,7 +24,7 @@ PowerSync is the only client sync layer in this plan. The app should not build a
 - Server-enforced user ownership and business rules.
 - Remote AI access through fixed, auditable tools.
 - Provider-token isolation from the AI runtime.
-- Reusable command semantics across user actions, sync uploads, and AI proposals.
+- Reusable command semantics across user actions, sync uploads, and AI actions.
 
 ## Non-Goals
 
@@ -58,8 +58,8 @@ Local writes
 
 Remote AI
   -> fixed read tools
-  -> proposal API
-  -> draft/proposal records
+  -> fixed write/draft tools
+  -> action history records
   -> command API
   -> Postgres
 ```
@@ -70,7 +70,7 @@ PowerSync owns the local sync substrate. The application owns command semantics,
 
 ### Postgres
 
-Postgres is the canonical database for account data, domain records, operation history, provider metadata, approval state, and audit records.
+Postgres is the canonical database for account data, domain records, operation history, provider metadata, AI action history, and audit records.
 
 Core server tables should include:
 
@@ -85,8 +85,9 @@ Core server tables should include:
 - `op_log`
 - `sync_conflicts`
 - `ai_runs`
-- `ai_proposals`
-- `approval_requests`
+- `ai_messages`
+- `ai_tool_calls`
+- `ai_action_groups`
 - `provider_accounts`
 - `provider_tokens`
 - `audit_log`
@@ -136,7 +137,6 @@ Examples:
 - `completeTask`
 - `rescheduleTask`
 - `createCalendarProposal`
-- `approveProviderAction`
 - `mergeDocumentHeads`
 
 The command API is responsible for:
@@ -154,7 +154,7 @@ Every accepted command writes domain changes and an `op_log` entry in the same P
 
 ### PowerSync Uploads
 
-PowerSync upload handling should call the same command service used by server-side user actions and AI-approved proposals. Local user actions should create command-intent rows, and the connector should upload those command intents to the backend.
+PowerSync upload handling should call the same command service used by server-side user actions and AI tool actions. Local user actions should create command-intent rows, and the connector should upload those command intents to the backend.
 
 This gives every local write the same shape:
 
@@ -162,7 +162,7 @@ This gives every local write the same shape:
 - The local optimistic state needed by the UI.
 - The idempotency key.
 - The base version or merge context.
-- The approval or provider context when relevant.
+- The provider context when relevant.
 - The status needed to show queued, accepted, rejected, or conflicted work.
 
 When the backend permanently rejects an uploaded mutation, the connector must not leave the same upload blocking the queue forever. It should record a synced rejection or conflict row, mark the upload as processed, and let the UI guide the user through resolution. Retryable infrastructure failures should still fail the upload so PowerSync retries later.
@@ -237,9 +237,9 @@ Offline support is required for core records:
 
 Offline support is limited for provider-backed actions:
 
-- Calendar changes may be drafted offline, but provider execution waits for server connectivity and approval.
-- Email actions may be drafted offline, but sending or modifying provider state waits for server connectivity and approval.
-- AI proposals can be viewed offline only if already synced locally. New remote AI work requires connectivity.
+- Calendar changes may be drafted offline, but provider execution waits for server connectivity.
+- Email actions may be drafted offline, but sending or modifying provider state waits for server connectivity.
+- AI chat and action history can be viewed offline only if already synced locally. New remote AI work requires connectivity.
 
 The local UI must distinguish:
 
@@ -247,7 +247,6 @@ The local UI must distinguish:
 - Queued for upload.
 - Accepted by server.
 - Rejected with conflict.
-- Waiting for approval.
 - Waiting for provider execution.
 
 ## Conflict Strategy
@@ -313,9 +312,9 @@ The remote AI can use fixed tools to:
 
 - Read allowed personal data through server APIs.
 - Search allowed indexes.
-- Produce proposed commands.
+- Execute allowed app-data commands.
 - Create local drafts, such as email drafts.
-- Explain why a proposal was generated.
+- Explain what it changed.
 
 The remote AI cannot:
 
@@ -324,13 +323,16 @@ The remote AI cannot:
 - Modify authoritative data without the command API.
 - Execute irreversible external side effects.
 
-AI-originated changes should enter the same command model as user-originated changes. The difference is provenance and tool origin, not a separate write path.
+AI-originated app-data changes enter the same command model as user-originated changes. The difference is provenance, tool origin, action history, and revertability, not a separate write path.
+
+AI note edits do not require proposals. The product should instead show a clear AI action history and provide revert commands. Network/provider side effects are the exception: unsafe external actions should not exist as AI tools in the first version.
 
 Transcript rule:
 
 - Store user-visible messages.
 - Store assistant-visible messages.
 - Store tool call names, normalized inputs, and normalized result summaries.
+- Store AI action groups and the commands they executed.
 - Do not store hidden system/developer instructions as user transcript.
 - Do not store chain-of-thought. If the model exposes reasoning summaries, store them only as collapsed/debug metadata.
 - Provider tokens and raw secrets should never enter the harness, so they cannot appear in transcripts.
@@ -392,9 +394,9 @@ The AI retrieval layer must apply the same user-ownership checks and fixed tool 
 1. PowerSync sync definitions and command authorization drift.
 2. Command-intent payloads are underspecified and fail to preserve enough user intent for conflict resolution.
 3. Permanent upload rejection blocks the PowerSync queue if not handled explicitly.
-4. AI proposal approval rules are underspecified.
+4. AI action history and revert commands are underspecified.
 5. Provider-token isolation is weakened by convenience integrations.
-6. Prompt injection causes the AI to propose unsafe actions.
+6. Prompt injection causes the AI to perform unsafe allowed actions.
 7. Automerge storage, compaction, and search extraction are underestimated.
 8. iOS background execution limits delay sync.
 9. Local file protection classes are not defined early enough.

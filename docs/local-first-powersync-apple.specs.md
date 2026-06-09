@@ -2,7 +2,7 @@
 
 ## Context
 
-The product is a native iOS 18+ and macOS personal everything app. The app includes notes, tasks, checklists, recurring jobs, calendar/email metadata, files, and remote AI workflows. The AI runs on server infrastructure and can use fixed tools to read allowed personal data and create drafts or proposals, but it must not receive provider tokens or perform irreversible external actions.
+The product is a native iOS 18+ and macOS personal everything app. The app includes notes, tasks, checklists, recurring jobs, calendar/email metadata, files, and remote AI workflows. The AI runs on server infrastructure and can use fixed tools to read allowed personal data, edit app data, and create safe drafts, but it must not receive provider tokens or perform irreversible external actions.
 
 Preferred stack:
 
@@ -33,13 +33,13 @@ iOS/macOS local write
 
 Remote AI
   -> fixed read tools
-  -> proposal API
-  -> draft/proposal records
+  -> fixed write/draft tools
   -> command service
+  -> action history records
   -> Postgres
 ```
 
-PowerSync is the native sync and local SQLite upload-queue layer. The command service is the authoritative write path for business rules, user-ownership checks, validation, conflict decisions, and AI-created drafts or proposals.
+PowerSync is the native sync and local SQLite upload-queue layer. The command service is the authoritative write path for business rules, user-ownership checks, validation, conflict decisions, and AI-created app edits or drafts.
 
 ## Core Principles
 
@@ -49,7 +49,7 @@ PowerSync is the native sync and local SQLite upload-queue layer. The command se
 4. Native clients are local-first and observe SQLite, not server streams.
 5. Application writes are semantic commands represented locally as command-intent rows.
 6. The backend validates all writes before they become authoritative.
-7. AI can use fixed read and draft/proposal tools, but cannot access provider tokens or external side-effect tools.
+7. AI can use fixed read, write, and draft tools, but cannot access provider tokens or external side-effect tools.
 8. Provider tokens never enter AI runtime context.
 9. External side effects are not exposed as AI tools.
 10. Rich document bodies use CRDTs only where concurrent editing justifies the extra operational cost.
@@ -68,7 +68,7 @@ Responsibilities:
 - Execute Postgres transactions.
 - Issue short-lived PowerSync credentials.
 - Accept PowerSync upload callbacks.
-- Run AI read/proposal workflows.
+- Run AI read/write/draft workflows.
 - Execute safe provider operations exposed by the app, such as creating drafts.
 - Emit audit records.
 
@@ -125,9 +125,9 @@ local_intent_mappings
 
 ai_runs
 ai_tool_reads
-ai_proposals
-ai_proposal_items
-approval_requests
+ai_messages
+ai_tool_calls
+ai_action_groups
 
 provider_accounts
 provider_tokens
@@ -271,12 +271,17 @@ command_id
 command_name
 actor_type
 actor_id
+ai_run_id
+ai_action_group_id
 status
 affected_records
 base_versions
+before_snapshot
+after_snapshot
 result_summary
 rejection_reason
 conflict_id
+reverted_op_id
 created_at
 committed_at
 server_transaction_id
@@ -288,7 +293,7 @@ Status values:
 accepted
 rejected
 superseded
-requires_approval
+reverted
 executed_external_action
 failed_external_action
 ```
@@ -310,7 +315,7 @@ local command-intent row
 
 Permanent rejection must not poison the upload queue. The user still needs visibility into rejected work, so rejection state must be represented in synced data or durable local-only state.
 
-Use command-intent rows for every user action, including simple edits. This avoids two write architectures and gives the app one consistent place to store user intent, idempotency, base version, optimistic UI state, conflict context, and approval/provider metadata.
+Use command-intent rows for every user action, including simple edits. This avoids two write architectures and gives the app one consistent place to store user intent, idempotency, base version, optimistic UI state, conflict context, and provider metadata.
 
 Command-intent rows are especially important for:
 
@@ -319,9 +324,8 @@ Command-intent rows are especially important for:
 - Rescheduling recurring tasks.
 - Applying template changes.
 - Merging document heads.
-- Approving external actions.
-- Provider-backed create/update/delete flows.
-- AI proposal acceptance.
+- Provider-backed safe draft flows.
+- AI note action execution.
 - Any action that needs a structured conflict explanation.
 
 ## iOS/macOS Client
@@ -362,8 +366,9 @@ files
 file_versions
 op_log
 sync_conflicts
-approval_requests
-ai_proposals
+ai_messages
+ai_tool_calls
+ai_action_groups
 provider_accounts
 provider_action_log
 ```
@@ -455,7 +460,6 @@ queued
 uploading
 accepted
 rejected_conflict
-requires_approval
 provider_pending
 provider_executed
 provider_failed
@@ -474,7 +478,7 @@ Required behavior:
 - Use background tasks only for short catch-up windows.
 - Use background URLSession for file uploads/downloads where appropriate.
 - Persist notification scheduling state locally.
-- Persist approval and conflict state locally through synced or local-only tables.
+- Persist conflict and AI action history state locally through synced or local-only tables.
 - Define file protection classes for the PowerSync database, WAL/SHM files, drafts, attachment cache, FTS indexes, and metadata caches.
 
 Recommended protection:
@@ -512,7 +516,7 @@ Every command must declare:
 - Merge policy.
 - Rejection policy.
 - Whether a conflict row is created.
-- Whether user approval is required.
+- Whether the command is allowed for AI tools.
 
 ### Rich Documents
 
@@ -612,10 +616,11 @@ Initial AI tools should be explicit and narrow:
 search_personal_data
 read_note
 read_task
-create_note_proposal
-create_task_proposal
+create_note
+rename_note
+archive_note
 create_email_draft
-explain_proposal
+explain_action
 ```
 
 Each AI tool call must record:
@@ -666,7 +671,8 @@ ai_tool_calls
 Rules:
 
 - AI tools may read the user's personal app data.
-- AI tools may create drafts or proposals.
+- AI tools may execute allowed app-data commands.
+- AI tools may create safe drafts.
 - AI tools may not read provider tokens.
 - AI tools may not send email.
 - AI tools may not delete email.
@@ -679,69 +685,66 @@ Rules:
 - Chain-of-thought is not stored as transcript. If a provider returns reasoning summaries, store them only as collapsed/debug metadata.
 - Provider tool results must be normalized app data, not raw provider API payloads.
 
-### AI Proposals
+### AI Action History and Revert
 
-AI proposed writes are stored as proposals, not applied directly.
+AI note edits are applied directly through the normal command service. They are not proposals.
 
-Tables:
-
-```text
-ai_runs
-ai_proposals
-ai_proposal_items
-approval_requests
-```
-
-Proposal item fields:
+Each AI run may create one or more action groups:
 
 ```text
-id
-proposal_id
-command_name
-command_payload
-target_records
-risk_level
-requires_approval
-explanation
-status
-created_at
+ai_action_groups
+  id
+  run_id
+  user_id
+  summary
+  status
+  created_at
+  reverted_at
 ```
 
-Status values:
+Every AI write command must:
+
+- Set `actor_type = ai`.
+- Set `ai_run_id`.
+- Set `ai_action_group_id`.
+- Write normal domain rows.
+- Write an `op_log` row in the same transaction.
+- Store enough `before_snapshot` and `after_snapshot` data to render history and create a revert command.
+
+AI note action flow:
 
 ```text
-draft
-presented
-approved
-rejected
-expired
-applied
-failed
+assistant decides to rename a note
+  -> Better Agent calls rename_note tool
+  -> tool calls command service with actor_type=ai
+  -> command service checks user ownership
+  -> command service writes note change and op_log
+  -> transcript stores tool summary
+  -> PowerSync syncs note, op_log, and action group
+  -> native UI shows AI action history
 ```
 
-AI proposals should classify:
-
-- Pure local data changes.
-- Reversible local changes.
-- Destructive local changes.
-- Provider reads.
-- Safe provider drafts.
-
-Irreversible provider actions are out of scope because the AI has no tool for them.
-
-### Approval Execution
+Revert flow:
 
 ```text
-User approves proposal
-  -> approval command
-  -> command service applies local data changes
-  -> provider service creates safe drafts if needed
-  -> provider_action_log records result
-  -> op_log records final state
-  -> PowerSync syncs state to native clients
+user taps revert on AI action
+  -> native creates revert command-intent
+  -> command service loads target op_log row
+  -> command service validates the revert still applies
+  -> command service writes compensating domain changes
+  -> command service writes new op_log row with reverted_op_id
+  -> PowerSync syncs reverted state and history
 ```
 
-Approval must be checked at execution time, not only at proposal creation time. The target record or provider account may have changed.
+Do not erase or mutate past history when reverting. Revert is a new command that compensates for a previous command.
+
+Versioning boundary:
+
+- Use `op_log` as the app-level action history for relational data.
+- Use command-specific revert commands for app-data undo.
+- Use Automerge heads/changes as the rich-body history for note body edits.
+
+Network/provider side effects are the exception. They should not exist as AI tools in the first version. If they are added later, they need explicit user approval before execution.
 
 ## Provider Tokens and External Actions
 
@@ -867,8 +870,7 @@ AI retrieval must:
 Audit log required for:
 
 - AI reads.
-- AI proposals.
-- Approval decisions.
+- AI actions.
 - Provider token refresh.
 - Provider draft operations.
 - Sensitive commands.
@@ -897,9 +899,9 @@ Controls:
 
 - Treat retrieved content as data, not instructions.
 - Keep system instructions outside retrieved content.
-- Require structured tool/proposal outputs.
+- Require structured tool outputs.
 - Do not expose risky external-action tools to the AI.
-- Log source records used in proposals.
+- Log source records used in AI actions.
 
 ## Explicit Non-Goals
 
@@ -920,16 +922,15 @@ Controls:
 4. Extra local database layers overlap with PowerSync-managed database ownership.
 5. AI tools become too broad or start exposing unsafe provider actions.
 6. Provider-token isolation is weakened by convenience shortcuts.
-7. Prompt injection causes unsafe proposals or data leakage.
+7. Prompt injection causes unsafe allowed actions or data leakage.
 8. Automerge native editor adapter, compaction, and search extraction are underestimated.
 9. iOS background execution limits delay sync and provider work.
 10. File protection classes and local cache retention are not specified early.
 
 ## Open Decisions
 
-1. How much approval state should sync to the native client.
-2. Which records are available to AI by default.
-3. Which file protection classes apply to each local store.
+1. Which records are available to AI by default.
+2. Which file protection classes apply to each local store.
 
 ## Recommended Defaults
 
