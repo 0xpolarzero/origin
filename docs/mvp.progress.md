@@ -35,7 +35,7 @@ Slice 1 stack decisions:
 - [x] Show backend status in native diagnostics UI.
 - [x] Show PowerSync status in native diagnostics UI.
 - [x] Add one-command setup.
-- [x] Add `make doctor` to validate Xcode, `xcode-select`, iPhone 13 Pro simulator, and iOS 18 runtime.
+- [x] Add `make doctor` to validate Xcode, `xcode-select`, iPhone 13 Pro simulator, iOS 18 runtime, and `Origin-iOS` scheme destination resolution.
 - [x] Make simulator/runtime validation fail with exact manual install instructions when missing.
 - [x] Add one-command reset.
 - [x] Add one-command dev boot.
@@ -49,7 +49,7 @@ Slice 1 stack decisions:
 - [x] Add diagnostics screen with backend URL, user ID, device ID, sync status, last sync time, and last error.
 - [x] Add documented log locations and commands for tailing logs.
 - [x] Add documented reset path for database, PowerSync state, and simulator/app state.
-- [x] Add full e2e test flow that the agent can run after launch. Command builds the simulator UI test target directly, runs `xcodebuild test-without-building` on the resolved simulator, launches the app through XCTest, and verifies the native app requested PowerSync credentials.
+- [x] Add full e2e test flow that the agent can run after launch. Command runs the `Origin-iOS` XCTest scheme on the resolved simulator, launches the app through XCTest, and verifies the native app requested PowerSync credentials.
 - [x] E2E flow boots services, launches the native app through XCTest UI automation, verifies backend health, verifies PowerSync connectivity, reads diagnostics, and checks logs.
 
 Review bar:

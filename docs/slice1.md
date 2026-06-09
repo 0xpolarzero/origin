@@ -6,7 +6,7 @@
 - `make up`: start Postgres and PowerSync, then run migrations and seed the development identity.
 - `make down`: stop Postgres and PowerSync without deleting local database state.
 - `make dev`: start local services and run the backend at `http://127.0.0.1:3000`.
-- `make doctor`: validate Xcode, an iOS simulator SDK, and the concrete iPhone 13 Pro iOS 18 simulator destination used by E2E.
+- `make doctor`: validate Xcode, an iOS simulator SDK, and the concrete iPhone 13 Pro iOS 18 simulator destination used by the `Origin-iOS` XCTest scheme.
 - `make build-macos`: build the macOS app at `native/DerivedData/Build/Products/Debug/OriginMac.app`.
 - `make run-macos`: build and open the macOS app.
 - `make build-ios`: build the iOS simulator app at `native/Origin/build/Debug-iphonesimulator/Origin.app`.

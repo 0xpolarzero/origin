@@ -1,5 +1,4 @@
 import { resolveE2ESimulator } from "./simulator";
-import { cp } from "node:fs/promises";
 
 async function run(command: string, args: string[], options: { allowFailure?: boolean; exitOnFailure?: boolean } = {}): Promise<void> {
   const proc = Bun.spawn([command, ...args], {
@@ -21,20 +20,6 @@ type LogWriter = {
 };
 
 const backendLogPath = ".logs/backend.log";
-const appBundleIdentifier = "com.polarzero.origin.ios";
-const buildRoot = "native/Origin/build";
-const xctestRunPath = `${buildRoot}/OriginUITests.xctestrun`;
-const testingInteropSource =
-  "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/usr/lib/lib_TestingInterop.dylib";
-const testingInteropDestination = `${buildRoot}/Debug-iphonesimulator/lib_TestingInterop.dylib`;
-const testingFrameworkSourceRoot =
-  "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/Library/Frameworks";
-const testingFrameworkNames = [
-  "_Testing_CoreGraphics.framework",
-  "_Testing_CoreImage.framework",
-  "_Testing_Foundation.framework",
-  "_Testing_UIKit.framework"
-];
 
 async function copyToLog(stream: ReadableStream<Uint8Array>, writer: LogWriter): Promise<void> {
   for await (const chunk of stream) {
@@ -81,96 +66,6 @@ async function waitForLog(pattern: string, offset: number, timeoutMs: number): P
   throw new Error(`timed out waiting for "${pattern}" in ${backendLogPath}`);
 }
 
-// The checked-in project is handmade enough that scheme-based test actions currently
-// resolve only the latest iOS device placeholder. Build the UI test target directly,
-// then provide the small XCTest runner manifest that points XCUIApplication() at
-// the built simulator app.
-async function writeXCTestRunFile(): Promise<void> {
-  const xml = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>TestPlan</key>
-  <dict>
-    <key>Name</key>
-    <string>OriginUITests</string>
-    <key>IsDefault</key>
-    <true/>
-  </dict>
-  <key>TestConfigurations</key>
-  <array>
-    <dict>
-      <key>Name</key>
-      <string>Default</string>
-      <key>IsEnabled</key>
-      <true/>
-      <key>TestTargets</key>
-      <array>
-        <dict>
-          <key>BlueprintName</key>
-          <string>OriginUITests</string>
-          <key>IsUITestBundle</key>
-          <true/>
-          <key>IsXCTRunnerHostedTestBundle</key>
-          <true/>
-          <key>TestBundlePath</key>
-          <string>__TESTHOST__/PlugIns/OriginUITests.xctest</string>
-          <key>TestHostPath</key>
-          <string>__TESTROOT__/Debug-iphonesimulator/OriginUITests-Runner.app</string>
-          <key>TestHostBundleIdentifier</key>
-          <string>com.polarzero.origin.ios.uitests.xctrunner</string>
-          <key>UITargetAppPath</key>
-          <string>__TESTROOT__/Debug-iphonesimulator/Origin.app</string>
-          <key>UITargetAppBundleIdentifier</key>
-          <string>${appBundleIdentifier}</string>
-          <key>DependentProductPaths</key>
-          <array>
-            <string>__TESTROOT__/Debug-iphonesimulator/Origin.app</string>
-            <string>__TESTROOT__/Debug-iphonesimulator/OriginUITests-Runner.app</string>
-            <string>__TESTROOT__/Debug-iphonesimulator/OriginUITests-Runner.app/PlugIns/OriginUITests.xctest</string>
-          </array>
-          <key>TestingEnvironmentVariables</key>
-          <dict>
-            <key>DYLD_FRAMEWORK_PATH</key>
-            <string>__TESTROOT__/Debug-iphonesimulator</string>
-            <key>DYLD_LIBRARY_PATH</key>
-            <string>__TESTROOT__/Debug-iphonesimulator</string>
-            <key>XCInjectBundleInto</key>
-            <string>__TESTHOST__/OriginUITests-Runner</string>
-          </dict>
-          <key>ProductModuleName</key>
-          <string>OriginUITests</string>
-          <key>SystemAttachmentLifetime</key>
-          <string>deleteOnSuccess</string>
-          <key>UserAttachmentLifetime</key>
-          <string>deleteOnSuccess</string>
-        </dict>
-      </array>
-    </dict>
-  </array>
-  <key>CodeCoverageBuildableInfos</key>
-  <array/>
-  <key>__xctestrun_metadata__</key>
-  <dict>
-    <key>FormatVersion</key>
-    <integer>2</integer>
-  </dict>
-</dict>
-</plist>
-`;
-  await Bun.write(xctestRunPath, xml);
-}
-
-async function copyTestingSupportLibraries(): Promise<void> {
-  await Bun.write(testingInteropDestination, Bun.file(testingInteropSource));
-  for (const framework of testingFrameworkNames) {
-    await cp(`${testingFrameworkSourceRoot}/${framework}`, `${buildRoot}/Debug-iphonesimulator/${framework}`, {
-      force: true,
-      recursive: true
-    });
-  }
-}
-
 export {};
 
 await run("make", ["doctor"], { exitOnFailure: true });
@@ -203,23 +98,14 @@ try {
   await run("xcodebuild", [
     "-project",
     "native/Origin/Origin.xcodeproj",
-    "-target",
-    "OriginUITests",
-    "-configuration",
-    "Debug",
-    "-sdk",
-    "iphonesimulator",
-    "-quiet",
-    "build"
-  ]);
-  await copyTestingSupportLibraries();
-  await writeXCTestRunFile();
-  await run("xcodebuild", [
-    "test-without-building",
-    "-xctestrun",
-    xctestRunPath,
+    "-scheme",
+    "Origin-iOS",
     "-destination",
-    `id=${destination.udid}`
+    `platform=iOS Simulator,id=${destination.udid},arch=arm64`,
+    "-derivedDataPath",
+    "native/DerivedData",
+    "-quiet",
+    "test"
   ]);
   await waitForLog("issued powersync credentials", 0, 10_000);
 } finally {

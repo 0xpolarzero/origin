@@ -4,7 +4,7 @@ type Check = {
   detail: string;
 };
 
-import { resolveE2ESimulator } from "./simulator";
+import { resolveE2ESimulator, type SimulatorDestination } from "./simulator";
 
 export {};
 
@@ -54,8 +54,9 @@ checks.push({
 
 let destinationDetail: string;
 let destinationOk = false;
+let destination: SimulatorDestination | undefined;
 try {
-  const destination = await resolveE2ESimulator();
+  destination = await resolveE2ESimulator();
   destinationOk = true;
   destinationDetail = `${destination.name} iOS ${destination.runtimeVersion} ${destination.udid}`;
 } catch (error) {
@@ -66,6 +67,26 @@ checks.push({
   ok: destinationOk,
   detail: destinationDetail
 });
+
+if (destination !== undefined) {
+  const schemeDestinations = await run("xcodebuild", [
+    "-project",
+    "native/Origin/Origin.xcodeproj",
+    "-scheme",
+    "Origin-iOS",
+    "-showdestinations"
+  ]);
+  const schemeOutput = `${schemeDestinations.stdout}\n${schemeDestinations.stderr}`;
+  const schemeHasDestination = schemeOutput.includes(destination.udid);
+  checks.push({
+    name: "Origin-iOS scheme destination",
+    ok: schemeDestinations.code === 0 && schemeHasDestination,
+    detail:
+      schemeDestinations.code === 0 && schemeHasDestination
+        ? `${destination.name} iOS ${destination.runtimeVersion} ${destination.udid}`
+        : "Install the current Xcode iOS platform in Xcode > Settings > Components or run xcodebuild -downloadPlatform iOS."
+  });
+}
 
 for (const check of checks) {
   print(check);
