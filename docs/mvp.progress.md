@@ -24,40 +24,40 @@ Slice 1 stack decisions:
 - [x] Do not auto-install Xcode simulator runtimes; validate and print fix instructions instead.
 - [x] Do not add CI in Slice 1.
 
-- [ ] Create empty iOS/macOS app shell.
-- [ ] Create backend shell with health endpoint.
-- [ ] Add local Postgres setup.
-- [ ] Add self-hosted PowerSync local config.
-- [ ] Seed one dev user.
-- [ ] Seed one dev device.
-- [ ] Connect native app to backend health endpoint.
-- [ ] Connect native app to PowerSync.
-- [ ] Show backend status in native diagnostics UI.
-- [ ] Show PowerSync status in native diagnostics UI.
-- [ ] Add one-command setup.
-- [ ] Add `make doctor` to validate Xcode, `xcode-select`, iPhone 13 Pro simulator, and iOS 18 runtime.
-- [ ] Make simulator/runtime validation fail with exact manual install instructions when missing.
-- [ ] Add one-command reset.
-- [ ] Add one-command dev boot.
-- [ ] Add test command.
-- [ ] Add typecheck/lint command if applicable.
-- [ ] Add basic backend integration test.
-- [ ] Add simulator launch/review instructions.
-- [ ] Add agent-run e2e command that boots backend/sync dependencies and launches the native app.
-- [ ] Add agent-readable logs for backend, PowerSync, and native app events.
-- [ ] Add correlation IDs across native requests, backend commands, and sync events.
-- [ ] Add diagnostics screen with backend URL, user ID, device ID, sync status, last sync time, and last error.
-- [ ] Add documented log locations and commands for tailing logs.
-- [ ] Add documented reset path for database, PowerSync state, and simulator/app state.
-- [ ] Add full e2e test flow that the agent can run after launch.
-- [ ] E2E flow boots services, launches the native app, drives the UI, verifies backend health, verifies PowerSync connectivity, reads diagnostics, and checks logs.
+- [x] Create empty iOS/macOS app shell.
+- [x] Create backend shell with health endpoint.
+- [x] Add local Postgres setup.
+- [x] Add self-hosted PowerSync local config.
+- [x] Seed one dev user.
+- [x] Seed one dev device.
+- [x] Connect native app to backend health endpoint.
+- [ ] Connect native app to PowerSync SDK-managed SQLite sync. Blocked locally because current PowerSync Swift releases require Swift tools 6.1 and installed Xcode is 16.2/Swift 6.0; Slice 1 currently verifies backend-issued PowerSync credentials and service reachability from native diagnostics.
+- [x] Show backend status in native diagnostics UI.
+- [x] Show PowerSync status in native diagnostics UI.
+- [x] Add one-command setup.
+- [x] Add `make doctor` to validate Xcode, `xcode-select`, iPhone 13 Pro simulator, and iOS 18 runtime.
+- [x] Make simulator/runtime validation fail with exact manual install instructions when missing.
+- [x] Add one-command reset.
+- [x] Add one-command dev boot.
+- [x] Add test command.
+- [x] Add typecheck/lint command if applicable.
+- [x] Add basic backend integration test.
+- [x] Add simulator launch/review instructions.
+- [x] Add agent-run e2e command that boots backend/sync dependencies and launches the native app.
+- [x] Add agent-readable logs for backend, PowerSync, and native app events.
+- [x] Add correlation IDs across native requests, backend commands, and sync events.
+- [x] Add diagnostics screen with backend URL, user ID, device ID, sync status, last sync time, and last error.
+- [x] Add documented log locations and commands for tailing logs.
+- [x] Add documented reset path for database, PowerSync state, and simulator/app state.
+- [ ] Add full e2e test flow that the agent can run after launch. Command builds the simulator app target directly, boots the resolved simulator, installs the app, launches it, and verifies the native app requested PowerSync credentials.
+- [ ] E2E flow boots services, launches the native app, drives the UI, verifies backend health, verifies PowerSync connectivity, reads diagnostics, and checks logs. Command path exists; UI-driving XCTest remains blocked by the handmade scheme's destination eligibility behavior.
 
 Review bar:
 
-- [ ] A reviewer can clone, set up, reset, run tests, launch the app, and see healthy backend/sync status.
-- [ ] The coding agent can run the full app e2e flow, inspect logs, reset state, and debug failures with full local context.
-- [ ] E2E failures produce actionable logs rather than silent app/backend/sync states.
-- [ ] No notes, AI, providers, files, Automerge, or extra feature logic is included.
+- [x] A reviewer can clone, set up, reset, run tests, launch the app, and see healthy backend/sync status.
+- [ ] The coding agent can run the full app e2e flow, inspect logs, reset state, and debug failures with full local context. UI-driving XCTest remains blocked by the handmade scheme's destination eligibility behavior.
+- [x] E2E failures produce actionable logs rather than silent app/backend/sync states.
+- [x] No notes, AI, providers, files, Automerge, or extra feature logic is included.
 
 ## Slice 2: Notes
 

@@ -10,6 +10,7 @@
     "db:seed": "bun backend/src/seed.ts",
     "doctor": "bun scripts/doctor.ts",
     "e2e": "bun scripts/e2e.ts",
+    "ios:run": "bun scripts/run-ios.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },

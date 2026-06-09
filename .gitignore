@@ -3,5 +3,6 @@ node_modules/
 .env
 .logs/
 native/DerivedData/
+native/Origin/build/
 native/Origin/xcuserdata/
 native/Origin/*.xcworkspace/xcuserdata/
