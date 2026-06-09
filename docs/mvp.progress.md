@@ -31,7 +31,7 @@ Slice 1 stack decisions:
 - [x] Seed one dev user.
 - [x] Seed one dev device.
 - [x] Connect native app to backend health endpoint.
-- [ ] Connect native app to PowerSync SDK-managed SQLite sync. Blocked locally because current PowerSync Swift releases require Swift tools 6.1 and installed Xcode is 16.2/Swift 6.0; Slice 1 currently verifies backend-issued PowerSync credentials and service reachability from native diagnostics.
+- [ ] Connect native app to PowerSync SDK-managed SQLite sync. Deferred to Slice 2 so it is implemented against real notes data instead of a throwaway sync probe; Slice 1 currently verifies backend-issued PowerSync credentials and service reachability from native diagnostics.
 - [x] Show backend status in native diagnostics UI.
 - [x] Show PowerSync status in native diagnostics UI.
 - [x] Add one-command setup.
@@ -62,6 +62,17 @@ Review bar:
 ## Slice 2: Notes
 
 Goal: prove the full app architecture once using notes only.
+
+PowerSync integration gate:
+
+- [ ] Native notes storage uses PowerSync-managed SQLite as the only synced local database.
+- [ ] Native notes list/detail reads come from PowerSync local queries or watch queries, not backend HTTP reads.
+- [ ] Native note create/rename/archive writes are local command-intent writes handled by the PowerSync upload connector.
+- [ ] The PowerSync upload connector translates note command-intents into the backend command service; it must not contain a parallel notes write implementation.
+- [ ] Backend accepted note state, `op_log`, and rejection/conflict state sync back through PowerSync and are the UI confirmation source.
+- [ ] Delete the Slice 1 PowerSync reachability-only diagnostic path if it becomes obsolete; do not leave a second sync/status path beside real PowerSync SDK state.
+- [ ] Do not add a second app-owned sync queue, custom SQLite materializer, HTTP fallback for synced notes, duplicate local notes store, compatibility bridge, or fake sync table.
+- [ ] Slice 2 is not reviewable until offline note create/rename/archive works with the backend stopped, then reconciles through PowerSync after reconnect.
 
 - [ ] Add notes schema.
 - [ ] Add note command-intent shape.
