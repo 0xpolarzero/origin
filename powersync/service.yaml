@@ -1,0 +1,24 @@
+replication:
+  connections:
+    - type: postgresql
+      uri: postgresql://powersync_role:powersync_dev_password@postgres:5432/origin
+      sslmode: disable
+
+storage:
+  type: postgresql
+  uri: postgresql://powersync_storage_user:powersync_storage_dev_password@postgres:5432/powersync_storage
+  sslmode: disable
+
+port: 8080
+
+sync_config:
+  path: sync-config.yaml
+
+client_auth:
+  audience: ["http://127.0.0.1:8080", "http://localhost:8080"]
+  jwks:
+    keys:
+      - kty: oct
+        alg: HS256
+        k: Fp2RrM4RoZtNTrh5L1Kd1kQl1YUN3S3G0hV4nA1cX8s
+        kid: dev-key-1

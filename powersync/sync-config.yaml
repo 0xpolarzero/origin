@@ -1,0 +1,9 @@
+config:
+  edition: 3
+
+streams:
+  identity:
+    auto_subscribe: true
+    queries:
+      - SELECT id, email, display_name, created_at, updated_at FROM users WHERE id = auth.user_id()
+      - SELECT id, user_id, name, platform, created_at, updated_at, last_seen_at FROM devices WHERE user_id = auth.user_id()
