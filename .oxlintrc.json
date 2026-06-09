@@ -1,8 +1,0 @@
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "categories": {
-    "correctness": "error",
-    "suspicious": "error"
-  },
-  "ignorePatterns": ["docs/**", "third_party/**", "apps/apple/**"]
-}
